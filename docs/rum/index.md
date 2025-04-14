@@ -1,4 +1,4 @@
-# RUM SDK Quick Start Guide
+# Guance RUM SDK Quick Start Guide
 
 ## Overview
 
@@ -6,8 +6,8 @@ Guance RUM SDK (Real User Monitoring) provides a powerful set of tools for monit
 
 ## Prerequisites
 
-- **Install DataKit**: Ensure that DataKit is installed and configured to be publicly accessible (for DK method integration).
-- **Configure RUM Collector**: Follow the Guance documentation to configure the RUM collector.
+- **Install DataKit**: Ensure that DataKit is installed and configured to be publicly accessible (for DK method integration) .
+- **Configure RUM Collector**: Follow the Guance documentation to configure the RUM collector .
 
 ## Integration Methods
 
@@ -19,7 +19,7 @@ Guance RUM SDK (Real User Monitoring) provides a powerful set of tools for monit
 
 ### 2. Public OpenWay Integration
 
-- Log in to the Guance console, go to the **Synthetic Tests** page, click on **Create Application** in the top-left corner, and obtain parameters like `applicationId`, `clientToken`, and `site`.
+- Log in to the Guance console, go to the **Synthetic Tests** page, click on **Create Application** in the top-left corner, and obtain parameters like `applicationId`, `clientToken`, and `site`. Create Application
 - Configure `site` and `clientToken` parameters, supporting SourceMap uploads via the console.
 - When integrating the SDK, there's no need to configure `datakitOrigin`; the SDK will send data to the public DataWay by default.
 
@@ -128,7 +128,7 @@ Add the script to your HTML file:
 
 ## Custom Data TAG Addition
 
-Use the `setGlobalContextProperty` or `setGlobalContext` API to add extra TAGs to all RUM events [Add custom tag](./rum/custom-sdk/add-additional-tag.md).
+Use the `setGlobalContextProperty` or `setGlobalContext` API to add extra TAGs to all RUM events [Add custom tag](./custom-sdk/add-additional-tag.md).
 
 ### Example
 
@@ -189,7 +189,7 @@ datafluxRum &&
 
 ## Custom Error Addition
 
-Use the `addError` API to add custom Error Metrics data [Add custom Error](./rum/custom-sdk/add-error.md).
+Use the `addError` API to add custom Error Metrics data [Add custom Error](./custom-sdk/add-error.md).
 
 ```javascript
 // Synchronous CDN loading
@@ -210,7 +210,7 @@ datafluxRum.addError(error, { pageStatus: 'beta' })
 
 ## Custom User Identification
 
-Use the `setUser` API to add identification attributes (such as ID, name, email) for the current user [Add custom user information](./rum/custom-sdk/user-id.md).
+Use the `setUser` API to add identification attributes (such as ID, name, email) for the current user [Add custom user information](./custom-sdk/user-id.md).
 
 ```javascript
 // Synchronous CDN loading
@@ -243,7 +243,7 @@ Ensure that the SDK version you are using supports session replay functionality 
 
 ### Enable Session Replay Recording
 
-After initializing the SDK, call the `startSessionReplayRecording()` method to enable session replay recording. You can choose to enable it under specific conditions, such as after user login [Enable session recording](./replay.md).
+After initializing the SDK, call the `startSessionReplayRecording()` method to enable session replay recording. You can choose to enable it under specific conditions, such as after user login [Enable session recording](../replay.md).
 
 ## Important Notes
 

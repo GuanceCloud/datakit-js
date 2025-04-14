@@ -1,6 +1,6 @@
 # Browser Support
 
-| 功能           | Chrome | Firefox | Safari | Edge | Chrome Android | Safari iOS | IE11  | < IE11 | Opera |
+| Feature           | Chrome | Firefox | Safari | Edge | Chrome Android | Safari iOS | IE11  | < IE11 | Opera |
 | ----------------- | ------ | ------- | ------ | ---- | -------------- | ---------- | ----- | ------ | ----- |
 | loading           | ✅     | ✅      | ✅     | ✅   | ✅             | ✅         | ✅    | ❌     | ✅    |
 | init              | ✅     | ✅      | ✅     | ✅   | ✅             | ✅         | ✅    | ❌     | ✅    |

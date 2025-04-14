@@ -1,13 +1,14 @@
 # Content Security Policy
 
-HTTP 响应头 Content-Security-Policy 允许站点管理者控制用户代理能够为指定的页面加载哪些资源。除了少数例外情况，设置的政策主要涉及指定服务器的源和脚本结束点。这将帮助防止跨站脚本攻击（Cross-Site Script）。
-详情参考 [Content-Security-Policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy)
+The HTTP response header Content-Security-Policy allows site administrators to control which resources the user agent can load for a given page. Apart from a few exceptions, the policy primarily involves specifying the sources and script endpoints of the server. This will help prevent cross-site scripting attacks (Cross-Site Script).
 
-## 多内容安全策略
+> For more details, refer to [Content-Security-Policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy)
 
-CSP 允许在一个资源中指定多个策略，包括通过 [Content-Security-Policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy) 头，以及 [Content-Security-Policy-Report-Only](https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Headers/Content-Security-Policy-Report-Only) 头，和 [<meta>](https://developer.mozilla.org/zh-CN/docs/Web/HTML/Element/meta) 组件。
+## Multiple Content Security Policies
 
-## 是列子
+CSP allows multiple policies to be specified within a single resource, including through the [Content-Security-Policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy) header, the [Content-Security-Policy-Report-Only](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy-Report-Only) header, and [meta](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/meta) elements.
+
+## Examples
 
 ```js
 // header
@@ -19,13 +20,13 @@ Content-Security-Policy: connect-src http://example.com/;
                          script-src http://example.com/">
 ```
 
-## 如何在使用 CSP 的网站应用中，接入 RUM SDK
+## How to Integrate RUM SDK in Your Website Application Using CSP
 
-如果您的网站应用正在使用 CSP， 接入观测云 RUM SDK 之后，可能会在浏览器中出现安全违规的提示，你需要将以下 URL 添加到对应的指令中
+If your website application is using CSP, integrating the Guance RUM SDK may result in security violation warnings in the browser. You need to add the following URLs to the corresponding directives:
 
-### Datakit 上报 URLs
+### Datakit Reporting URLs
 
-依赖于 [RUM SDK 初始化配置]()中的 `datakitOrigin` 选项：
+Dependent on the `datakitOrigin` option in the [RUM SDK Initialization Configuration](./custom-sdk/index.md):
 
 ```js
  DATAFLUX_RUM.init({
@@ -35,33 +36,33 @@ Content-Security-Policy: connect-src http://example.com/;
     })
 ```
 
-在 CSP 安全指令中，请添加如下条目：
+In the CSP security directive, please add the following entries:
 
 ```js
     connect-src https://*.dk.com
 ```
 
-### web worker
+### Web Worker {#webwork}
 
-如果你开启了 RUM SDK [Session Replay]()功能或者 RUM 初始化配置中添加了[compressIntakeRequests]()配置,请确保通过添加以下 worker-src 条目:
+If you have enabled the RUM SDK [Session Replay](../replay.md) feature or added the [compressIntakeRequests](./app-access.md#config) configuration in the RUM initialization configuration, ensure that you add the following `worker-src` entry:
 
 ```json
  worker-src blob:;
 ```
 
-在 SDK 版本 `>=3.2.0` 开始支持自己托管 webwork 文件。在 SDK 配置中添加 `workerUrl` 来添加托管地址。可以通过以下两种方式来获取 worker 文件
+Starting with SDK version `>=3.2.0`, self-hosting web worker files is supported. Add `workerUrl` in the SDK configuration to specify the hosting address. The worker file can be obtained in two ways:
 
-1. 从观测云官方地址 https://static.guance.com/browser-sdk/v3/worker.js 下载
-2. 安装 @cloudcare/browser-worker NPM 包并使用构建工具将其包含在构建资产中（参见 [Webpack 4](https://v4.webpack.js.org/loaders/file-loader/)、[Webpack 5](https://webpack.js.org/guides/asset-modules/#url-assets)、[Vite](https://vitejs.dev/guide/assets.html#new-url-url-import-meta-url) 和 [Rollup](https://github.com/rollup/plugins/tree/master/packages/url/#readme) 的文档）。
+1. Download from the official Guance URL: https://static.guance.com/browser-sdk/v3/worker.js
+2. Install the @cloudcare/browser-worker NPM package and include it in your build assets using a build tool (refer to the documentation for [Webpack 4](https://v4.webpack.js.org/loaders/file-loader/), [Webpack 5](https://webpack.js.org/guides/asset-modules/#url-assets), [Vite](https://vitejs.dev/guide/assets.html#new-url-url-import-meta-url), and [Rollup](https://github.com/rollup/plugins/tree/master/packages/url/#readme)).
 
-必要条件：
+Prerequisites:
 
-1.  将文件托管在与您的 Web 应用程序相同的来源上。由于浏览器限制，它无法托管在单独的域（例如，第三方 CDN 主机）或其他方案上。
-2.  保证 SDK 版本 `>=3.2.0`
+1. Host the file on the same origin as your web application. Due to browser restrictions, it cannot be hosted on a separate domain (e.g., third-party CDN hosts) or other schemes.
+2. Ensure SDK version `>=3.2.0`.
 
-### CDN 地址
+### CDN Address
 
-如果您正在使用 [CDN 异步]() 或 [CDN 同步]() 的方式引入 RUM SDK，请添加以下 script-src 条目：
+If you are introducing the RUM SDK using [CDN asynchronous or CDN synchronous](./app-access.md#access), add the following `script-src` entry:
 
 ```json
 script-src https://static.guance.com

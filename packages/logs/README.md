@@ -1,43 +1,46 @@
-# DataFlux Browser Logs SDK 
+# Browser Log Collection
 
-## 简介
-通过web浏览器或者javascript客户端主动发送不同等级的[日志数据](https://www.yuque.com/dataflux/datakit/logging)(`对应的source:browser_log
-`指标类型日志数据)到[DataFlux](https://dataflux.cn)。
+---
 
-## 功能简介
-- 自定义日志数据采集，通过sdk接入客户端应用中，针对不同场景采集不同日志数据。
-- 可以自动收集应用端的错误信息（包括网络错误，console错误，以及js错误）上报到DataFlux。
-- 自定义错误等级（`debug`,`critical`,`error`,`info`,`warn`）,自定义Logger对象，以及自定义log字段
-- 可以自动收集[RUM](https://www.yuque.com/dataflux/doc/eqs7v2)相关数据，关联RUM业务场景
+Send log data of different levels (`corresponding source:browser_log` Metrics type log data) actively through a Web browser or Javascript client to [Guance](https://guance.com/).
 
-## 开始使用
- ### 前置条件
- **datakit** 通过[datakit](https://www.yuque.com/dataflux/doc/oolclw)日志采集API发送日志数据到DataFlux平台
- 
- **引入SDK** 可通过`NPM`,`CDN同步`或`CDN异步`的方式引入SDK到应用中
- 
- **支持的浏览器** 支持所有pc端，移动端的浏览器
+- Custom log data collection, by integrating the SDK into the client application, collects different log data for different scenarios;
+- Automatically collect error information from the application (including network errors, console errors, and js errors) and report it to Guance;
+- Customize error levels (`debug`, `critical`, `error`, `info`, `warn`), customize Logger objects, and customize Log fields;
+- Automatically collect [RUM](../../docs/rum/app-access.md) related data and associate it with RUM business scenarios.
 
-### 你可以从下面几种方式中选择一种接入到你的 Web 应用中
+## Getting Started
 
-| 接入方式     | 简介                                                                                                                                                             |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| NPM          | 通过把 SDK 代码一起打包到你的前端项目中，此方式可以确保对前端页面的性能不会有任何影响，不过可能会错过 SDK 初始化之前的的请求、错误的收集。                       |
-| CDN 异步加载 | 通过 CDN 加速缓存，以异步脚本引入的方式，引入 SDK 脚本，此方式可以确保 SDK 脚本的下载不会影响页面的加载性能，不过可能会错过 SDK 初始化之前的的请求、错误的收集。 |
-| CDN 同步加载 | 通过 CDN 加速缓存，以同步脚本引入的方式，引入 SDK 脚本，此方式可以确保能够收集到所有的错误，资源，请求，性能指标。不过可能会影响页面的加载性能。                 |
+### Prerequisites
 
-### NPM
+- **DataKit**: Send log data to the Guance platform via the DataKit Log Collection API;
+
+- **Integrate SDK**: The SDK can be integrated into the application using methods such as `NPM`, `CDN synchronous`, or `CDN asynchronous`;
+
+- **Supported Browsers**: Supports all PC and mobile browsers.
+
+### Choose Integration Method
+
+| Integration Method       | Introduction                                                                                                                                                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NPM                      | By bundling the SDK code into your frontend project, this method ensures no impact on the performance of the frontend page. However, requests and errors before SDK initialization may be missed.                                                                         |
+| CDN Asynchronous Loading | Through CDN accelerated caching, the SDK script is introduced asynchronously. This method ensures that the download of the SDK script does not affect the loading performance of the page, but it might miss requests and errors collected before the SDK initialization. |
+| CDN Synchronous Loading  | Through CDN accelerated caching, the SDK script is introduced synchronously. This method ensures the collection of all errors, resources, requests, and performance metrics. However, it might affect the loading performance of the page.                                |
+
+#### NPM
 
 ```javascript
 import { datafluxLogs } from '@cloudcare/browser-logs'
 datafluxLogs.init({
-  datakitOrigin: '<DATAKIT ORIGIN>'
+  datakitOrigin: '<DataKit domain or IP>', // DK integration requires configuration
+  clientToken: 'clientToken', // Public OpenWay integration requires filling out
+  site: 'Public OpenWay address' // Public OpenWay integration requires filling out
   //service: 'browser',
   //forwardErrorsToLogs:true
 })
 ```
 
-### CDN 异步加载
+#### CDN Asynchronous Loading
 
 ```html
 <script>
@@ -57,12 +60,14 @@ datafluxLogs.init({
     window,
     document,
     'script',
-    'https://static.dataflux.cn/browser-sdk/v1/dataflux-logs.js',
+    'https://static.guance.com/browser-sdk/v3/dataflux-logs.js',
     'DATAFLUX_LOGS'
   )
   DATAFLUX_LOGS.onReady(function () {
     DATAFLUX_LOGS.init({
-      datakitOrigin: '<DATAKIT ORIGIN>'
+      datakitOrigin: '<DataKit domain or IP>', // DK integration requires configuration
+      clientToken: 'clientToken', // Public OpenWay integration requires filling out
+      site: 'Public OpenWay address' // Public OpenWay integration requires filling out
       //service: 'browser',
       //forwardErrorsToLogs:true
     })
@@ -70,150 +75,414 @@ datafluxLogs.init({
 </script>
 ```
 
-### CDN 同步加载
+#### CDN Synchronous Loading
 
 ```html
 <script
-  src="https://static.dataflux.cn/browser-sdk/v1/dataflux-logs.js" 
+  src="https://static.guance.com/browser-sdk/v3/dataflux-logs.js"
   type="text/javascript"
 ></script>
 <script>
   window.DATAFLUX_LOGS &&
     window.DATAFLUX_LOGS.init({
-      datakitOrigin: '<DATAKIT ORIGIN>'
+      datakitOrigin: '<DataKit domain or IP>', // DK integration requires configuration
+      clientToken: 'clientToken', // Public OpenWay integration requires filling out
+      site: 'Public OpenWay address' // Public OpenWay integration requires filling out
       //service: 'browser',
       //forwardErrorsToLogs:true
     })
 </script>
 ```
 
-## 配置
+## Configuration
 
-### 初始化参数
+### Initialization Parameters
 
-| 参数                  | 类型    | 是否必须 | 默认值    | 描述                                                                                                                                |
-| --------------------- | ------- | -------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `datakitOrigin`       | String  | 是       |           | datakit 数据上报 Origin 注释: `协议（包括：//），域名（或IP地址）[和端口号]` 例如：https://www.datakit.com, http://100.20.34.3:8088 |
-| `service`             | String  | 否       | `browser` | 日志service名称                                                                                                                     |
-| `env`                 | String  | 否       |           | web 应用当前环境， 如 prod：线上环境；gray：灰度环境；pre：预发布环境 common：日常环境；local：本地环境；                           |
-| `version`             | String  | 否       |           | web 应用的版本号                                                                                                                    |
-| `sessionSampleRate`          | Number  | 否       | `100`     | 指标数据收集百分比: `100`表示全收集，`0`表示不收集                                                                                  |
-| `forwardErrorsToLogs` | Boolean | 否       | `true`    | 设置为`false` 表示停止采集console.error、 js、以及网络错误上报到DataFlux日志数据中                                                  |
-| `silentMultipleInit`  | Boolean | 否       | `false`   | 不允许有多个日志对象被初始化                                                                                                        |
+| **Parameter**          | **Type**     | **Required** | **Default Value** | **Description**                                                                                                                                                                                                   |
+| ---------------------- | ------------ | ------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `datakitOrigin`        | String       | Yes          |                   | DataKit data reporting Origin Note: `protocol (including: //), domain name (or IP address) [and port number]` Example: https://www.datakit.com, http://100.20.34.3:8088.                                          |
+| `clientToken`          | String       | Yes          |                   | Data token for reporting in the openway method, obtained from the Guance console, required (public openway method access).                                                                                        |
+| `site`                 | String       | Yes          |                   | Data reporting address for public openway method, obtained from the Guance console, required (public openway method access).                                                                                      |
+| `service`              | String       | No           | `browser`         | Log Service Name                                                                                                                                                                                                  |
+| `env`                  | String       | No           |                   | Current environment of the Web application, such as Prod: production environment; Gray: gray environment; Pre: pre-release environment Common: daily environment; Local: local environment;                       |
+| `version`              | String       | No           |                   | Version number of the Web application                                                                                                                                                                             |
+| `sessionSampleRate`    | Number       | No           | `100`             | Percentage of Metrics data collection: `100` means full collection, `0` means no collection                                                                                                                       |
+| `forwardErrorsToLogs`  | Boolean      | No           | `true`            | Setting to `false` stops collecting console.error, js, and network errors reported to Guance log data                                                                                                             |
+| `silentMultipleInit`   | Boolean      | No           | `false`           | Does not allow multiple log objects to be initialized                                                                                                                                                             |
+| `forwardConsoleLogs`   | String/Array | No           |                   | Browser console log types to collect, optional values: `error`, `log`, `info`, `warn`, `error`                                                                                                                    |
+| `storeContextsToLocal` | Boolean      | No           |                   | Version requirement:`>3.1.2`. Whether to cache user-defined data locally in localstorage, for example: `setUser`, `addGlobalContext` api added custom data.                                                       |
+| `storeContextsKey`     | String       | No           |                   | Version requirement:`>3.1.18`. Defines the key stored in localstorage, default not filled, auto-generated, this parameter mainly solves the problem of shared store under the same domain for different sub-paths |
 
-## 使用
-SDK在应用中初始化后，通过暴露的JS API 可以自定义配置日志数据
-```js
+## Usage
+
+After initializing the SDK in the application, you can customize log data configurations via exposed JS APIs.
+
+```javascript
 logger.debug | info | warn | error | critical (message: string, messageContext = Context)
 ```
+
 ### NPM
-```js
+
+```javascript
 import { datafluxLogs } from '@cloudcare/browser-logs'
 
 datafluxLogs.logger.info('Button clicked', { name: 'buttonName', id: 123 })
 ```
 
-### CDN 异步
-```js
+### CDN Asynchronous
+
+```javascript
 DATAFLUX_LOGS.onReady(function () {
   DATAFLUX_LOGS.logger.info('Button clicked', { name: 'buttonName', id: 123 })
 })
 ```
 
-### CDN 同步
-```js
-window.DATAFLUX_LOGS && DATAFLUX_LOGS.logger.info('Button clicked', { name: 'buttonName', id: 123 })
+### CDN Synchronous
+
+```javascript
+window.DATAFLUX_LOGS &&
+  DATAFLUX_LOGS.logger.info('Button clicked', { name: 'buttonName', id: 123 })
 ```
 
-## 返回数据结构
-```JSON
+## Returned Data Structure
+
+```json
 {
-    "service": "browser",
-    "session": {
-        "id": "c549c2b8-4955-4f74-b7f8-a5f42fc6e79b"
-    },
-    "type": "logger",
-    "_dd": {
-        "sdk_name": "Web LOG SDK",
-        "sdk_version": "1.0.0",
-        
-    },
+  "service": "browser",
+  "session": {
+    "id": "c549c2b8-4955-4f74-b7f8-a5f42fc6e79b"
+  },
+  "type": "logger",
+  "_dd": {
+    "sdk_name": "Web LOG SDK",
+    "sdk_version": "1.0.0",
     "env": "",
-    "version": "",
-    "device": {
-        "os": "Mac OS",
-        "os_version": "10.14.6",
-        "os_version_major": "10",
-        "browser": "Chrome",
-        "browser_version": "90.0.4430.85",
-        "browser_version_major": "90",
-        "screen_size": "2560*1440",
-        "network_type": "3g",
-        "divice": "PC"
-    },
-    "user": {},
-    "date": 1621321916756,
-    "view": {
-        "referrer": "",
-        "url": "http://localhost:8080/",
-        "host": "localhost:8080",
-        "path": "/",
-        "path_group": "/",
-        "url_query": "{}",
-        "id": "5dce64f4-8d6d-411a-af84-c41653ccd94a"
-    },
-    "application": {
-        "id": "app_idxxxxxx"
-    },
-    "message": "XHR error get http://testing-ft2x-api.cloudcare.cn/api/v1/workspace/xxx",
-    "status": "error",
-    "error": {
-        "source": "network",
-        "stack": "Failed to load"
-    },
-    "http": {
-        "method": "get",
-        "status_code": 0,
-        "status_group": 0,
-        "url": "http://testing-ft2x-api.cloudcare.cn/api/v1/workspace/xxx",
-        "url_host": "testing-ft2x-api.cloudcare.cn",
-        "url_path": "/api/v1/workspace/xxx",
-        "url_path_group": "/api/?/workspace/xxx"
-    }
+    "version": ""
+  },
+  "device": {
+    "os": "Mac OS",
+    "os_version": "10.14.6",
+    "os_version_major": "10",
+    "browser": "Chrome",
+    "browser_version": "90.0.4430.85",
+    "browser_version_major": "90",
+    "screen_size": "2560*1440",
+    "network_type": "3g",
+    "divice": "PC"
+  },
+  "user": {},
+  "date": 1621321916756,
+  "view": {
+    "referrer": "",
+    "url": "http://localhost:8080/",
+    "host": "localhost:8080",
+    "path": "/",
+    "path_group": "/",
+    "url_query": "{}",
+    "id": "5dce64f4-8d6d-411a-af84-c41653ccd94a"
+  },
+  "application": {
+    "id": "app_idxxxxxx"
+  },
+  "message": "XHR error get http://testing-ft2x-api.cloudcare.cn/api/v1/workspace/xxx",
+  "status": "error",
+  "tags": {},
+  "error": {
+    "source": "network",
+    "stack": "Failed to load"
+  },
+  "resource": {
+    "method": "get",
+    "status": 0,
+    "status_group": 0,
+    "url": "http://testing-ft2x-api.cloudcare.cn/api/v1/workspace/xxx",
+    "url_host": "testing-ft2x-api.cloudcare.cn",
+    "url_path": "/api/v1/workspace/xxx",
+    "url_path_group": "/api/?/workspace/xxx"
+  }
 }
 ```
-##  Status 参数
-初始化SDk后，可以使用提供`log` API,定义不同类型的状态
-```js
+
+## Status Parameter
+
+After initializing the SDK, you can use the provided `log` API to define different types of statuses.
+
+```javascript
 log (message: string, messageContext: Context, status? = 'debug' | 'info' | 'warn' | 'error' | 'critical')
 ```
 
 ### NPM
-```js
+
+```javascript
 import { datafluxLogs } from '@cloudcare/browser-logs'
 
 datafluxLogs.logger.log(<MESSAGE>,<JSON_ATTRIBUTES>,<STATUS>);
-
 ```
 
-### CDN 异步
-```js
+### CDN Asynchronous
+
+```javascript
 DATAFLUX_LOGS.onReady(function () {
   DATAFLUX_LOGS.logger.log(<MESSAGE>,<JSON_ATTRIBUTES>,<STATUS>);
 })
 ```
 
-### CDN 同步
-```js
+### CDN Synchronous
+
+```javascript
 window.DATAFLUX_LOGS && DATAFLUX_LOGS.logger.log(<MESSAGE>,<JSON_ATTRIBUTES>,<STATUS>);
 ```
 
-## 参数说明
+## Parameter Description
 
-| 参数                 | 描述                                                             |
-| -------------------- | ---------------------------------------------------------------- |
-| `<MESSAGE>`          | Dataflux 日志中的 message 字段                                   |
-| `<JSON_ATTRIBUTES>	` | 描述message的额外数据，是一个json对象                            |
-| `<STATUS>	`          | 日志的等级，可选值：`debug`, `info`, `warn`, `error`, `critical` |
+| **Parameter**       | **Description**                                                     |
+| ------------------- | ------------------------------------------------------------------- |
+| `<MESSAGE>`         | Message field in Guance logs                                        |
+| `<JSON_ATTRIBUTES>` | Additional data describing the Message, as a JSON object            |
+| `<STATUS>`          | Log level, optional values `debug`,`info`,`warn`,`error`,`critical` |
 
+## Adding Custom TAG Data
 
+---
+
+After initializing LOG, use the `setGlobalContextProperty(key:string, value:any)` API to add extra TAGs to all LOG events collected from the application.
+
+### Add TAG
+
+=== "CDN Synchronous"
+
+    ```javascript
+    window.DATAFLUX_LOGS && window.DATAFLUX_LOGS.setGlobalContextProperty('<CONTEXT_KEY>', '<CONTEXT_VALUE>');
+
+    // Code example
+    window.DATAFLUX_LOGS && window.DATAFLUX_LOGS.setGlobalContextProperty('isvip', 'xxxx');
+    window.DATAFLUX_LOGS && window.DATAFLUX_LOGS.setGlobalContextProperty('activity', {
+        hasPaid: true,
+        amount: 23.42
+    });
+    ```
+
+=== "CDN Asynchronous"
+
+    ```javascript
+    DATAFLUX_LOGS.onReady(function() {
+        DATAFLUX_LOGS.setGlobalContextProperty('<CONTEXT_KEY>', '<CONTEXT_VALUE>');
+    })
+
+    // Code example
+    DATAFLUX_LOGS.onReady(function() {
+        DATAFLUX_LOGS.setGlobalContextProperty('isvip', 'xxxx');
+    })
+    DATAFLUX_LOGS.onReady(function() {
+        DATAFLUX_LOGS.setGlobalContextProperty('activity', {
+            hasPaid: true,
+            amount: 23.42
+        });
+    })
+
+    ```
+
+=== "NPM"
+
+    ```javascript
+    import { datafluxLogs } from '@cloudcare/browser-logs'
+    datafluxLogs.setGlobalContextProperty('<CONTEXT_KEY>', <CONTEXT_VALUE>);
+
+    // Code example
+    datafluxLogs && datafluxLogs.setGlobalContextProperty('isvip', 'xxxx');
+    datafluxLogs.setGlobalContextProperty('activity', {
+        hasPaid: true,
+        amount: 23.42
+    });
+    ```
+
+### Replace TAG (Override)
+
+=== "CDN Synchronous"
+
+    ```javascript
+    window.DATAFLUX_LOGS &&
+         window.DATAFLUX_LOGS.setGlobalContext({ '<CONTEXT_KEY>': '<CONTEXT_VALUE>' });
+
+    // Code example
+    window.DATAFLUX_LOGS &&
+         window.DATAFLUX_LOGS.setGlobalContext({
+            codeVersion: 34,
+        });
+    ```
+
+=== "CDN Asynchronous"
+
+    ```javascript
+     window.DATAFLUX_LOGS.onReady(function() {
+         window.DATAFLUX_LOGS.setGlobalContext({ '<CONTEXT_KEY>': '<CONTEXT_VALUE>' });
+    })
+
+    // Code example
+     window.DATAFLUX_LOGS.onReady(function() {
+         window.DATAFLUX_LOGS.setGlobalContext({
+            codeVersion: 34,
+        })
+    })
+    ```
+
+=== "NPM"
+
+    ```javascript
+    import { datafluxLogs } from '@cloudcare/browser-logs'
+
+    datafluxLogs.setGlobalContext({ '<CONTEXT_KEY>': '<CONTEXT_VALUE>' });
+
+    // Code example
+    datafluxLogs.setGlobalContext({
+        codeVersion: 34,
+    });
+    ```
+
+### Get All Set Custom TAGs
+
+=== "CDN Synchronous"
+
+    ```javascript
+    var context = window.DATAFLUX_LOGS &&  window.DATAFLUX_LOGS.getGlobalContext();
+
+    ```
+
+=== "CDN Asynchronous"
+
+    ```javascript
+     window.DATAFLUX_LOGS.onReady(function() {
+        var context =  window.DATAFLUX_LOGS.getGlobalContext();
+    });
+    ```
+
+=== "NPM"
+
+    ```javascript
+    import { datafluxLogs } from '@cloudcare/browser-logs'
+
+    const context = datafluxLogs.getGlobalContext();
+
+    ```
+
+### Remove Specific Key Corresponding Custom TAG
+
+=== "CDN Synchronous"
+
+    ```javascript
+    var context = window.DATAFLUX_LOGS &&  window.DATAFLUX_LOGS.removeGlobalContextProperty('<CONTEXT_KEY>');
+
+    ```
+
+=== "CDN Asynchronous"
+
+    ```javascript
+     window.DATAFLUX_LOGS.onReady(function() {
+        var context =  window.DATAFLUX_LOGS.removeGlobalContextProperty('<CONTEXT_KEY>');
+    });
+    ```
+
+=== "NPM"
+
+    ```javascript
+    import { datafluxLogs } from '@cloudcare/browser-logs'
+
+    const context = datafluxLogs.removeGlobalContextProperty('<CONTEXT_KEY>');
+    ```
+
+### Remove All Custom TAGs
+
+=== "CDN Synchronous"
+
+    ```javascript
+    var context = window.DATAFLUX_LOGS &&  window.DATAFLUX_LOGS.clearGlobalContext();
+
+    ```
+
+=== "CDN Asynchronous"
+
+    ```javascript
+     window.DATAFLUX_LOGS.onReady(function() {
+        var context =  window.DATAFLUX_LOGS.clearGlobalContext();
+    });
+    ```
+
+=== "NPM"
+
+    ```javascript
+    import { datafluxLogs } from '@cloudcare/browser-logs'
+
+    const context = datafluxLogs.clearGlobalContext();
+    ```
+
+## Custom User Identification
+
+---
+
+By default, the SDK automatically generates a unique ID for users. This ID has no identifying attributes and can only distinguish between different user properties. To address this, we provide additional APIs to add various identifying attributes to the current user.
+
+| Attribute  | Type   | Description          |
+| ---------- | ------ | -------------------- |
+| user.id    | string | User ID              |
+| user.name  | string | Username or Nickname |
+| user.email | string | Email Address        |
+
+**Note**: The following attributes are optional, but it is recommended to provide at least one.
+
+### Add User Identification
+
+=== "CDN Synchronous"
+
+    ```javascript
+    window.DATAFLUX_LOGS && window.DATAFLUX_LOGS.setUser({
+        id: '1234',
+        name: 'John Doe',
+        email: 'john@doe.com',
+    })
+    ```
+
+=== "CDN Asynchronous"
+
+    ```javascript
+    window.DATAFLUX_LOGS.onReady(function() {
+        window.DATAFLUX_LOGS.setUser({
+            id: '1234',
+            name: 'John Doe',
+            email: 'john@doe.com',
+        })
+    })
+    ```
+
+=== "NPM"
+
+    ```javascript
+    import { datafluxLogs } from '@cloudcare/browser-logs'
+    datafluxLogs.setUser({
+        id: '1234',
+        name: 'John Doe',
+        email: 'john@doe.com',
+    })
+    ```
+
+### Remove User Identification
+
+=== "CDN Synchronous"
+
+    ```javascript
+    window.DATAFLUX_LOGS && window.DATAFLUX_LOGS.clearUser()
+    ```
+
+=== "CDN Asynchronous"
+
+    ```javascript
+    window.DATAFLUX_LOGS.onReady(function() {
+        window.DATAFLUX_LOGS.clearUser()
+    })
+    ```
+
+=== "NPM"
+
+    ```javascript
+    import { datafluxLogs } from '@cloudcare/browser-logs'
+    datafluxLogs.clearUser()
+    ```
