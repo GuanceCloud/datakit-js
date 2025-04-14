@@ -1,0 +1,106 @@
+:host {
+  --ui-range-track-hegiht: 4px;
+  --ui-range-thumb-size: 16px;
+  --ui-gray: #a2a9b6;
+  --ui-blue: #2a80eb;
+  display: inline-block;
+  position: relative;
+}
+:host([multiple]) {
+  pointer-events: none;
+}
+[type='range'] {
+  display: block;
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+  outline: 0;
+  background: none;
+  width: -webkit-fill-available;
+  width: fill-available;
+  width: fill;
+}
+[type='range'] + [type='range'] {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  margin: auto;
+}
+[type='range']::-webkit-slider-runnable-track {
+  display: flex;
+  align-items: center;
+  height: var(--ui-range-track-hegiht);
+  border-radius: var(--ui-range-track-hegiht);
+  background: linear-gradient(
+    to right,
+    var(--ui-gray) calc(1% * var(--from, 0)),
+    var(--ui-blue) calc(1% * var(--from, 0)) calc(1% * var(--to, 100)),
+    var(--ui-gray) 0%
+  );
+}
+[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: var(--ui-range-thumb-size);
+  height: var(--ui-range-thumb-size);
+  border-radius: 50%;
+  background-color: #fff;
+  box-shadow: 0 1px 3px 1px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.15s, background-color 0.15s;
+  cursor: pointer;
+  margin-top: calc(
+    (var(--ui-range-thumb-size) - var(--ui-range-track-hegiht)) * -0.5
+  );
+}
+[type='range']::-webkit-slider-thumb:active {
+  background-color: var(--ui-light, #f7f9fa);
+  box-shadow: 0 0 1px 1px rgba(0, 0, 0, 0.25);
+}
+[type='range'] + [type='range']::-webkit-slider-runnable-track {
+  background: none;
+}
+/* Firefox */
+[type='range'] {
+  width: -moz-available;
+}
+input[type='range']::-moz-range-track {
+  display: flex;
+  align-items: center;
+  height: var(--ui-range-track-hegiht);
+  border-radius: var(--ui-range-track-hegiht);
+  background: linear-gradient(
+    to right,
+    var(--ui-gray) calc(1% * var(--from, 0)),
+    var(--ui-blue) calc(1% * var(--from, 0)) calc(1% * var(--to, 100)),
+    var(--ui-gray) 0%
+  );
+}
+input[type='range']::-moz-range-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: var(--ui-range-thumb-size);
+  height: var(--ui-range-thumb-size);
+  border-radius: 50%;
+  background-color: #fff;
+  box-shadow: 0 1px 3px 1px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.15s, background-color 0.15s;
+  cursor: pointer;
+  margin-top: calc(
+    (var(--ui-range-thumb-size) - var(--ui-range-track-hegiht)) * -0.5
+  );
+}
+[type='range']::-moz-range-thumb:active {
+  background-color: var(--ui-light, #f7f9fa);
+  box-shadow: 0 0 1px 1px rgba(0, 0, 0, 0.25);
+}
+[type='range'] + [type='range']::-moz-range-track {
+  background: none;
+}
+
+/* 下面代码无关紧要，测试是否影响外部元素渲染 */
+body {
+  filter: hue-rotate(180deg) invert(1);
+}

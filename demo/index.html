@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <script src="./dataflux-rum.js"></script>
+    <link rel="stylesheet" href="/index.css" />
+    <script src="./dataflux-logs.js"></script>
+
+    <style>
+      .open-window {
+        background-color: aqua;
+        width: 100px;
+        height: 100px;
+        position: absolute;
+        top: 10px;
+      }
+    </style>
+
+    <script>
+      window.DATAFLUX_RUM &&
+        window.DATAFLUX_RUM.init({
+          applicationId: 'test_dcl',
+          clientToken: '9d73c956aa844d5b97e83f7623a52f32',
+          site: 'https://rum-openway.guance.com',
+          service: 'browser',
+          env: 'production',
+          version: '1.0.0',
+          sessionSampleRate: 100,
+          //   sessionOnErrorSampleRate: 100,
+          traceType: 'w3c_traceparent',
+          sessionReplaySampleRate: 100,
+          //   sessionReplayOnErrorSampleRate: 100,
+          trackInteractions: true,
+          //   workerUrl: './worker.js',
+          compressIntakeRequests: false,
+          allowFallbackToLocalStorage: true,
+          usePartitionedCrossSiteSessionCookie: true,
+          trackSessionAcrossSubdomains: true,
+          telemetryEnabled: true,
+          enableLongAnimationFrame: true,
+          retryMaxSize: 10,
+
+          //   beforeSend: function (event, context) {
+
+          //     return true // 这里代表需要上报数据
+          //   },
+          shouldMaskNode: (node, privacyLevel) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+              // 如果是文本节点，判断内容是否包含数字
+              const textContent = node.textContent || ''
+              return /\d+/.test(textContent)
+            }
+            return false
+          },
+          allowedDDTracingOrigins: [
+            'https://console-api.guance.com',
+            'http://testing-ft2x-api.dataflux.cn'
+          ]
+        })
+      window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
+      window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+      //   window.DATAFLUX_RUM.addRumGlobalContext(
+      //     'test_resource_url',
+      //     'https://www.google-analytics.com/g/collect?v=2&tid=G-1FC3M6HECR&gtm=45je4cc1v9172232212za200&_p=1736141426730&gcd=13l3l3l3l1l1&npa=0&dma=0&tag_exp=101925629~102067555~102067808~102081485~102198178&_fid=e9zpCGGcU4MTsimxF5v1KM&cid=1873983669.1736141427&ul=zh-cn&sr=1920x1080&uaa=arm&uab=64&uafvl=Google%2520Chrome%3B131.0.6778.205%7CChromium%3B131.0.6778.205%7CNot_A%2520Brand%3B24.0.0.0&uamb=0&uam=&uap=macOS&uapv=15.1.1&uaw=0&are=1&frm=0&pscdl=noapi&_s=2&uid=0&sid=1736141426&sct=1&seg=0&dl=https%3A%2F%2Fh5.mate.ai%2FplayGames%3Fgame_id%3D8%26from%3Dhome_upper_right&dt=Mate.ai-Always%20Beside%20You&en=page_view_july&_ee=1&ep.origin=firebase&ep.app_key=25000003&ep.app_version=&ep.channel=&ep.pkg=&ep.system_version=&ep.device_id=&ep.idfa=&ep.imei=&ep.df_id=&ep.gaid=&ep.event_id=8de523e7-3d59-4995-84bf-0f234ff6272b&epn.event_time=1736141429247&ep.event_type=counter&ep.device_model=&ep.imsi=&ep.android_id=&ep.network=&ep.mate_id=&epn.module=3&epn.content_id=-1&ep.from=HOME_UPPER_RIGHT&ep.args=%7B%22from%22%3A%22HOME_UPPER_RIGHT%22%7D&_et=1861&tfd=11340'
+      //   )
+      //   window.DATAFLUX_RUM.setGlobalContextProperty('test', '211')
+      //   window.DATAFLUX_LOGS &&
+      //     window.DATAFLUX_LOGS.init({
+      //       datakitOrigin: 'https://aws-console.guance.com',
+      //       version: '0.1',
+      //       service: 'adf(adf)"""\\"{} }: sdfxx\\a \df(adf\)\{} }',
+      //       trackSessionAcrossSubdomains: true,
+      //       usePartitionedCrossSiteSessionCookie: true,
+      //       telemetryEnabled: true,
+      //       retryMaxSize: 12,
+      //       forwardConsoleLogs: ['warn', 'info']
+      //     })
+      //   window.DATAFLUX_LOGS && window.DATAFLUX_LOGS._setDebug(true)
+    </script>
+    <!-- <script src="./dataflux-rum.js"></script>
+    <script>
+      window.DATAFLUX_RUM &&
+        window.DATAFLUX_RUM.init({
+          applicationId: 'test_dcl_2',
+          clientToken: '58489c99f8614a2495055ed865780c19',
+          site: 'http://testing-openway.dataflux.cn',
+          service: 'browser',
+          env: 'production',
+          version: '1.0.0',
+          sessionSampleRate: 100,
+          traceType: 'ddtrace',
+          sessionReplaySampleRate: 0,
+          trackInteractions: true,
+          //   workerUrl: './worker.js',
+          compressIntakeRequests: false,
+          allowFallbackToLocalStorage: true,
+          usePartitionedCrossSiteSessionCookie: true,
+          trackSessionAcrossSubdomains: true,
+          telemetryEnabled: true,
+          enableLongAnimationFrame: true,
+          retryMaxSize: 10,
+          generateTraceId: (context) => {
+            console.log('===context', context)
+            return 'xxxx'
+          },
+          //   beforeSend: function (event, context) {
+          //     if (event.type === 'resource' && event.resource.type === 'fetch') {
+          //       // 这里可以往数据之中添加 responseHeaders 字段上报
+          //       event.context.responseHeaders = Object.fromEntries(
+          //         context.response.headers
+          //       )
+          //     }
+          //     return true // 这里代表需要上报数据
+          //   }
+          allowedDDTracingOrigins: [
+            'https://console-api.guance.com',
+            'http://testing-ft2x-api.dataflux.cn'
+          ]
+        })
+      window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
+      window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+    </script> -->
+    <script>
+      function instrumentMethod(targetPrototype, method, onPreCall) {
+        var original = targetPrototype[method]
+
+        var instrumentation = function () {
+          try {
+            onPreCall.apply(null, arguments)
+          } catch (e) {
+            console.log('error', e)
+            var result = original.apply(this, arguments)
+            return result
+          }
+        }
+        targetPrototype[method] = instrumentation
+      }
+      instrumentMethod(window, 'open', function () {
+        const params = Array.from(arguments)
+        //这里可以添加代码逻辑，打开自己业务tab页
+      })
+    </script>
+    <!-- <script src="./build/test-sourcemap.js"></script> -->
+    <!-- <script src="https://static.guance.com/browser-sdk/v3/dataflux-rum.js" type="text/javascript"></script> -->
+    <!-- <script>
+ (function (h, o, u, n, d) {
+    h = h[d] = h[d] || {
+      q: [],
+      onReady: function (c) {
+        h.q.push(c)
+      }
+    }
+    d = o.createElement(u)
+    d.async = 1
+    d.src = n
+    n = o.getElementsByTagName(u)[0]
+    n.parentNode.insertBefore(d, n)
+  })(
+    window,
+    document,
+    'script',
+    'https://static.guance.com/browser-sdk/v3/dataflux-rum.js',
+    'DATAFLUX_RUM'
+  )
+  DATAFLUX_RUM.onReady(function () {
+    DATAFLUX_RUM.init({
+      applicationId: 'dcl_test_session_replay',
+      datakitOrigin: 'https://console.guance.com', // 协议（包括：//），域名（或IP地址）[和端口号],
+      env: 'production',
+      version: '1.0.0',
+      service: 'browser',
+      sessionSampleRate: 100,
+      sessionReplaySampleRate: 100,
+      storeContextsToLocal:true,
+      trackInteractions: true,
+      allowedTracingOrigins: ['https://console-api.guance.com','http://testing-ft2x-api.dataflux.cn'],  // 非必填，允许注器所需header头部的所有请求列表。可以是请求的origin，也可以是正则
+    })
+  })
+   setTimeout(() => {
+        DATAFLUX_RUM.onReady(function () {
+          DATAFLUX_RUM.setUser({
+            id: 'xxxx',
+            name: 'xxxx',
+          });
+        });
+      }, 5000);
+</script> -->
+
+    <!-- <script>
+  window.DATAFLUX_RUM &&
+    window.DATAFLUX_RUM.init({
+      applicationId: 'dcl_test_session_replay',
+      datakitOrigin: 'https://console.guance.com', // 协议（包括：//），域名（或IP地址）[和端口号],
+      env: 'production',
+      version: '1.0.0',
+      service: 'browser',
+      sessionSampleRate: 100,
+      sessionReplaySampleRate: 100,
+      trackInteractions: true,
+      storeContextsToLocal: true,
+      storeContextsKey: 'test',
+      injectTraceHeader: function(context){
+        return {
+            traceid: context.traceId
+        }
+      },
+      traceType: 'ddtrace', // 非必填，默认为ddtrace，目前支持 ddtrace、zipkin、skywalking_v3、jaeger、zipkin_single_header、w3c_traceparent 6种类型
+      allowedTracingOrigins: ['https://console-api.guance.com','http://testing-ft2x-api.dataflux.cn'],  // 非必填，允许注入trace采集器所需header头部的所有请求列表。可以是请求的origin，也可以是是正则
+    });
+    window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
+    window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+</script> -->
+    <!-- <script type="text/javascript" src="https://www.datadoghq-browser-agent.com/us1/v5/datadog-logs.js"></script>
+        <script>
+            window.DD_LOGS && window.DD_LOGS.init({
+                clientToken: 'pubabc8f70d52b51fefa7f3a245b1b40f3b',
+                site: 'datadoghq.com',
+                forwardErrorsToLogs: true,
+                sessionSampleRate: 100
+            });
+            window.DD_LOGS.logger.info('Button clicked', { name: 'buttonName', id: 123 })
+            window.DD_LOGS.logger.info('C:\\df:\\ddddsdfaddd\\', { name: 'C:\\df:\\ddddsdfaddd\\', id: 123 })
+            window.DD_LOGS.logger.info('C:\\df:\\dddd', { name: 'C:\\df:\\dddd', id: 123 })
+        </script> -->
+    <!-- <script>
+    
+    (function (h, o, u, n, d) {
+    h = h[d] = h[d] || {
+      q: [],
+      onReady: function (c) {
+        h.q.push(c)
+      }
+    }
+    d = o.createElement(u)
+    d.async = 1
+    d.src = n
+    n = o.getElementsByTagName(u)[0]
+    n.parentNode.insertBefore(d, n)
+  })(
+    window,
+    document,
+    'script',
+    'dataflux-rum.js',
+    'DATAFLUX_RUM_HEADLESS'
+  )
+  DATAFLUX_RUM_HEADLESS.onReady(function () {
+    DATAFLUX_RUM_HEADLESS.init({
+      trackLoadedVisibleElement: 'test',
+    })
+  })
+  </script> -->
+    <!-- <script>
+      ;(function (h, o, u, n, d) {
+        h = h[d] = h[d] || {
+          q: [],
+          onReady: function (c) {
+            h.q.push(c)
+          }
+        }
+        d = o.createElement(u)
+        d.async = 1
+        d.src = n
+        n = o.getElementsByTagName(u)[0]
+        n.parentNode.insertBefore(d, n)
+      })(window, document, 'script', './dataflux-rum.js', 'DATAFLUX_RUM')
+      DATAFLUX_RUM.onReady(function () {
+        DATAFLUX_RUM.addAction('xxxx', 'xxxx')
+      })
+      DATAFLUX_RUM.onReady(function () {
+        DATAFLUX_RUM.init({
+          applicationId: 'appid_F5FPTn2aCpAY9Fb95Fu4Z6',
+          datakitOrigin: 'http://172.16.5.9:9529 ',
+          env: 'test',
+          version: '1.0.0',
+          //   tracingSampleRate: 0,
+          trackInteractions: true,
+          //   actionNameAttribute: 'delay',
+          service: 'test',
+          allowedTracingOrigins: ['http://testing-ft2x-api.cloudcare.cn']
+          //  env: 'production',
+          //  version: '1.0.0',
+        })
+      })
+    </script> -->
+
+    <script>
+      const sendRequest1 = function () {
+        var xhr = new XMLHttpRequest()
+        xhr.open(
+          'get',
+          'https://console-api.guance.com/api/v1/df/asynchronous/query_data?body=%7B%22queries%22:[%7B%22uuid%22:%2253af4000-1827-11ef-9e3d-49e3cee4bb3e%22,%22qtype%22:%22dql%22,%22query%22:%7B%22q%22:%22L::re(%60.*%60):(fill(count(__docid),+0)+as+%60count%60)%7B+(%60index%60+IN+[%27default%27])+AND+(%60message%60+%3D+queryString(%5C%22200%5C%22))+%7D+BY+%60status%60%22,%22_funcList%22:[],%22funcList%22:[],%22maxPointCount%22:60,%22interval%22:20,%22align_time%22:false,%22sorder_by%22:[%7B%22column%22:%22%60%231%60%22,%22order%22:%22DESC%22%7D],%22slimit%22:20,%22disable_sampling%22:false,%22timeRange%22:[1716355588892,1716356488892],%22tz%22:%22Asia%2FShanghai%22%7D%7D]%7D'
+        )
+        xhr.withCredentials = true
+        xhr.setRequestHeader(
+          'X-FT-Auth-Token',
+          'front.eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhY250X3V1aWQiOiJhY250XzAwYzMxNDVhMWEyNzExZWE4ZmQ4NGFlNTQwYjUzNTAzIiwid3NfdXVpZCI6Indrc3BfMzNiODdlODQ5Mzk0NGE5M2I4OWNjNTUxYzZhNDZjNzYiLCJ0b2tlbl91dWlkIjoiWE1GY3FQZUxmTCIsInRpbWUiOjE3MTU5MzMxMTYuOTY5ODczLCJyYW5nc3RyIjoiOVBUaUlZMnoiLCJsb2dpbl90eXBlIjoid2ViIiwibmFtZVNwYWNlIjoiIn0.QKEgeYJNDiqFQVh5gkST3KadzxRDYaqAupIhBj4YKhM'
+        )
+        xhr.send()
+        return xhr
+      }
+      const sendPostRequest = function () {
+        //
+
+        const request = new XMLHttpRequest()
+        request.open(
+          'POST',
+          'http://testing-ft2x-api.dataflux.cn/api/v1/issue/list',
+          true
+        )
+        request.withCredentials = true
+        request.setRequestHeader(
+          'X-FT-Auth-Token',
+          'front.eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhY250X3V1aWQiOiJhY250XzY2NGY1YjNjZmU3ODQxYTg5MTQzODE3ZjI3MjY3MDY2Iiwid3NfdXVpZCI6Indrc3BfZTY3YTUxM2E3N2VjNDFiZmI5NTA5NDk1YWM4OTM3ZDIiLCJ0b2tlbl91dWlkIjoiLVVXcnB0cG1zcSIsInRpbWUiOjE2OTgwMjcyMTcuNTMxNDAzMywicmFuZ3N0ciI6ImJIc01keXFmIiwibG9naW5fdHlwZSI6IndlYiIsIm5hbWVTcGFjZSI6IiJ9.OHReiBhHKI2nvWevH5Enn2gXJ59VUjV6Ge0C8vXCEwI'
+        )
+        request.setRequestHeader(
+          'Content-Type',
+          'application/json; charset=UTF-8'
+        )
+        request.send(
+          JSON.stringify({
+            channelUUID: 'chan_e4819ca49f974525b404f619ed8f23a2',
+            filters: [],
+            pageIndex: 1,
+            pageSize: 20
+          })
+        )
+      }
+      const sendPostFetch = function () {
+        // window.fetch('http://testing-ft2x-api.dataflux.cn/api/v1/issue/list', {
+        //   method: 'POST',
+        //   body: JSON.stringify({
+        //     channelUUID: 'chan_e4819ca49f974525b404f619ed8f23a2',
+        //     filters: [],
+        //     pageIndex: 1,
+        //     pageSize: 20
+        //   }),
+        //   headers: new Headers({
+        //     'Content-Type': 'application/json; charset=UTF-8',
+        //     'X-FT-Auth-Token':
+        //       'front.eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhY250X3V1aWQiOiJhY250XzY2NGY1YjNjZmU3ODQxYTg5MTQzODE3ZjI3MjY3MDY2Iiwid3NfdXVpZCI6Indrc3BfZTY3YTUxM2E3N2VjNDFiZmI5NTA5NDk1YWM4OTM3ZDIiLCJ0b2tlbl91dWlkIjoiLVVXcnB0cG1zcSIsInRpbWUiOjE2OTgwMjcyMTcuNTMxNDAzMywicmFuZ3N0ciI6ImJIc01keXFmIiwibG9naW5fdHlwZSI6IndlYiIsIm5hbWVTcGFjZSI6IiJ9.OHReiBhHKI2nvWevH5Enn2gXJ59VUjV6Ge0C8vXCEwI'
+        //   }),
+        //   keepalive: true,
+        //   mode: 'cors'
+        // })
+        window.fetch(
+          'https://www.google-analytics.com/g/collect?v=2&tid=G-1FC3M6HECR&gtm=45je4cc1v9172232212za200&_p=1736142512574&gcd=13l3l3l3l1l1&npa=0&dma=0&tag_exp=101925629~102067555~102067808~102081485~102198178&_fid=e9zpCGGcU4MTsimxF5v1KM&cid=1873983669.1736141427&ul=zh-cn&sr=1920x1080&uaa=arm&uab=64&uafvl=Google%2520Chrome%3B131.0.6778.205%7CChromium%3B131.0.6778.205%7CNot_A%2520Brand%3B24.0.0.0&uamb=0&uam=&uap=macOS&uapv=15.1.1&uaw=0&are=1&frm=0&pscdl=noapi&_s=2&uid=0&sid=1736141426&sct=1&seg=1&dl=https%3A%2F%2Fh5.mate.ai%2FplayGames%3Fgame_id%3D8%26from%3Dhome_upper_right&dt=Mate.ai-Always%20Beside%20You&en=page_view_july&_ee=1&ep.origin=firebase&ep.app_key=25000003&ep.app_version=&ep.channel=&ep.pkg=&ep.system_version=&ep.device_id=&ep.idfa=&ep.imei=&ep.df_id=&ep.gaid=&ep.event_id=eb6bfc82-37c6-4a6d-9aa5-df84e963c0e6&epn.event_time=1736142512619&ep.event_type=counter&ep.device_model=&ep.imsi=&ep.android_id=&ep.network=&ep.mate_id=&epn.module=3&epn.content_id=-1&ep.from=HOME_UPPER_RIGHT&ep.args=%7B%22from%22%3A%22HOME_UPPER_RIGHT%22%7D&_et=708&tfd=9036'
+        )
+      }
+      const sendFetch = function () {
+        window.fetch(
+          'http://testing-ft2x-api.dataflux.cn/api/v1/df/asynchronous/query_data?body=%7B%22queries%22:[%7B%22uuid%22:%22992cb800-6cb1-11ee-96e0-3d7d7b5fc517%22,%22qtype%22:%22dql%22,%22query%22:%7B%22q%22:%22O::HOST:(%60*%60)%22,%22limit%22:50,%22orderby%22:[%7B%22host%22:%22desc%22%7D],%22_funcList%22:[],%22funcList%22:[],%22disableMultipleField%22:false,%22align_time%22:false,%22offset%22:0,%22search_after%22:[],%22timeRange%22:[1697435652000],%22tz%22:%22America%2FChicago%22%7D%7D],%22expensiveQueryCheck%22:true%7D',
+          {
+            headers: new Headers({
+              'X-FT-Auth-Token':
+                'front.eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhY250X3V1aWQiOiJhY250XzY2NGY1YjNjZmU3ODQxYTg5MTQzODE3ZjI3MjY3MDY2Iiwid3NfdXVpZCI6Indrc3BfZTY3YTUxM2E3N2VjNDFiZmI5NTA5NDk1YWM4OTM3ZDIiLCJ0b2tlbl91dWlkIjoiLVVXcnB0cG1zcSIsInRpbWUiOjE2OTgwMjcyMTcuNTMxNDAzMywicmFuZ3N0ciI6ImJIc01keXFmIiwibG9naW5fdHlwZSI6IndlYiIsIm5hbWVTcGFjZSI6IiJ9.OHReiBhHKI2nvWevH5Enn2gXJ59VUjV6Ge0C8vXCEwI'
+            })
+          }
+        )
+        // window.fetch('https://mall-app.ekuaibao.com/mall-hcar/taxi/app/order/detail/state?access_token=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJjb21wYW55SWQiOiI4NjgxNTgwNjA2MjE4NTY3NjgiLCJzY29wZSI6WyJzZXJ2ZXIiXSwiZXhwIjoxNjYzNzI1MDA0LCJ1c2VySWQiOiI4NjgxNTgwNjU1ODM3MTg0MDAiLCJpc3N1ZXIiOiJ1c2VyY2VudGVyIiwicGxhdGZvcm0iOiJzeXN0ZW0iLCJqdGkiOiI1Njg2OTdhOS1jMzljLTQyZGMtODY2Yy1kZDliYjhhNmU0YTIiLCJjbGllbnRfaWQiOiIxIn0.SEcrJlN7LGAxwtxpyk_Z8hkM7_Nu7SDlpDTEny_dxZ5OjamRnwEKR4CJIVQEAB9Dg31Oze4P_3NLL5cZZhyzf8k0JCz-2N7U0M6hprqqeWL_RJj5We_gxDG6Agm_oBMstirdb02aedagvAkw-6t47x5JPkTz1CGwFiiqsplrPDQ&language=cn&scene=PC&orderNo=CH20220920095135600437')
+      }
+      const timeoutSendFetch = function () {
+        setTimeout(function () {
+          timeoutSendFetch()
+        }, 5000)
+        sendFetch()
+      }
+      sendRequest1()
+      const sendRequest2 = function () {
+        var xhr = new XMLHttpRequest()
+        xhr.open(
+          'get',
+          'http://testing-ft2x-api.cloudcare.cn/api/v1/account/current'
+        )
+        xhr.withCredentials = true
+        xhr.setRequestHeader(
+          'X-FT-Auth-Token',
+          'front.eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhY250X3V1aWQiOiJhY250XzM1OTNkNmQwNzFjYzExZWI5NTZmMWVmM2RkZTUyNTlmIiwid3NfdXVpZCI6Indrc3BfMmRjNDMxZDY2OTM3MTFlYjhmZjk3YWVlZTA0YjU0YWYiLCJ0b2tlbl91dWlkIjoiYWYyMGNmOGEyMWM5NGNjMDkwOTI4MWRiOGE4NzIyNjMiLCJ0aW1lIjoxNjIwMjY4ODQ4LjE4NjE1LCJyYW5nc3RyIjoiZ0UyRE1mTnoifQ.mjfx53KZyImi6EbjGM0AwALJWOgIR7BGieLoYjIGNQM'
+        )
+        xhr.send()
+      }
+
+      const n = 10
+      for (let i = 0; i < n; i++) {
+        sendRequest1()
+        sendRequest2()
+      }
+    </script>
+    <!-- <script src="http://localhost:8001/b.js"></script> -->
+    <!-- <script>
+      var xx = sdfasdfsd
+    </script> -->
+
+    <!-- <script src="http://localhost:8001/a.js"></script> -->
+    <!-- <script>
+      window.onerror = function () {
+        console.log(arguments, '112312312312')
+      }
+      //   console.error(new Error('test errror'))
+    </script> -->
+  </head>
+
+  <body>
+    <div style="background-color: red; width: 100px; height: 100px" id="test">
+      test
+    </div>
+    <img src="/test.png" alt="" />
+    <input id="demo" />
+    <div id="operation">
+      <button delay="testSourceMap">test sourcemap</button>
+      <button delay="testAddAction">test addAction</button>
+      <button delay="testLog">test add info log</button>
+      <button delay="sendRequest">send Request</button>
+      <button delay="sendPostRequest">send postRequest</button>
+      <button delay="sendPostFetch">send sendPostFetch</button>
+      <button delay="sendFetch">send sendFetch</button>
+      <button delay="timeoutSendFetch">send interval Fetch</button>
+      <button delay="track_action">send track_action</button>
+      <button delay="displayDate">displayDate</button>
+      <button delay="testError">test Error</button>
+      <button delay="10">10ms</button>
+      <button delay="30">30ms</button>
+      <button delay="50">50ms</button>
+      <button delay="100">100ms</button>
+      <button delay="200">200ms</button>
+      <button delay="300">300</button>
+      <button delay="500">500</button>
+      <button delay="1000">1</button>
+      <button delay="append">append window</button>
+      <button delay="open">window.open</button>
+    </div>
+    <div class="get_session_repaly">
+      <input id="session_replay_input" />
+      <button onclick="getSessionReplyData()">getSessionReplyData</button>
+      <div id="session_replay_content"></div>
+    </div>
+    <div
+      style="height: 500px; width: 100%; margin-top: 100px; position: relative"
+    >
+      <button>C. find /tmp/ -type f -exec ls -l {} \</button>
+      <button>500ms</button>
+      <button>500ms</button>
+      <button>500ms</button>
+      <button>500ms</button>
+      <button>500ms</button>
+      <div style="position: absolute; bottom: 10px; left: 0px">
+        <button>500ms</button><button>500ms</button>
+        <div>测试时是对方</div>
+      </div>
+    </div>
+    <script>
+      // long task
+      function random(n, m) {
+        const len = m - n
+        return Math.floor(n + Math.random() * len)
+      }
+      function getRandomColor() {
+        const rowColors = '0123456789abcdef'
+        let colors = '#'
+        let i = 6
+        let len = rowColors.length
+        while (i--) {
+          const n = random(0, len)
+          colors += rowColors.charAt(n)
+        }
+        return colors
+      }
+      function switchColor() {
+        var test = document.getElementById('test')
+        test.style.backgroundColor = getRandomColor()
+      }
+      function sleep(delay) {
+        var end = performance.now() + delay
+        while (performance.now() < end) {}
+      }
+      let right = 10
+      function buttonsClickHandle(event) {
+        const target = event.target
+        const tagName = target.tagName.toLowerCase()
+        if (tagName !== 'button') return
+        const delay = target.getAttribute('delay')
+        if (delay === 'sendRequest') {
+          const request = sendRequest1()
+          // setTimeout(() => {
+          //   request.abort()
+          // }, 10)
+        } else if (delay === 'sendPostFetch') {
+          sendPostFetch()
+        } else if (delay === 'sendPostRequest') {
+          sendPostRequest()
+        } else if (delay === 'sendFetch') {
+          sendFetch()
+        } else if (delay === 'timeoutSendFetch') {
+          timeoutSendFetch()
+        } else if (delay === 'track_action') {
+          action()
+        } else if (delay === 'displayDate') {
+          displayDate()
+        } else if (delay === 'testError') {
+          //   sdf = xxx
+          throw new Error('Whoops!')
+          // try {
+
+          // } catch(error) {
+
+          // }
+        } else if (delay === 'append') {
+          right += 10
+          const div = document.createElement('div')
+          div.setAttribute('class', 'open-window')
+          div.setAttribute('style', 'right: ' + right + 'px')
+          document.body.append(div)
+        } else if (delay === 'open') {
+          window.open('https://guance.com', '_blank')
+        } else if (delay === 'testSourceMap') {
+          window.test()
+        } else if (delay === 'testLog') {
+          window.DATAFLUX_LOGS &&
+            window.DATAFLUX_LOGS.logger.info('sendMessage', {
+              name: 'sendMessage',
+              action: 'sendMessage',
+              botId: 'xxxx'
+            })
+        } else if (delay === 'testAddAction') {
+          window.DATAFLUX_RUM.addAction('test action', {
+            a: 'a',
+            b: 'b',
+            c: 'c'
+          })
+        } else {
+          sleep(Number(delay) - 5)
+          switchColor()
+        }
+      }
+      function getSessionReplyData() {
+        // <input id="session_replay_input" />
+        // <button onclick="getSessionReplyData">getSessionReplyData</button>
+        // <div id="session_replay_content"></div>
+        const fileid = document.getElementById('session_replay_input').value
+        if (!fileid) return
+        var xhr = new XMLHttpRequest()
+        xhr.timeout = 2000
+        xhr.open('get', 'http://localhost:3002/filedata/' + fileid)
+        xhr.withCredentials = true
+        xhr.send()
+
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState == 4 && xhr.status == 200) {
+            document.getElementById('session_replay_content').innerHTML =
+              xhr.responseText
+          }
+        }
+      }
+      function action() {
+        var start = Date.parse(new Date()) / 1000
+        console.log(start)
+        //Date.parse(new Date())/1000<end
+
+        while (Date.parse(new Date()) / 1000 - start < 1) {
+          continue
+        }
+        // console.log('done')
+        document.getElementById('demo').value = Date()
+      }
+      function displayDate() {
+        document.getElementById('demo').innerHTML = Date()
+      }
+      function init() {
+        const operation = document.querySelector('#operation')
+        operation.addEventListener('click', buttonsClickHandle, false)
+        document
+          .getElementById('test')
+          .addEventListener('click', switchColor, false)
+      }
+      init()
+    </script>
+  </body>
+</html>

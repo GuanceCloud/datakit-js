@@ -1,0 +1,26 @@
+{
+  "name": "@cloudcare/browser-core",
+  "version": "3.2.19",
+  "main": "cjs/index.js",
+  "module": "esm/index.js",
+  "types": "types/index.d.ts",
+  "scripts": {
+    "build": "run-p build:cjs build:esm",
+    "build:cjs": "rm -rf cjs && babel --config-file ./babel.cjs.json --out-dir cjs ./src",
+    "build:esm": "rm -rf esm && babel --config-file ./babel.esm.json --out-dir esm ./src "
+  },
+  "keywords": [
+    "dataflux",
+    "logs",
+    "sdk"
+  ],
+  "repository": {
+    "url": "https://github.com/DataFlux-cn/datakit-js",
+    "type": "git",
+    "directory": "packages/core"
+  },
+  "author": "dataflux",
+  "license": "MIT",
+  "description": "DataFlux RUM Web 端数据指标监控",
+  "gitHead": "47f9fa1890683efb7cf6995e4d038eb5dec7113a"
+}

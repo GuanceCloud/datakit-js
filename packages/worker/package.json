@@ -1,0 +1,34 @@
+{
+  "name": "@cloudcare/browser-worker",
+  "version": "3.2.19",
+  "main": "bundle/worker.js",
+  "scripts": {
+    "build": "rm -rf bundle && webpack --mode=production",
+    "publish:oss:current": "npm run build && node ./scripts/publish-oss.js current",
+    "publish:oss:lts": "npm run build && node ./scripts/publish-oss.js lts",
+    "publish:oss:test": "npm run build && node ./scripts/publish-oss.js test"
+  },
+  "dependencies": {
+    "@cloudcare/browser-core": "3.2.19"
+  },
+  "keywords": [
+    "dataflux",
+    "worker",
+    "sdk"
+  ],
+  "repository": {
+    "url": "https://github.com/DataFlux-cn/datakit-js",
+    "type": "git",
+    "directory": "packages/worker"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "webpack": "5.91.0"
+  },
+  "author": "dataflux",
+  "license": "MIT",
+  "description": "DataFlux RUM Web 端数据指标监控",
+  "gitHead": "47f9fa1890683efb7cf6995e4d038eb5dec7113a"
+}

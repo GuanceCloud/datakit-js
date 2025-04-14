@@ -1,0 +1,251 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <script src="./dataflux-rum.js"></script>
+    <link rel="stylesheet" href="/index.css" />
+    <script src="./dataflux-logs.js"></script>
+    <style>
+      html,
+      body {
+        background-color: #fff;
+      }
+    </style>
+    <script>
+      window.DATAFLUX_RUM &&
+        window.DATAFLUX_RUM.init({
+          applicationId: 'dcl_test',
+          datakitOrigin: 'http://172.16.212.186:9529',
+          service: 'browser',
+          env: 'production',
+          version: '1.0.0',
+          sessionSampleRate: 100,
+          sampleRate: 100,
+          traceType: 'w3c_traceparent_64bit',
+          sessionReplaySampleRate: 100,
+          trackInteractions: true,
+          trackFrustrations: true,
+          trackSessionAcrossSubdomains: true,
+          telemetryEnabled: true,
+          sendContentTypeByJson: true,
+          defaultPrivacyLevel: 'allow',
+          allowedDDTracingOrigins: ['http://testing-ft2x-api.cloudcare.cn']
+        })
+      window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
+      window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+      window.DATAFLUX_LOGS &&
+        window.DATAFLUX_LOGS.init({
+          datakitOrigin: 'http://172.16.212.186:9529',
+          version: '0.1',
+          service: 'adf(adf)"""\\"{} }: sdfxx\\a \df(adf\)\{} }',
+          trackSessionAcrossSubdomains: true,
+          telemetryEnabled: true,
+          sendContentTypeByJson: true
+        })
+      window.DATAFLUX_LOGS && window.DATAFLUX_LOGS._setDebug(true)
+    </script>
+    <!-- <script
+      src="https://www.datadoghq-browser-agent.com/us1/v4/datadog-rum.js"
+      type="text/javascript"
+    ></script>
+    <script>
+      window.DD_RUM &&
+        window.DD_RUM.init({
+          clientToken: 'pubabc8f70d52b51fefa7f3a245b1b40f3b',
+          applicationId: 'f1497aa6-da7c-444d-b5f3-68b15b0077ea',
+          site: 'datadoghq.com',
+          service: 'dcl-test',
+          env: '<ENV_NAME>',
+          // Specify a version number to identify the deployed version of your application in Datadog
+          // version: '1.0.0',
+          sessionSampleRate: 100,
+          sessionReplaySampleRate: 100,
+          trackUserInteractions: true,
+          trackFrustrations: true,
+          trackResources: true,
+          trackLongTasks: true,
+          defaultPrivacyLevel: 'allow'
+        })
+
+      window.DD_RUM && window.DD_RUM.startSessionReplayRecording()
+    </script> -->
+    <style>
+      ui-range {
+        width: 240px;
+      }
+      output:not(:empty)::before {
+        content: '选择范围（值）：';
+        margin-left: 20px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="demo">
+      <h4>区域范围选择</h4>
+      <ui-range min="0" max="100" value="30, 60" multiple></ui-range>
+      <output></output>
+      <h4>区域单值选择</h4>
+      <ui-range min="0" max="100" value="30"></ui-range> <output></output>
+    </div>
+  </body>
+  <script type="module">
+    // import styles from './range.css'
+    import styles from './range.css' assert { type: 'css' }
+    class uiRange extends HTMLElement {
+      constructor() {
+        super()
+
+        // Shadow DOM元素
+        let shadow = this.attachShadow({
+          mode: 'open'
+        })
+
+        if (shadow.adoptedStyleSheets) {
+          shadow.adoptedStyleSheets = [styles]
+        } else {
+          fetch('./range.css')
+            .then((response) => response.text())
+            .then((data) => {
+              let node = document.createElement('style')
+              node.innerHTML = data
+              shadow.appendChild(node)
+            })
+
+          // @import 语法使用示意
+          // let node = document.createElement('style');
+          // node.innerHTML = `@import './range.css';`;
+          // shadow.appendChild(node);
+        }
+      }
+      static get observedAttributes() {
+        return ['max', 'min', 'step', 'value']
+      }
+      get value() {
+        return this.getAttribute('value')
+      }
+      set value(val) {
+        this.setAttribute('value', val)
+      }
+      get min() {
+        return this.getAttribute('min') || '0'
+      }
+      set min(val) {
+        this.setAttribute('min', val)
+      }
+      get max() {
+        return this.getAttribute('max') || '100'
+      }
+      set max(val) {
+        this.setAttribute('max', val)
+      }
+      get step() {
+        return this.getAttribute('step') || '1'
+      }
+      set step(val) {
+        this.setAttribute('step', val)
+      }
+
+      get multiple() {
+        return this.hasAttribute('multiple')
+      }
+      set multiple(val) {
+        this.toggleAttribute('multiple', val)
+      }
+
+      connectedCallback() {
+        this.create()
+      }
+      attributeChangedCallback(name, oldValue, newValue) {
+        // 略，非重点
+        this.render()
+      }
+      create() {
+        // 赋值处理
+        let value = this.value || ''
+        let arrValue = value.split(/,\s*|\s+/)
+
+        if (this.multiple && arrValue.length === 1) {
+          arrValue[1] = arrValue[0]
+        }
+        arrValue.forEach((val, index) => {
+          let range = document.createElement('input')
+          range.type = 'range'
+          // 默认属性
+          ;['max', 'min', 'step'].forEach((attr) => {
+            if (this.hasAttribute(attr)) {
+              range[attr] = this[attr]
+            }
+          })
+          // 赋值处理
+          if (val) {
+            range.value = val
+          }
+
+          // 事件处理
+          range.addEventListener('input', (event) => {
+            this.dispatchEvent(new CustomEvent('input'))
+          })
+
+          // 放在Shadow DOM中
+          this.shadowRoot.append(range)
+          // 暴露给自定义元素
+          this['range' + index] = range
+        })
+
+        // 事件
+        this.events()
+      }
+
+      events() {
+        this.addEventListener('input', (_) => {
+          // value值变化
+          let value0 = this.range0.value
+          this.value = value0
+          if (this.multiple) {
+            let value1 = this.range1.value
+            this.value = [value0, value1]
+              .map((val) => {
+                return Number(val)
+              })
+              .sort(function (a, b) {
+                return a - b
+              })
+              .join()
+          }
+        })
+      }
+
+      render() {
+        let value = this.value
+        let arrValue = value.split(/,\s*|\s+/)
+        // 百分比值确定
+        let min = this.min
+        let max = this.max
+        let distance = max - min
+        let from = 0
+        let to = 100
+
+        if (this.multiple) {
+          from = (100 * (arrValue[0] - min)) / distance
+        }
+        to = (100 * ((arrValue[1] || arrValue[0]) - min)) / distance
+
+        this.style.setProperty('--from', from)
+        this.style.setProperty('--to', to)
+      }
+    }
+    if (!customElements.get('ui-range')) {
+      customElements.define('ui-range', uiRange)
+    }
+  </script>
+  <script>
+    // 业务代码
+    document.querySelectorAll('ui-range').forEach((input) => {
+      input.addEventListener('input', function () {
+        this.nextElementSibling.innerHTML = this.value
+      })
+    })
+  </script>
+</html>

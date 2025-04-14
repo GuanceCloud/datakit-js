@@ -1,0 +1,37 @@
+{
+  "name": "@cloudcare/browser-rum",
+  "version": "3.2.19",
+  "main": "cjs/index.js",
+  "module": "esm/index.js",
+  "types": "types/index.d.ts",
+  "dependencies": {
+    "@cloudcare/browser-core": "3.2.19",
+    "@cloudcare/browser-worker": "3.2.19"
+  },
+  "scripts": {
+    "dev": "webpack serve --open --mode=development",
+    "build": "run-p build:cjs build:esm build:bundle",
+    "build:cjs": "rm -rf cjs && babel --config-file ./babel.cjs.json --out-dir cjs ./src && npm run replace-build-env cjs",
+    "build:esm": "rm -rf esm && babel --config-file ./babel.esm.json --out-dir esm ./src && npm run replace-build-env esm",
+    "build:bundle": "rm -rf bundle && webpack  --mode=production",
+    "replace-build-env": "node ../../scripts/replace-build-env.js",
+    "publish:oss:current": "npm run build:bundle && node ./scripts/publish-oss.js current",
+    "publish:oss:lts": "npm run build:bundle && node ./scripts/publish-oss.js lts",
+    "publish:oss:test": "npm run build:bundle && node ./scripts/publish-oss.js test"
+  },
+  "keywords": [
+    "dataflux",
+    "rum",
+    "sdk"
+  ],
+  "repository": {
+    "url": "https://github.com/DataFlux-cn/datakit-js",
+    "type": "git",
+    "directory": "packages/rum"
+  },
+  "author": "dataflux",
+  "license": "MIT",
+  "homepage": "https://github.com/CloudCare/dataflux-rum-sdk-javascript/blob/master/packages/rum/README.md",
+  "description": "DataFlux RUM Web 端数据指标监控",
+  "gitHead": "47f9fa1890683efb7cf6995e4d038eb5dec7113a"
+}

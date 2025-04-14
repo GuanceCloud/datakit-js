@@ -1,0 +1,7 @@
+*
+!/bundle/dataflux-rum.js
+!/cjs/**/*
+!/esm/**/*
+!/src/**/*
+/src/**/*.spec.js
+!/types/**/*

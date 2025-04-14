@@ -1,0 +1,4 @@
+*
+!/bundle/worker.js
+!/src/**/*
+/src/**/*.spec.js

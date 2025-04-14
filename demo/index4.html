@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>web-公网dataway接入方式</title>
+    <!--以下部分为幻灯片特效代码-->
+    <link
+      href="http://fonts.googleapis.com/css?family=PT+Sans+Narrow"
+      rel="stylesheet"
+      type="text/css"
+    />
+    <link href="css/style.css" rel="stylesheet" type="text/css" />
+    <script src="jquery-3.7.1.min.js" type="text/javascript"></script>
+    <script src="js/portfolio.js" type="text/javascript"></script>
+
+    <script src="js/init.js" type="text/javascript"></script>
+    <!--代码结束-->
+  </head>
+  <!--
+<script src="https://static.guance.com/browser-sdk/v3/dataflux-rum.js" type="text/javascript"></script>
+<script>
+  window.DATAFLUX_RUM &&
+    window.DATAFLUX_RUM.init({
+      applicationId: 'cccc',
+      datakitOrigin: 'http://172.16.212.186:9529', // 协议（包括：//），域名（或IP地址）[和端口号]
+      env: 'production',
+      version: '1.0.0',
+      service: 'browser',
+      sessionSampleRate: 100,
+      sessionReplaySampleRate: 70,
+      trackInteractions: true,
+      traceType: 'ddtrace', // 非必填，默认为ddtrace，目前支持 ddtrace、zipkin、skywalking_v3、jaeger、zipkin_single_header、w3c_traceparent 6种类型
+      allowedTracingOrigins: ['https://api.example.com',/https:\/\/.*\.my-api-domain\.com/],  // 非必填，允许注入trace采集器所需header头部的所有请求列表。可以是请求的origin，也可以是是正则
+    });
+    window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+</script>
+ <script src="test-sourcemap.js" type="text/javascript"></script>
+-->
+  <!--cl调试代码-->
+  <!-- <script
+    src="https://www.datadoghq-browser-agent.com/us1/v5/datadog-rum.js"
+    type="text/javascript"
+  ></script>
+  <script>
+    window.DD_RUM &&
+      window.DD_RUM.init({
+        clientToken: 'pub9a981146b91323482415ee186301e5a4',
+        applicationId: '9cfaf388-53b6-477e-afb7-a031aad681b6',
+        // `site` refers to the Datadog site parameter of your organization
+        // see https://docs.datadoghq.com/getting_started/site/
+        site: 'datadoghq.com',
+        service: 'test1',
+        env: '<ENV_NAME>',
+        // Specify a version number to identify the deployed version of your application in Datadog
+        // version: '1.0.0',
+        sessionSampleRate: 100,
+        sessionReplaySampleRate: 100,
+        trackUserInteractions: true,
+        trackResources: true,
+        trackLongTasks: true,
+        defaultPrivacyLevel: 'mask-user-input'
+      })
+    window.DD_RUM.startSessionReplayRecording()
+  </script> -->
+  <!--调试代码结束-->
+  <script src="./dataflux-rum.js"></script>
+  <script>
+    window.DATAFLUX_RUM &&
+      window.DATAFLUX_RUM.init({
+        applicationId: 'test_session_replay_2',
+        site: 'https://cn4-rum-openway.guance.com',
+        clientToken: '2OQwyC5Q7QsyNMd6uV1FQowqoLMAFxBwhBI_hax21QAR4w4L2A',
+        env: 'production',
+        version: '1.0.0',
+        service: 'browser',
+        sessionSampleRate: 100,
+        sessionReplaySampleRate: 100,
+        sendContentTypeByJson: true,
+        trackInteractions: true,
+        traceType: 'ddtrace', // 非必填，默认为ddtrace，目前支持 ddtrace、zipkin、skywalking_v3、jaeger、zipkin_single_header、w3c_traceparent 6种类型
+        allowedTracingOrigins: [
+          'https://api.example.com',
+          /https:\/\/.*\.my-api-domain\.com/
+        ] // 非必填，允许注入trace采集器所需header头部的所有请求列表。可以是请求的origin，也可以是是正则
+      })
+    window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
+    window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+  </script>
+
+  <body onload="displayDate()">
+    <button onclick="createError()">createError</button>
+    <a href="http://192.168.56.1:8080/test.txt" download id="download"
+      >下载文件1</a
+    >
+    <a href="http://192.168.56.1:8080/download" download>下载文件2</a>
+    <a href="http://192.168.56.1:8080/tel">下载3</a>
+    <a href="www.baidu.com">跳百度</a>
+    <a
+      href="https://downsc.chinaz.net/Files/DownLoad/pic9/201903/zzpic17289.rar"
+      >下载大海图片</a
+    >
+
+    <h1>我的第一张网页</h1>
+
+    <video width="320" height="240" controls autoplay>
+      <source src="http://vjs.zencdn.net/v/oceans.mp4" type="video/mp4" />
+      <object data="movie.mp4" width="320" height="240">
+        <embed
+          width="320"
+          height="240"
+          src="http://vjs.zencdn.net/v/oceans.mp4"
+        />
+      </object>
+    </video>
+
+    <p id="demo"></p>
+
+    <script>
+      function createError() {
+        $('#download').appendTo({ xx: '11' })
+      }
+
+      window.DATAFLUX_RUM &&
+        window.DATAFLUX_RUM.setUser({
+          id: '10082',
+          name: '上海-公网dataway',
+          email: 'jyd@jiagouyun.com'
+        })
+
+      //添加自定义tag
+      window.DATAFLUX_RUM &&
+        window.DATAFLUX_RUM.addRumGlobalContext('isvip', '企业级')
+      window.DATAFLUX_RUM.addRumGlobalContext(
+        'track_id',
+        'rtrace_dee92b53b4de464ebbb8afe56900c8dd'
+      )
+      window.DATAFLUX_RUM &&
+        window.DATAFLUX_RUM.addRumGlobalContext('zzzz', 'yyyyy')
+      window.DATAFLUX_RUM &&
+        window.DATAFLUX_RUM.addRumGlobalContext('activity', {
+          hasPaid: true,
+          amount: 2300.42
+        })
+
+      // 添加自定义action
+      window.DATAFLUX_RUM &&
+        window.DATAFLUX_RUM.addAction('自定义action', {
+          amount: 555,
+          nb_items: 10,
+          items: ['socks', 't-shirt', 'pdd']
+        })
+
+      //获取所以自定义tag
+      var context = window.DATAFLUX_RUM && DATAFLUX_RUM.getRumGlobalContext()
+      console.log(context)
+
+      //自定义error
+      // Send a custom error with context
+      const error = new Error('这是一个自定义error')
+
+      window.DATAFLUX_RUM &&
+        DATAFLUX_RUM.addError(error, {
+          pageStatus: '测试'
+        })
+
+      // Send a network error
+      fetch('http://www.yyddeeffccaawee.com').catch(function (error) {
+        console.log('fetch')
+        console.log(error)
+        window.DATAFLUX_RUM && DATAFLUX_RUM.addError(error)
+      })
+
+      // Send a handled exception error
+      try {
+        adddelert('欢迎光临！')
+      } catch (err) {
+        console.log(err.message)
+        window.DATAFLUX_RUM && DATAFLUX_RUM.addError(err)
+      }
+
+      document.getElementById('demo').innerHTML = 5 + 6
+    </script>
+    <button onclick="displayDate()">时间是？</button>
+    <button onclick="action()">action长任务</button>
+    <input type="text" name="lastname" value="Nixon" size="30" maxlength="50" />
+
+    <button onclick="test()">测试</button>
+
+    <button onclick="get()">测试1</button>
+    <button onclick="ddtrace()">ddtrace</button>
+    <button onclick="ddtrace_5001()">ddtrace_5001</button>
+    <button onclick="ddtrace_local()">ddtrace_local</button>
+
+    <a href="/a"> a连接</a>
+    <a href="/b">b连接</a>
+    <p>我的第一个段落</p>
+    <div class="tools-img-content light">
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/scene_light.gif"
+        alt=""
+        class="tools-img active"
+      />
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/infrastructure_light.gif"
+        alt=""
+        class="tools-img"
+      />
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/logging_light.gif"
+        alt=""
+        class="tools-img"
+      />
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/apm_light.gif"
+        alt=""
+        class="tools-img"
+      />
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/rum_light.gif"
+        alt=""
+        class="tools-img"
+      />
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/dial_test_light.gif"
+        alt=""
+        class="tools-img"
+      />
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/monitor_light.gif"
+        alt=""
+        class="tools-img"
+      />
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/security_checker_light.gif"
+        alt=""
+        class="tools-img"
+      />
+      <img
+        src="https://static.guance.com/dataflux_official_website/home_page/product_description/CI_light.gif"
+        alt=""
+        class="tools-img"
+      />
+    </div>
+    <img src="/sh.jpg" alt="上海鲜花港 - 郁金香" />
+    <script>
+      function action() {
+        var start = Date.parse(new Date())
+        console.log(start)
+        //Date.parse(new Date())/1000<end
+
+        while (Date.parse(new Date()) - start < 500) {
+          continue
+        }
+        document.getElementsByName('lastname')[0].value = '长任务'
+        console.log('done')
+      }
+
+      function test() {
+        $.get(
+          'http://192.168.56.1:8080/test',
+          { name: '张三', age: 18 },
+          function (data) {
+            alert(data.name)
+          },
+          'json'
+        )
+      }
+
+      function ddtrace() {
+        console.log(Date.now())
+        $.get(
+          'http://172.16.5.9:18060/test/apc?status_code=500',
+          function (data) {
+            console.log(data)
+          }
+        )
+      }
+
+      function ddtrace_5001() {
+        console.log(Date.now())
+        $.get('http://172.16.5.9:5001/', function (data) {
+          console.log(data)
+        })
+      }
+
+      function ddtrace_local() {
+        console.log(Date.now())
+        $.get('http://127.0.0.1:5001/hello', function (data) {
+          console.log(data)
+        })
+      }
+    </script>
+
+    <script>
+      function get() {
+        $.get(
+          'http://127.0.0.1:8080/telegraf',
+          { name: '张三', age: 18 },
+          function (data) {
+            alert(data.name)
+          },
+          'json'
+        )
+      }
+    </script>
+    <script>
+      function displayDate() {
+        document.getElementById('dddemo').innerHTML = Date()
+      }
+    </script>
+  </body>
+</html>

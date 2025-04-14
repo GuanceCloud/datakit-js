@@ -1,0 +1,7 @@
+*
+!/bundle/dataflux-logs.js
+!/cjs/**/*
+!/esm/**/*
+!/src/**/*
+/src/**/*.spec.js
+!/types/**/*

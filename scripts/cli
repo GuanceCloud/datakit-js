@@ -1,0 +1,35 @@
+#!/bin/bash
+
+set -euo pipefail
+
+PATH="$PATH:node_modules/.bin"
+
+main () {
+  if [[ $# -lt 1 ]]; then
+    cmd_help
+  fi
+
+  local command="cmd_$1"
+  shift
+
+  "$command" "$@"
+}
+
+cmd_help () {
+  local available_commands=$(set | perl -nle'print $& while m{^cmd_\K\w+}g')
+  echo -e "Available commands:\n$available_commands"
+  exit 1
+}
+
+cmd_release () {
+  [[ `git branch --show-current`!="master" ]] || fail 'please do not release from `master` branch'
+  lerna version --exact
+}
+
+cmd_version () {
+  node ./scripts/release/generate-changelog.js
+#   node ./scripts/release/update-peer-dependency-versions.js
+
+}
+
+main "$@"

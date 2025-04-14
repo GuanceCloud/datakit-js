@@ -1,0 +1,5 @@
+{
+    "private": true,
+    "main": "../cjs/worker.js",
+    "module": "../esm/worker.js"
+}
