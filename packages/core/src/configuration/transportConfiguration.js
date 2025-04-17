@@ -30,7 +30,7 @@ function getEndPointUrl(configuration, type) {
   return endpoint
 }
 
-function trim(str) {
+export function trim(str) {
   return str.replace(TRIM_REGIX, '')
 }
 

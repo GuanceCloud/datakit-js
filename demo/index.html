@@ -21,9 +21,9 @@
     <script>
       window.DATAFLUX_RUM &&
         window.DATAFLUX_RUM.init({
-          applicationId: 'test_dcl',
-          clientToken: '9d73c956aa844d5b97e83f7623a52f32',
-          site: 'https://rum-openway.guance.com',
+          applicationId: 'd1b454d0_22eb_11ef_9b66_95ca11aa2c6c',
+          clientToken: 'a47fb0cdddaa4561a90d941317cdbc0b',
+          site: 'http://testing-openway.dataflux.cn',
           service: 'browser',
           env: 'production',
           version: '1.0.0',
@@ -41,6 +41,7 @@
           telemetryEnabled: true,
           enableLongAnimationFrame: true,
           retryMaxSize: 10,
+          remoteConfiguration: true,
 
           //   beforeSend: function (event, context) {
 
@@ -65,19 +66,20 @@
       //     'test_resource_url',
       //     'https://www.google-analytics.com/g/collect?v=2&tid=G-1FC3M6HECR&gtm=45je4cc1v9172232212za200&_p=1736141426730&gcd=13l3l3l3l1l1&npa=0&dma=0&tag_exp=101925629~102067555~102067808~102081485~102198178&_fid=e9zpCGGcU4MTsimxF5v1KM&cid=1873983669.1736141427&ul=zh-cn&sr=1920x1080&uaa=arm&uab=64&uafvl=Google%2520Chrome%3B131.0.6778.205%7CChromium%3B131.0.6778.205%7CNot_A%2520Brand%3B24.0.0.0&uamb=0&uam=&uap=macOS&uapv=15.1.1&uaw=0&are=1&frm=0&pscdl=noapi&_s=2&uid=0&sid=1736141426&sct=1&seg=0&dl=https%3A%2F%2Fh5.mate.ai%2FplayGames%3Fgame_id%3D8%26from%3Dhome_upper_right&dt=Mate.ai-Always%20Beside%20You&en=page_view_july&_ee=1&ep.origin=firebase&ep.app_key=25000003&ep.app_version=&ep.channel=&ep.pkg=&ep.system_version=&ep.device_id=&ep.idfa=&ep.imei=&ep.df_id=&ep.gaid=&ep.event_id=8de523e7-3d59-4995-84bf-0f234ff6272b&epn.event_time=1736141429247&ep.event_type=counter&ep.device_model=&ep.imsi=&ep.android_id=&ep.network=&ep.mate_id=&epn.module=3&epn.content_id=-1&ep.from=HOME_UPPER_RIGHT&ep.args=%7B%22from%22%3A%22HOME_UPPER_RIGHT%22%7D&_et=1861&tfd=11340'
       //   )
-      //   window.DATAFLUX_RUM.setGlobalContextProperty('test', '211')
-      //   window.DATAFLUX_LOGS &&
-      //     window.DATAFLUX_LOGS.init({
-      //       datakitOrigin: 'https://aws-console.guance.com',
-      //       version: '0.1',
-      //       service: 'adf(adf)"""\\"{} }: sdfxx\\a \df(adf\)\{} }',
-      //       trackSessionAcrossSubdomains: true,
-      //       usePartitionedCrossSiteSessionCookie: true,
-      //       telemetryEnabled: true,
-      //       retryMaxSize: 12,
-      //       forwardConsoleLogs: ['warn', 'info']
-      //     })
-      //   window.DATAFLUX_LOGS && window.DATAFLUX_LOGS._setDebug(true)
+      window.DATAFLUX_RUM.setGlobalContextProperty('test', '211')
+      window.DATAFLUX_LOGS &&
+        window.DATAFLUX_LOGS.init({
+          datakitOrigin: 'https://aws-console.guance.com',
+          version: '0.1',
+          service: 'adf(adf)"""\\"{} }: sdfxx\\a \df(adf\)\{} }',
+          trackSessionAcrossSubdomains: true,
+          usePartitionedCrossSiteSessionCookie: true,
+          telemetryEnabled: true,
+          retryMaxSize: 12,
+          storeContextsToLocal: true,
+          forwardConsoleLogs: ['warn', 'info']
+        })
+      window.DATAFLUX_LOGS && window.DATAFLUX_LOGS._setDebug(true)
     </script>
     <!-- <script src="./dataflux-rum.js"></script>
     <script>

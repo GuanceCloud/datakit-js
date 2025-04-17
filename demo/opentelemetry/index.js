@@ -1,88 +1,58 @@
-import { context, trace } from '@opentelemetry/api'
+import { Resource } from '@opentelemetry/resources'
 import {
-  ConsoleSpanExporter,
-  SimpleSpanProcessor
-} from '@opentelemetry/sdk-trace-base'
-import { WebTracerProvider } from '@opentelemetry/sdk-trace-web'
-import { XMLHttpRequestInstrumentation } from '@opentelemetry/instrumentation-xml-http-request'
-
+  BatchSpanProcessor,
+  WebTracerProvider
+} from '@opentelemetry/sdk-trace-web'
 import { ZoneContextManager } from '@opentelemetry/context-zone'
-// import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http'
+import { trace } from '@opentelemetry/api'
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto'
-import { W3CTraceContextPropagator } from '@opentelemetry/core'
-import { registerInstrumentations } from '@opentelemetry/instrumentation'
 
-const providerWithZone = new WebTracerProvider({
-  //   resource: I
-  // Note: For production consider using the "BatchSpanProcessor" to reduce the number of requests
-  // to your exporter. Using the SimpleSpanProcessor here as it sends the spans immediately to the
-  // exporter without delay
-  spanProcessors: [
-    // new SimpleSpanProcessor(new ConsoleSpanExporter()),
-    new SimpleSpanProcessor(
-      new OTLPTraceExporter({
-        headers: {},
-        url: 'http://10.100.64.166:9529/otel/v1/traces'
-      })
-    )
-  ]
-})
-
-providerWithZone.register({
-  contextManager: new ZoneContextManager(),
-  propagator: new W3CTraceContextPropagator()
-})
-
-registerInstrumentations({
-  instrumentations: [
-    new XMLHttpRequestInstrumentation({
-      ignoreUrls: [/localhost:8090\/sockjs-node/],
-      propagateTraceHeaderCorsUrls: ['https://httpbin.org/get']
+const setupOTelSDK = () => {
+  const resource = Resource.default().merge(
+    new Resource({
+      'service.name': 'DigiFinex_Browser'
     })
-  ]
-})
+  )
 
-const webTracerWithZone = providerWithZone.getTracer('example-tracer-web')
+  const tracerProvider = new WebTracerProvider({ resource })
 
-const getData = (url) =>
-  new Promise((resolve, reject) => {
-    const req = new XMLHttpRequest()
-    req.open('GET', url, true)
-    req.setRequestHeader('Content-Type', 'application/json')
-    req.setRequestHeader('Accept', 'application/json')
-    req.onload = () => {
-      resolve()
-    }
-    req.onerror = () => {
-      reject()
-    }
-    req.send()
+  const traceExporter = new OTLPTraceExporter({
+    url: 'http://8.153.107.77:9529/otel/v1/traces',
+    headers: {}
   })
 
-// example of keeping track of context between async operations
-const prepareClickEvent = () => {
-  const url1 = 'https://httpbin.org/get'
+  const spanProcessor = new BatchSpanProcessor(traceExporter)
 
-  const element = document.getElementById('button1')
+  tracerProvider.addSpanProcessor(spanProcessor)
 
-  const onClick = () => {
-    for (let i = 0, j = 5; i < j; i += 1) {
-      const span1 = webTracerWithZone.startSpan(`files-series-info-${i}`)
-      context.with(trace.setSpan(context.active(), span1), () => {
-        getData(url1).then(
-          (_data) => {
-            trace.getSpan(context.active()).addEvent('fetching-span1-completed')
-            span1.end()
-          },
-          () => {
-            trace.getSpan(context.active()).addEvent('fetching-error')
-            span1.end()
-          }
-        )
-      })
-    }
-  }
-  element.addEventListener('click', onClick)
+  // ⚠️ 注意！一定要设置 contextManager
+  tracerProvider.register({
+    contextManager: new ZoneContextManager()
+  })
+
+  trace.setGlobalTracerProvider(tracerProvider)
 }
 
-window.addEventListener('load', prepareClickEvent)
+const createRootSpan = (spanName) => {
+  const tracer = trace.getTracer('example-tracer')
+  const rootSpan = tracer.startSpan(spanName)
+  rootSpan.end()
+  return rootSpan
+}
+
+export { setupOTelSDK, createRootSpan }
+
+setupOTelSDK()
+
+document.getElementById('button1').addEventListener('click', function () {
+  const rootSpan = createRootSpan('button1-click')
+  // 获取 spanContext
+  const { traceId, spanId, traceFlags } = rootSpan.spanContext()
+
+  // 构造 traceparent header
+  const traceparent = `00-${traceId}-${spanId}-${traceFlags
+    .toString(16)
+    .padStart(2, '0')}`
+
+  console.log('traceparent header:', traceparent)
+})

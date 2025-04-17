@@ -10,7 +10,8 @@ import {
   assign,
   addTelemetryConfiguration,
   initFetchObservable,
-  deepClone
+  deepClone,
+  fetchAndApplyRemoteConfiguration
 } from '@cloudcare/browser-core'
 import { validateAndBuildRumConfiguration } from '../domain/configuration'
 
@@ -134,8 +135,11 @@ export function createPreStartStrategy(
       if (ignoreInitIfSyntheticsWillInjectRum && willSyntheticsInjectRum()) {
         return
       }
-
-      doInit(initConfiguration)
+      if (initConfiguration.remoteConfiguration) {
+        fetchAndApplyRemoteConfiguration(initConfiguration, doInit)
+      } else {
+        doInit(initConfiguration)
+      }
     },
 
     getInitConfiguration: function () {
