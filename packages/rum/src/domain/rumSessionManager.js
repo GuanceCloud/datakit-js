@@ -4,7 +4,9 @@ import {
   LifeCycleEventType,
   noop,
   Observable,
-  timeStampNow
+  timeStampNow,
+  bridgeSupports,
+  BridgeCapability
 } from '@cloudcare/browser-core'
 
 export var RUM_SESSION_KEY = 'rum'
@@ -118,7 +120,9 @@ export function startRumSessionManagerStub() {
     plan: RumSessionPlan.WITHOUT_SESSION_REPLAY, // plan value should not be taken into account for mobile
     isErrorSession: false,
     sessionErrorTimestamp: 0,
-    sessionReplayAllowed: false,
+    sessionReplayAllowed: bridgeSupports(BridgeCapability.RECORDS)
+      ? true
+      : false,
     errorSessionReplayAllowed: false,
     sessionHasError: false
   }

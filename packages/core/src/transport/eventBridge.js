@@ -39,12 +39,14 @@ export const BridgeCapability = {
 }
 export function bridgeSupports(capability) {
   const bridge = getEventBridge()
+
   return !!bridge && bridge.getCapabilities().includes(capability)
 }
 export function canUseEventBridge(
   currentHost = getGlobalObject().location?.hostname
 ) {
   var bridge = getEventBridge()
+
   return (
     !!bridge &&
     bridge

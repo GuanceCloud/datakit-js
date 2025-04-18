@@ -136,7 +136,6 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
             return
           }
           var deflateEncoder = getOrCreateDeflateEncoder()
-
           if (!deflateEncoder) {
             state = {
               status: RecorderStatus.Stopped

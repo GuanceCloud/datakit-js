@@ -86,7 +86,6 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
             }
           : createIdentityEncoder
       )
-
       recorderApi.onRumStart(
         startRumResult.lifeCycle,
         configuration,

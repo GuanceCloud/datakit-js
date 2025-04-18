@@ -40,11 +40,12 @@ export function startRecording(
       configuration.retryMaxSize,
       reportError
     )
-  const session = sessionManager.findTrackedSession()
-  let isRecordErrorSessionReplay =
-    session && session.errorSessionReplayAllowed && !session.sessionHasError
-  let addRecord, flushBufferSegment, unlockSegment
+
+  let addRecord, _record
   if (!canUseEventBridge()) {
+    const session = sessionManager.findTrackedSession()
+    let isRecordErrorSessionReplay =
+      session && session.errorSessionReplayAllowed && !session.sessionHasError
     var segmentCollection = startSegmentCollection(
       lifeCycle,
       configuration,
@@ -55,54 +56,52 @@ export function startRecording(
       isRecordErrorSessionReplay
     )
     addRecord = segmentCollection.addRecord
-    flushBufferSegment = segmentCollection.flushBufferSegment
-    unlockSegment = segmentCollection.unlockSegment
+    let flushBufferSegment = segmentCollection.flushBufferSegment
+    let unlockSegment = segmentCollection.unlockSegment
     cleanupTasks.push(segmentCollection.stop)
-  } else {
-    ;({ addRecord } = startRecordBridge(viewContexts))
-  }
-
-  if (isRecordErrorSessionReplay) {
-    sessionManager.sessionStateUpdateObservable.subscribe(
-      ({ previousState, newState }) => {
-        if (!previousState.hasError && newState.hasError) {
-          isRecordErrorSessionReplay = false
-          unlockSegment && unlockSegment()
-        }
-      }
-    )
-  }
-  let lastFullSnapshotEvent = null
-  const wrappedEmit = (recordData) => {
-    addRecord(recordData)
     if (isRecordErrorSessionReplay) {
-      if (recordData.type === RecordType.FullSnapshot) {
-        lastFullSnapshotEvent = recordData
-      } else if (recordData.type === RecordType.IncrementalSnapshot) {
-        const exceedTime =
-          recordData.timestamp - lastFullSnapshotEvent.timestamp >
-          BUFFER_CHECKOUT_TIME
-        // If the time between the last full snapshot and the incremental snapshot is greater than the buffer time, we need to take a new full snapshot
-        if (exceedTime) {
-          if (flushBufferSegment) {
+      sessionManager.sessionStateUpdateObservable.subscribe(
+        ({ previousState, newState }) => {
+          if (!previousState.hasError && newState.hasError) {
+            isRecordErrorSessionReplay = false
+            unlockSegment()
+          }
+        }
+      )
+    }
+    let lastFullSnapshotEvent = null
+    const wrappedEmit = (recordData) => {
+      addRecord(recordData)
+      if (isRecordErrorSessionReplay) {
+        if (recordData.type === RecordType.FullSnapshot) {
+          lastFullSnapshotEvent = recordData
+        } else if (recordData.type === RecordType.IncrementalSnapshot) {
+          const exceedTime =
+            recordData.timestamp - lastFullSnapshotEvent.timestamp >
+            BUFFER_CHECKOUT_TIME
+          // If the time between the last full snapshot and the incremental snapshot is greater than the buffer time, we need to take a new full snapshot
+          if (exceedTime) {
             flushBufferSegment(() => {
               deleteOldestStats()
               takeSubsequentFullSnapshot()
             })
-          } else {
-            deleteOldestStats()
-            takeSubsequentFullSnapshot()
           }
         }
       }
     }
+    _record = record({
+      emit: wrappedEmit,
+      configuration: configuration,
+      lifeCycle: lifeCycle
+    })
+  } else {
+    ;({ addRecord } = startRecordBridge(viewContexts))
+    _record = record({
+      emit: addRecord,
+      configuration: configuration,
+      lifeCycle: lifeCycle
+    })
   }
-
-  var _record = record({
-    emit: wrappedEmit,
-    configuration: configuration,
-    lifeCycle: lifeCycle
-  })
   cleanupTasks.push(_record.stop)
   var takeSubsequentFullSnapshot = _record.takeSubsequentFullSnapshot
   var flushMutations = _record.flushMutations
