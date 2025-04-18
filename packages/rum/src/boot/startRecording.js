@@ -3,9 +3,11 @@ import {
   createHttpRequest,
   LifeCycleEventType,
   addTelemetryDebug,
-  ONE_SECOND
+  ONE_SECOND,
+  canUseEventBridge
 } from '@cloudcare/browser-core'
 import { record } from '../domain/replay/record'
+import { startRecordBridge } from '../domain/replay/startRecordBridge'
 import {
   startSegmentCollection,
   SEGMENT_BYTES_LIMIT
@@ -41,25 +43,31 @@ export function startRecording(
   const session = sessionManager.findTrackedSession()
   let isRecordErrorSessionReplay =
     session && session.errorSessionReplayAllowed && !session.sessionHasError
-  var segmentCollection = startSegmentCollection(
-    lifeCycle,
-    configuration,
-    sessionManager,
-    viewContexts,
-    replayRequest,
-    encoder,
-    isRecordErrorSessionReplay
-  )
-  var addRecord = segmentCollection.addRecord
-  var flushBufferSegment = segmentCollection.flushBufferSegment
-  var unlockSegment = segmentCollection.unlockSegment
-  cleanupTasks.push(segmentCollection.stop)
+  let addRecord, flushBufferSegment, unlockSegment
+  if (!canUseEventBridge()) {
+    var segmentCollection = startSegmentCollection(
+      lifeCycle,
+      configuration,
+      sessionManager,
+      viewContexts,
+      replayRequest,
+      encoder,
+      isRecordErrorSessionReplay
+    )
+    addRecord = segmentCollection.addRecord
+    flushBufferSegment = segmentCollection.flushBufferSegment
+    unlockSegment = segmentCollection.unlockSegment
+    cleanupTasks.push(segmentCollection.stop)
+  } else {
+    ;({ addRecord } = startRecordBridge(viewContexts))
+  }
+
   if (isRecordErrorSessionReplay) {
     sessionManager.sessionStateUpdateObservable.subscribe(
       ({ previousState, newState }) => {
         if (!previousState.hasError && newState.hasError) {
           isRecordErrorSessionReplay = false
-          unlockSegment()
+          unlockSegment && unlockSegment()
         }
       }
     )
@@ -76,10 +84,15 @@ export function startRecording(
           BUFFER_CHECKOUT_TIME
         // If the time between the last full snapshot and the incremental snapshot is greater than the buffer time, we need to take a new full snapshot
         if (exceedTime) {
-          flushBufferSegment(() => {
+          if (flushBufferSegment) {
+            flushBufferSegment(() => {
+              deleteOldestStats()
+              takeSubsequentFullSnapshot()
+            })
+          } else {
             deleteOldestStats()
             takeSubsequentFullSnapshot()
-          })
+          }
         }
       }
     }

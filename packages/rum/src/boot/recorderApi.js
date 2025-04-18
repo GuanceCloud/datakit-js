@@ -3,6 +3,8 @@ import {
   runOnReadyState,
   LifeCycleEventType,
   canUseEventBridge,
+  bridgeSupports,
+  BridgeCapability,
   PageExitReason
 } from '@cloudcare/browser-core'
 
@@ -27,7 +29,10 @@ var RecorderStatus = {
 }
 
 export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
-  if (canUseEventBridge() || !isBrowserSupported()) {
+  if (
+    (canUseEventBridge() && !bridgeSupports(BridgeCapability.RECORDS)) ||
+    !isBrowserSupported()
+  ) {
     return {
       start: noop,
       stop: noop,

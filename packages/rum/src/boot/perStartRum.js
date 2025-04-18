@@ -11,7 +11,8 @@ import {
   addTelemetryConfiguration,
   initFetchObservable,
   deepClone,
-  fetchAndApplyRemoteConfiguration
+  fetchAndApplyRemoteConfiguration,
+  getEventBridge
 } from '@cloudcare/browser-core'
 import { validateAndBuildRumConfiguration } from '../domain/configuration'
 
@@ -213,6 +214,10 @@ export function createPreStartStrategy(
 function overrideInitConfigurationForBridge(initConfiguration) {
   return assign({}, initConfiguration, {
     applicationId: '00000000-aaaa-0000-aaaa-000000000000',
-    sessionSampleRate: 100
+    clientToken: 'empty',
+    sessionSampleRate: 100,
+    defaultPrivacyLevel:
+      initConfiguration.defaultPrivacyLevel ??
+      getEventBridge()?.getPrivacyLevel()
   })
 }

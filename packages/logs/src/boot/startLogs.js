@@ -24,6 +24,7 @@ import { startLoggerCollection } from '../domain/logsCollection/logger/loggerCol
 import { startLogsBatch } from '../transport/startLogsBatch'
 import { startInternalContext } from '../domain/contexts/internalContext'
 import { startReportError } from '../domain/reportError'
+import { startLogsBridge } from '../transport/startLogsBridge'
 export function startLogs(initConfiguration, configuration, getCommonContext) {
   var lifeCycle = new LifeCycle()
   var cleanupTasks = []
@@ -69,6 +70,8 @@ export function startLogs(initConfiguration, configuration, getCommonContext) {
     cleanupTasks.push(function () {
       _startLogsBatch.stop()
     })
+  } else {
+    startLogsBridge(lifeCycle)
   }
 
   var internalContext = startInternalContext(session)

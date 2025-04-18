@@ -11,14 +11,47 @@ export function getEventBridge() {
   }
 
   return {
-    send(eventType, event) {
+    getCapabilities() {
+      return JSON.parse(
+        (eventBridgeGlobal.getCapabilities &&
+          eventBridgeGlobal.getCapabilities()) ||
+          '[]'
+      )
+    },
+    getPrivacyLevel() {
+      return (
+        eventBridgeGlobal.getPrivacyLevel && eventBridgeGlobal.getPrivacyLevel()
+      )
+    },
+    getAllowedWebViewHosts() {
+      return JSON.parse(eventBridgeGlobal.getAllowedWebViewHosts())
+    },
+    send(eventType, event, viewId) {
+      const view = viewId ? { id: viewId } : undefined
       eventBridgeGlobal.sendEvent(
-        JSON.stringify({ name: eventType, data: event })
+        JSON.stringify({ name: eventType, data: event, view })
       )
     }
   }
 }
-export function canUseEventBridge() {
+export const BridgeCapability = {
+  RECORDS: 'records'
+}
+export function bridgeSupports(capability) {
+  const bridge = getEventBridge()
+  return !!bridge && bridge.getCapabilities().includes(capability)
+}
+export function canUseEventBridge(
+  currentHost = getGlobalObject().location?.hostname
+) {
   var bridge = getEventBridge()
-  return !!bridge
+  return (
+    !!bridge &&
+    bridge
+      .getAllowedWebViewHosts()
+      .some(
+        (allowedHost) =>
+          currentHost === allowedHost || currentHost.endsWith(`.${allowedHost}`)
+      )
+  )
 }

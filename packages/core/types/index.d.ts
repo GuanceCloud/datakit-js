@@ -190,6 +190,14 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    */
   compressIntakeRequests?: boolean | undefined
   /**
+   * 是否开启数据采集的远程配置功能，默认不开启
+   * 远程配置功能可以在不发布新版本的情况下，动态修改数据采集的配置项
+   * 例如：可以在远程配置中修改采样率、是否开启用户行为采集等
+   * 远程配置功能需要在观测云控制台中开启
+   *
+   */
+  remoteConfiguration?: boolean | undefined
+  /**
    * 配置链路追踪工具类型，如果不配置默认为 ddtrace。目前支持 ddtrace、zipkin、skywalking_v3、jaeger、zipkin_single_header、w3c_traceparent 6 种数据类型。
    */
   traceType?: TraceType
