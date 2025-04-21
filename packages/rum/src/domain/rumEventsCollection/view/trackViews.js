@@ -79,15 +79,15 @@ export function trackViews(
     lifeCycle.subscribe(LifeCycleEventType.SESSION_EXPIRED, function () {
       currentView.end({ sessionIsActive: false })
     })
-    // End the current view on page unload
-    lifeCycle.subscribe(
-      LifeCycleEventType.PAGE_EXITED,
-      function (pageExitEvent) {
-        if (pageExitEvent.reason === PageExitReason.UNLOADING) {
-          currentView.end()
-        }
-      }
-    )
+    // // End the current view on page unload
+    // lifeCycle.subscribe(
+    //   LifeCycleEventType.PAGE_EXITED,
+    //   function (pageExitEvent) {
+    //     if (pageExitEvent.reason === PageExitReason.UNLOADING) {
+    //       currentView.end()
+    //     }
+    //   }
+    // )
   }
 
   function renewViewOnLocationChange(locationChangeObservable) {
@@ -229,6 +229,14 @@ function newView(
     triggerViewUpdate,
     SESSION_KEEP_ALIVE_INTERVAL
   )
+  const pageMayExitSubscription = lifeCycle.subscribe(
+    LifeCycleEventType.PAGE_EXITED,
+    (pageMayExitEvent) => {
+      if (pageMayExitEvent.reason === PageExitReason.UNLOADING) {
+        triggerViewUpdate()
+      }
+    }
+  )
   triggerViewUpdate()
   // View context update should always be throttled
   contextManager.changeObservable.subscribe(scheduleViewUpdate)
@@ -297,6 +305,7 @@ function newView(
       clearInterval(keepAliveIntervalId)
       setViewEnd(endClocks.relative)
       stopCommonViewMetricsTracking()
+      pageMayExitSubscription.unsubscribe()
       triggerViewUpdate()
       setTimeout(function () {
         result.stop()
