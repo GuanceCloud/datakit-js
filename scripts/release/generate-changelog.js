@@ -46,6 +46,6 @@ function getChangesList() {
   return allowedChanges.replace(
     /\(#(\d+)\)/gm,
     (_, id) =>
-      `([#${id}](https://gitlab.jiagouyun.com/cloudcare/dataflux-rum-sdk-javscript/pull/${id}))`
+      `([#${id}](https://gitlab.jiagouyun.com/cloudcare/browser-sdk/pull/${id}))`
   )
 }
