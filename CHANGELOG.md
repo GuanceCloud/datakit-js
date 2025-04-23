@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.22
+
+- fix: remove monitor console
+
 ## v3.2.21
 
 - 
