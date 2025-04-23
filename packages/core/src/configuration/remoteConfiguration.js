@@ -112,6 +112,7 @@ const modifiableFieldPaths = {
   sessionReplaySampleRate: 'number',
   sessionReplayOnErrorSampleRate: 'number',
   trackUserInteractions: 'boolean',
+  trackInteractions: 'boolean',
   actionNameAttribute: 'string',
   trackViewsManually: 'boolean',
   workerUrl: 'string',
