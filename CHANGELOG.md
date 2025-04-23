@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.21
+
+- 
+
 ## v3.2.19
 
 - fix: track setErrorForSession
