@@ -1,12 +1,12 @@
 {
   "name": "@cloudcare/browser-rum",
-  "version": "3.2.19",
+  "version": "3.2.20",
   "main": "cjs/index.js",
   "module": "esm/index.js",
   "types": "types/index.d.ts",
   "dependencies": {
-    "@cloudcare/browser-core": "3.2.19",
-    "@cloudcare/browser-worker": "3.2.19"
+    "@cloudcare/browser-core": "3.2.20",
+    "@cloudcare/browser-worker": "3.2.20"
   },
   "scripts": {
     "dev": "webpack serve --open --mode=development",
