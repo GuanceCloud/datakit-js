@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.23
+
+- fix: bug tracingSampleRate default 100
+
 ## v3.2.22
 
 - fix: remove monitor console
