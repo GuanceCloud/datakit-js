@@ -109,7 +109,10 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         initConfiguration.sessionReplayOnErrorSampleRate,
         0
       ),
-      tracingSampleRate: initConfiguration.tracingSampleRate,
+      tracingSampleRate: isNullUndefinedDefaultValue(
+        initConfiguration.tracingSampleRate,
+        100
+      ),
       allowedTracingUrls: allowedTracingUrls,
       injectTraceHeader:
         initConfiguration.injectTraceHeader &&
