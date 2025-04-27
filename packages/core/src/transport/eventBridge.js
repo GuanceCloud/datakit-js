@@ -24,7 +24,11 @@ export function getEventBridge() {
       )
     },
     getAllowedWebViewHosts() {
-      return JSON.parse(eventBridgeGlobal.getAllowedWebViewHosts())
+      return JSON.parse(
+        (eventBridgeGlobal.getAllowedWebViewHosts &&
+          eventBridgeGlobal.getAllowedWebViewHosts()) ||
+          '[]'
+      )
     },
     send(eventType, event, viewId) {
       const view = viewId ? { id: viewId } : undefined
