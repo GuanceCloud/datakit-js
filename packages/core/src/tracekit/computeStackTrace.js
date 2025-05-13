@@ -36,6 +36,7 @@ export function computeStackTrace(ex) {
 }
 var fileUrl =
   '((?:file|https?|blob|chrome-extension|electron|native|eval|webpack|<anonymous>|\\w+\\.|\\/).*?)'
+
 var filePosition = '(?::(\\d+))'
 var CHROME_LINE_RE = new RegExp(
   '^\\s*at (.*?) ?\\(' +
@@ -117,7 +118,7 @@ function parseWinLine(line) {
 }
 
 var GECKO_LINE_RE =
-  /^\s*(.*?)(?:\((.*?)\))?(?:^|@)((?:file|https?|blob|chrome|webpack|resource|capacitor|\[native).*?|[^@]*bundle)(?::(\d+))?(?::(\d+))?\s*$/i
+  /^\s*(.*?)(?:\((.*?)\))?(?:^|@)((?:file|https?|blob|chrome|webpack|resource|capacitor|\[native).*?|[^@]*bundle|\[wasm code\])(?::(\d+))?(?::(\d+))?\s*$/i
 var GECKO_EVAL_RE = /(\S+) line (\d+)(?: > eval line \d+)* > eval/i
 
 function parseGeckoLine(line) {
