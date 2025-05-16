@@ -49,8 +49,14 @@ export function bridgeSupports(capability) {
 export function canUseEventBridge(
   currentHost = getGlobalObject().location?.hostname
 ) {
+  const eventBridgeGlobal = getEventBridgeGlobal()
+  if (
+    eventBridgeGlobal &&
+    eventBridgeGlobal.getAllowedWebViewHosts === undefined
+  ) {
+    return true
+  }
   var bridge = getEventBridge()
-
   return (
     !!bridge &&
     bridge

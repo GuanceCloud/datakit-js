@@ -3,7 +3,13 @@ import { setInterval, clearInterval } from './timer'
 var END_OF_TIMES = Infinity
 
 export var CLEAR_OLD_VALUES_INTERVAL = ONE_MINUTE
+let cleanupHistoriesInterval = null
 
+const cleanupTasks = new Set()
+
+function cleanupHistories() {
+  cleanupTasks.forEach((task) => task())
+}
 /**
  *
  * @param {expireDelay,maxEntries } params
@@ -14,11 +20,13 @@ export function createValueHistory(params) {
   var maxEntries = params.maxEntries
 
   var entries = []
-  var clearOldValuesInterval = setInterval(function () {
-    return clearOldValues()
-  }, CLEAR_OLD_VALUES_INTERVAL)
+  if (cleanupHistoriesInterval) {
+    cleanupHistoriesInterval = setInterval(function () {
+      return clearExpiredValues()
+    }, CLEAR_OLD_VALUES_INTERVAL)
+  }
 
-  function clearOldValues() {
+  function clearExpiredValues() {
     var oldTimeThreshold = relativeNow() - expireDelay
     while (
       entries.length > 0 &&
@@ -27,7 +35,7 @@ export function createValueHistory(params) {
       entries.pop()
     }
   }
-
+  cleanupTasks.add(clearExpiredValues)
   function add(value, startTime) {
     var entry = {
       value: value,
@@ -103,7 +111,11 @@ export function createValueHistory(params) {
    * Stop internal garbage collection of past entries.
    */
   function stop() {
-    clearInterval(clearOldValuesInterval)
+    cleanupTasks.delete(clearExpiredValues)
+    if (cleanupTasks.size === 0 && cleanupHistoriesInterval) {
+      clearInterval(cleanupHistoriesInterval)
+      cleanupHistoriesInterval = null
+    }
   }
 
   return {

@@ -53,7 +53,8 @@ function computePerformanceViewDetails(navigationTimings) {
   if (
     isNumber(responseEnd) &&
     isNumber(fetchStart) &&
-    responseEnd !== fetchStart
+    responseEnd !== fetchStart &&
+    responseEnd > fetchStart
   ) {
     details.fpt = toServerDuration(responseEnd - fetchStart)
     var apdexLevel = parseInt((responseEnd - fetchStart) / 1000) // 秒数取整
@@ -62,14 +63,16 @@ function computePerformanceViewDetails(navigationTimings) {
   if (
     isNumber(domInteractive) &&
     isNumber(fetchStart) &&
-    domInteractive !== fetchStart
+    domInteractive !== fetchStart &&
+    domInteractive > fetchStart
   ) {
     details.tti = toServerDuration(domInteractive - fetchStart)
   }
   if (
     isNumber(domContentLoaded) &&
     isNumber(fetchStart) &&
-    domContentLoaded !== fetchStart
+    domContentLoaded !== fetchStart &&
+    domContentLoaded > fetchStart
   ) {
     details.dom_ready = toServerDuration(domContentLoaded - fetchStart)
   }
@@ -77,14 +80,16 @@ function computePerformanceViewDetails(navigationTimings) {
   if (
     isNumber(loadEventEnd) &&
     isNumber(fetchStart) &&
-    loadEventEnd !== fetchStart
+    loadEventEnd !== fetchStart &&
+    loadEventEnd > fetchStart
   ) {
     details.load = toServerDuration(loadEventEnd - fetchStart)
   }
   if (
     isNumber(loadEventStart) &&
     isNumber(domContentLoadedEventEnd) &&
-    loadEventStart !== domContentLoadedEventEnd
+    loadEventStart !== domContentLoadedEventEnd &&
+    loadEventStart > domContentLoadedEventEnd
   ) {
     details.resource_load_time = toServerDuration(
       loadEventStart - domContentLoadedEventEnd
@@ -93,7 +98,8 @@ function computePerformanceViewDetails(navigationTimings) {
   if (
     isNumber(domComplete) &&
     isNumber(domInteractive) &&
-    domComplete !== domInteractive
+    domComplete !== domInteractive &&
+    domComplete > domInteractive
   ) {
     details.dom = toServerDuration(domComplete - domInteractive)
   }

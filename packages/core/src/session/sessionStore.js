@@ -206,7 +206,7 @@ export function startSessionStore(
     expandOrRenewSession: throttledExpandOrRenewSession,
     expandSession,
     getSession: function () {
-      return sessionCache || {}
+      return sessionCache
     },
     renewObservable,
     expireObservable,

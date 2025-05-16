@@ -307,6 +307,10 @@ var MethodLibrary = {
     })()
     return _this.language
   }),
+  getTimeZone: monitor(function () {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return timeZone
+  }),
   // 浏览器信息
   getBrowserInfo: monitor(function () {
     var _this = this
@@ -619,7 +623,8 @@ if (typeof window !== 'undefined') {
     browserVersionMajor: MethodLibrary.getBrowserInfo().browserMajor,
     screenSize: window.screen.width + '*' + window.screen.height,
     networkType: MethodLibrary.getNetwork(),
-    device: MethodLibrary.getDeviceType()
+    device: MethodLibrary.getDeviceType(),
+    timeZone: MethodLibrary.getTimeZone()
   }
 }
 export var deviceInfo = _deviceInfo

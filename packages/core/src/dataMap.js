@@ -22,6 +22,7 @@ export var commonTags = {
   browser_version_major: 'device.browser_version_major',
   screen_size: 'device.screen_size',
   network_type: 'device.network_type',
+  time_zone: 'device.time_zone',
   device: 'device.device',
   view_id: 'view.id',
   view_referrer: 'view.referrer',

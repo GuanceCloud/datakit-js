@@ -48,10 +48,7 @@ export function processSessionStoreOperations(
   let currentStore = retrieveStore()
   if (isLockEnabled) {
     // if someone has lock, retry later
-    if (
-      currentStore.lock &&
-      !isSessionInNotStartedState(currentStore.session)
-    ) {
+    if (currentStore.lock) {
       retryLater(operations, sessionStoreStrategy, numberOfRetries)
       return
     }
@@ -60,10 +57,7 @@ export function processSessionStoreOperations(
     persistWithLock(currentStore.session)
     // if lock is not acquired, retry later
     currentStore = retrieveStore()
-    if (
-      currentStore.lock !== currentLock &&
-      !isSessionInNotStartedState(currentStore.session)
-    ) {
+    if (currentStore.lock !== currentLock) {
       retryLater(operations, sessionStoreStrategy, numberOfRetries)
       return
     }
@@ -72,10 +66,7 @@ export function processSessionStoreOperations(
   if (isLockEnabled) {
     // if lock corrupted after process, retry later
     currentStore = retrieveStore()
-    if (
-      currentStore.lock !== currentLock &&
-      !isSessionInNotStartedState(currentStore.session)
-    ) {
+    if (currentStore.lock !== currentLock) {
       retryLater(operations, sessionStoreStrategy, numberOfRetries)
       return
     }
@@ -96,10 +87,7 @@ export function processSessionStoreOperations(
     if (!(processedSession && isSessionInExpiredState(processedSession))) {
       // if lock corrupted after persist, retry later
       currentStore = retrieveStore()
-      if (
-        currentStore.lock !== currentLock &&
-        !isSessionInNotStartedState(currentStore.session)
-      ) {
+      if (currentStore.lock !== currentLock) {
         retryLater(operations, sessionStoreStrategy, numberOfRetries)
         return
       }
