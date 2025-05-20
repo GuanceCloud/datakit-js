@@ -1,3 +1,4 @@
+import { getGlobalObject } from '../init'
 /**
  * Gets the original value for a DOM API that was potentially patched by Zone.js.
  *
@@ -12,7 +13,7 @@
  * [1]: https://github.com/angular/angular/tree/main/packages/zone.js
  */
 export function getZoneJsOriginalValue(target, name) {
-  var browserWindow = window
+  var browserWindow = getGlobalObject()
   var original
   if (
     browserWindow.Zone &&

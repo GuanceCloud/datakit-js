@@ -34,13 +34,18 @@ export function addEventListeners(eventTarget, eventNames, listener, options) {
     options && options.passive
       ? { capture: options.capture, passive: options.passive }
       : options && options.capture
-  var add = getZoneJsOriginalValue(eventTarget, 'addEventListener')
+  // Use the window.EventTarget.prototype when possible to avoid wrong overrides (e.g: https://github.com/salesforce/lwc/issues/1824)
+  const listenerTarget =
+    window.EventTarget && eventTarget instanceof EventTarget
+      ? window.EventTarget.prototype
+      : eventTarget
+  var add = getZoneJsOriginalValue(listenerTarget, 'addEventListener')
 
   each(eventNames, function (eventName) {
     add.call(eventTarget, eventName, wrappedListener, options)
   })
   var stop = function () {
-    var remove = getZoneJsOriginalValue(eventTarget, 'removeEventListener')
+    var remove = getZoneJsOriginalValue(listenerTarget, 'removeEventListener')
     each(eventNames, function (eventName) {
       remove.call(eventTarget, eventName, wrappedListener, options)
     })

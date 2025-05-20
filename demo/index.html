@@ -427,10 +427,25 @@
 
     <!-- <script src="http://localhost:8001/a.js"></script> -->
     <script>
-      window.onerror = function () {
-        console.log(arguments, '112312312312')
-      }
-      //   console.error(new Error('test errror'))
+      //   window.onerror = function () {
+      //     console.log(arguments, '112312312312')
+      //   }
+      //   //   console.error(new Error('test errror'))
+      // 创建一个 worker
+      const worker = new Worker(
+        URL.createObjectURL(
+          new Blob(
+            [
+              `
+      onmessage = function(e) {
+        console.log("Worker received:", e.data);
+      };
+    `
+            ],
+            { type: 'application/javascript' }
+          )
+        )
+      )
     </script>
   </head>
 
@@ -462,6 +477,7 @@
       <button delay="1000">1</button>
       <button delay="append">append window</button>
       <button delay="open">window.open</button>
+      <button delay="dataclone">data clone</button>
     </div>
     <div class="get_session_repaly">
       <input id="session_replay_input" />
@@ -562,6 +578,17 @@
             b: 'b',
             c: 'c'
           })
+        } else if (delay === 'dataclone') {
+          // 构造一个无法克隆的对象
+          const uncloneable = {
+            name: 'Uncloneable Object',
+            handler: function () {
+              console.log('I am a function')
+            }, // ❌ 函数无法克隆
+            id: Symbol('unique') // ❌ Symbol 也不能被克隆
+          }
+
+          worker.postMessage(uncloneable) // 会抛 DataCloneError
         } else {
           sleep(Number(delay) - 5)
           switchColor()
