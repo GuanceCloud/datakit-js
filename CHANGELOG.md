@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.2.24
+
+- fix: remove console
+- fix: update eventbridge
+- fix: update listenerTarget
+- fix: 修复 session store bug
+- fix: Add support for parsing Safari Wasm stack trace
+- fix: getAllowedWebViewHosts
+
 ## v3.2.23
 
 - fix: bug tracingSampleRate default 100
