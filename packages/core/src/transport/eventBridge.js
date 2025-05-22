@@ -56,6 +56,13 @@ export function canUseEventBridge(
   ) {
     return true
   }
+  if (
+    eventBridgeGlobal &&
+    eventBridgeGlobal.getAllowedWebViewHosts &&
+    eventBridgeGlobal.getAllowedWebViewHosts() === null
+  ) {
+    return true
+  }
   var bridge = getEventBridge()
   return (
     !!bridge &&
