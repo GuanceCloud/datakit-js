@@ -7,7 +7,10 @@ import {
   relativeNow,
   DOM_EVENT
 } from '@cloudcare/browser-core'
-
+import {
+  RumPerformanceEntryType,
+  supportPerformanceTimingEvent
+} from '../performanceObservable'
 // Arbitrary value to cap number of element for memory consumption in the browser
 export var MAX_PAGE_STATE_ENTRIES = 4000
 // Arbitrary value to cap number of element for backend & to save bandwidth
@@ -33,6 +36,17 @@ export function startPageStateHistory(maxPageStateEntriesSelectable) {
   })
 
   var currentPageState
+  if (supportPerformanceTimingEvent(RumPerformanceEntryType.VISIBILITY_STATE)) {
+    const visibilityEntries = performance.getEntriesByType(
+      RumPerformanceEntryType.VISIBILITY_STATE
+    )
+
+    visibilityEntries.forEach((entry) => {
+      const state =
+        entry.name === 'hidden' ? PageState.HIDDEN : PageState.ACTIVE
+      addPageState(state, entry.startTime)
+    })
+  }
   addPageState(getPageState(), relativeNow())
 
   var _addEventListeners = addEventListeners(
@@ -71,36 +85,13 @@ export function startPageStateHistory(maxPageStateEntriesSelectable) {
   }
 
   const pageStateHistory = {
-    findAll: function (eventStartTime, duration) {
-      var pageStateEntries = pageStateEntryHistory.findAll(
-        eventStartTime,
-        duration
+    findAll: function (startTime, duration) {
+      var pageStateEntries = pageStateEntryHistory.findAll(startTime, duration)
+      return processPageStates(
+        pageStateEntries,
+        startTime,
+        maxPageStateEntriesSelectable
       )
-
-      if (pageStateEntries.length === 0) {
-        return
-      }
-
-      var pageStateServerEntries = []
-      // limit the number of entries to return
-      var limit = Math.max(
-        0,
-        pageStateEntries.length - maxPageStateEntriesSelectable
-      )
-
-      // loop page state entries backward to return the selected ones in desc order
-      for (var index = pageStateEntries.length - 1; index >= limit; index--) {
-        var pageState = pageStateEntries[index]
-        // compute the start time relative to the event start time (ex: to be relative to the view start time)
-        var relativeStartTime = elapsed(eventStartTime, pageState.startTime)
-
-        pageStateServerEntries.push({
-          state: pageState.state,
-          start: toServerDuration(relativeStartTime)
-        })
-      }
-
-      return pageStateServerEntries
     },
 
     wasInPageStateAt: function (state, startTime) {
@@ -122,6 +113,23 @@ export function startPageStateHistory(maxPageStateEntriesSelectable) {
     }
   }
   return pageStateHistory
+}
+function processPageStates(
+  pageStateEntries,
+  eventStartTime,
+  maxPageStateEntriesSelectable
+) {
+  if (pageStateEntries.length === 0) {
+    return
+  }
+
+  return pageStateEntries
+    .slice(-maxPageStateEntriesSelectable)
+    .reverse()
+    .map(({ state, startTime }) => ({
+      state,
+      start: toServerDuration(elapsed(eventStartTime, startTime))
+    }))
 }
 
 function computePageState(event) {
