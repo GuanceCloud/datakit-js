@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.2.25
+
+- fix: eventBridge bug
+- fix: update init pageStates to performaceEntry
+
 ## v3.2.24
 
 - fix: remove console
