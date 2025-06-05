@@ -37,8 +37,8 @@ ZipkinMultiTracer.prototype = {
 
   makeTracingHeaders: function () {
     return {
-      'X-B3-TraceId': this.getSpanId(),
-      'X-B3-SpanId': this.getTraceId(),
+      'X-B3-TraceId': this.getTraceId(),
+      'X-B3-SpanId': this.getSpanId(),
       //  'X-B3-ParentSpanId': '',
       'X-B3-Sampled': this._traceSampled ? '1' : '0'
       //  'X-B3-Flags': '0'
