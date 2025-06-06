@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.2.26
+
+- fix: error source report ignore
+- fix: zipkin trace bug
+
 ## v3.2.25
 
 - fix: eventBridge bug
