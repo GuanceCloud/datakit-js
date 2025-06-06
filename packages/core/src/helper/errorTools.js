@@ -11,7 +11,8 @@ export var ErrorSource = {
   NETWORK: 'network',
   SOURCE: 'source',
   LOGGER: 'logger',
-  CUSTOM: 'custom'
+  CUSTOM: 'custom',
+  REPORT: 'report'
 }
 
 export function computeRawError(data) {
