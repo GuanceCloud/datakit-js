@@ -12,7 +12,7 @@ export function trackLoadingTime(
   var isWaitingForLoadEvent = loadType === ViewLoadingType.INITIAL_LOAD
   var isWaitingForActivityLoadingTime = true
   var loadingTimeCandidates = []
-  var firstHidden = trackFirstHidden()
+  var firstHidden = trackFirstHidden(viewStart)
   function invokeCallbackIfAllCandidatesAreReceived() {
     if (
       !isWaitingForActivityLoadingTime &&
@@ -20,7 +20,7 @@ export function trackLoadingTime(
       loadingTimeCandidates.length > 0
     ) {
       var loadingTime = Math.max.apply(Math, loadingTimeCandidates)
-      if (loadingTime < firstHidden.getTimeStamp()) {
+      if (loadingTime < firstHidden.getTimeStamp() - viewStart.relative) {
         callback(loadingTime)
       }
     }

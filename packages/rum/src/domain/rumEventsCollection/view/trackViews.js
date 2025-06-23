@@ -209,7 +209,12 @@ function newView(
   var setViewEnd = _trackCommonViewMetrics.setViewEnd
   var _trackInitialViewTimings =
     loadingType === ViewLoadingType.INITIAL_LOAD
-      ? trackInitialViewMetrics(configuration, setLoadEvent, scheduleViewUpdate)
+      ? trackInitialViewMetrics(
+          configuration,
+          startClocks,
+          setLoadEvent,
+          scheduleViewUpdate
+        )
       : {
           stop: noop,
           initialViewMetrics: {}

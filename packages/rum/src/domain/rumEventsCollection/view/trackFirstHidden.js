@@ -3,7 +3,7 @@ import {
   supportPerformanceTimingEvent,
   RumPerformanceEntryType
 } from '../../../domain/performanceObservable.js'
-export function trackFirstHidden(eventTarget) {
+export function trackFirstHidden(viewStart, eventTarget) {
   if (typeof eventTarget === 'undefined') {
     eventTarget = window
   }
@@ -13,7 +13,8 @@ export function trackFirstHidden(eventTarget) {
   if (supportPerformanceTimingEvent(RumPerformanceEntryType.VISIBILITY_STATE)) {
     const firstHiddenEntry = performance
       .getEntriesByType(RumPerformanceEntryType.VISIBILITY_STATE)
-      .find((entry) => entry.name === 'hidden')
+      .filter((entry) => entry.name === 'hidden')
+      .find((entry) => entry.startTime >= viewStart.relative)
     if (firstHiddenEntry) {
       return { getTimeStamp: () => firstHiddenEntry.startTime, stop: noop }
     }

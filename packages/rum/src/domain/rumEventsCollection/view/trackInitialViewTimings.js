@@ -8,6 +8,7 @@ import { trackFirstHidden } from './trackFirstHidden'
 export var KEEP_TRACKING_TIMINGS_AFTER_VIEW_DELAY = 5 * ONE_MINUTE
 export function trackInitialViewMetrics(
   configuration,
+  viewStart,
   setLoadEvent,
   scheduleViewUpdate
 ) {
@@ -20,7 +21,7 @@ export function trackInitialViewMetrics(
       scheduleViewUpdate()
     }
   )
-  var firstHidden = trackFirstHidden()
+  var firstHidden = trackFirstHidden(viewStart)
   var stopNavigationTracking = _trackNavigationTimings.stop
   var _trackFirstContentfulPaint = trackFirstContentfulPaint(
     configuration,
