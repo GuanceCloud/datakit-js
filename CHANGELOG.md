@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.27
+
+- fix: update trackFirstHidden handler
+
 ## v3.2.26
 
 - fix: error source report ignore
