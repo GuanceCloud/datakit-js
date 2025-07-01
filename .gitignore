@@ -8,5 +8,6 @@ coverage
 
 lerna-debug.log
 .npmrc
+.tw-npmrc
 demo/node_modules
 config
