@@ -60,7 +60,6 @@
     },
     "author": "dataflux",
     "license": "MIT",
-    "description": "DataFlux RUM Web 端数据指标监控",
     "dependencies": {
         "@babel/runtime": "^7.26.0"
     }
