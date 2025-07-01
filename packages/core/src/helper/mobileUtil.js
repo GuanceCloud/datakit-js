@@ -66,7 +66,7 @@ JsBirdge.prototype = {
         }
       } catch (err) {}
     } else {
-      callback({ error: '请传入发送事件的名称！！' })
+      callback({ error: 'please input event name' })
     }
   },
   addEventListener: function (params, callback) {
@@ -94,7 +94,7 @@ JsBirdge.prototype = {
         }
       } catch (err) {}
     } else {
-      callback({ error: '请传入监听事件的名称！！' })
+      callback({ error: 'please input event name' })
     }
   }
 }

@@ -49,7 +49,6 @@ export function matchRequestResourceEntry(request) {
   })
   let lastEntry = undefined
   if (candidates.length > 1) {
-    // 取值和 request startTime 间隔更接近的
     let startTimeDuration = Number.MAX_SAFE_INTEGER
     candidates.forEach((entry) => {
       const _startTimeDuration = Math.abs(

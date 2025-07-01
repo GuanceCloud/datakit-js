@@ -2,7 +2,7 @@ import { TraceIdentifier, getCrypto } from './traceIdentifier'
 import { getType } from '@cloudcare/browser-core'
 /**
  *
- * @param {*} configuration  配置信息
+ * @param {*} configuration
  */
 export function DDtraceTracer(configuration, traceSampled) {
   this._spanId = new TraceIdentifier()

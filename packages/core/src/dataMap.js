@@ -29,7 +29,7 @@ export var commonTags = {
   view_url: 'view.url',
   view_host: 'view.host',
   view_path: 'view.path',
-  view_name: 'view.name', // 冗余一个字段
+  view_name: 'view.name',
   view_path_group: 'view.path_group'
 }
 export var commonFields = {
@@ -49,7 +49,6 @@ export var commonFields = {
     '_gc.configuration.session_replay_on_error_sample_rate',
   drift: '_gc.drift'
 }
-// 需要用双引号将字符串类型的field value括起来， 这里有数组标示[string, path]
 export var dataMap = {
   view: {
     type: RumEventType.VIEW,

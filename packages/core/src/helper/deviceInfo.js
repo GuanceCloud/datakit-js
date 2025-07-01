@@ -5,7 +5,6 @@ var VariableLibrary = {
     typeof window !== 'undefined' && typeof window.navigator != 'undefined'
       ? window.navigator
       : {},
-  // 信息map
   infoMap: {
     engine: ['WebKit', 'Trident', 'Gecko', 'Presto'],
     browser: [
@@ -78,17 +77,13 @@ var VariableLibrary = {
     device: ['Mobile', 'Tablet', 'iPad']
   }
 }
-// 方法库
 var MethodLibrary = {
-  // 获取匹配库
   getMatchMap: monitor(function (u) {
     return {
-      // 内核
       Trident: u.indexOf('Trident') > -1 || u.indexOf('NET CLR') > -1,
       Presto: u.indexOf('Presto') > -1,
       WebKit: u.indexOf('AppleWebKit') > -1,
       Gecko: u.indexOf('Gecko/') > -1,
-      // 浏览器
       Safari: u.indexOf('Safari') > -1,
       Chrome: u.indexOf('Chrome') > -1 || u.indexOf('CriOS') > -1,
       IE: u.indexOf('MSIE') > -1 || u.indexOf('Trident') > -1,
@@ -131,7 +126,6 @@ var MethodLibrary = {
       Douban: u.indexOf('com.douban.frodo') > -1,
       Suning: u.indexOf('SNEBUY-APP') > -1,
       iQiYi: u.indexOf('IqiyiApp') > -1,
-      // 系统或平台
       Windows: u.indexOf('Windows') > -1,
       Linux: u.indexOf('Linux') > -1 || u.indexOf('X11') > -1,
       'Mac OS': u.indexOf('Macintosh') > -1,
@@ -147,7 +141,6 @@ var MethodLibrary = {
       iOS: u.indexOf('like Mac OS X') > -1,
       'Chrome OS': u.indexOf('CrOS') > -1,
       WebOS: u.indexOf('hpwOS') > -1,
-      // 设备
       Mobile:
         u.indexOf('Mobi') > -1 ||
         u.indexOf('iPh') > -1 ||
@@ -156,7 +149,6 @@ var MethodLibrary = {
       iPad: u.indexOf('iPad') > -1
     }
   }),
-  // 在信息map和匹配库中进行匹配
   matchInfoMap: monitor(function (_this) {
     var u = VariableLibrary.navigator.userAgent || ''
     var match = MethodLibrary.getMatchMap(u)
@@ -169,19 +161,16 @@ var MethodLibrary = {
       }
     }
   }),
-  // 获取当前操作系统
   getOS: monitor(function () {
     var _this = this
     MethodLibrary.matchInfoMap(_this)
     return _this.os || 'Unknown'
   }),
-  // 获取操作系统版本
   getOSVersion: monitor(function () {
     var _this = this
     var u = VariableLibrary.navigator.userAgent || ''
     _this.osVersion = ''
     _this.osMajor = ''
-    // 系统版本信息
     var osVersion = {
       Windows: function () {
         var v = u.replace(/^.*Windows NT ([\d.]+);.*$/, '$1')
@@ -231,25 +220,13 @@ var MethodLibrary = {
       osMajor: _this.osMajor
     }
   }),
-  // 获取横竖屏状态
-  getOrientationStatu: monitor(function () {
-    var orientationStatus = ''
-    var orientation = window.matchMedia('(orientation: portrait)')
-    if (orientation.matches) {
-      orientationStatus = '竖屏'
-    } else {
-      orientationStatus = '横屏'
-    }
-    return orientationStatus
-  }),
-  // 获取设备类型
+
   getDeviceType: monitor(function () {
     var _this = this
     _this.device = 'PC'
     MethodLibrary.matchInfoMap(_this)
     return _this.device
   }),
-  // 获取网络状态
   getNetwork: monitor(function () {
     var connection =
       window.navigator.connection ||
@@ -291,7 +268,6 @@ var MethodLibrary = {
     }
     return result
   }),
-  // 获取当前语言
   getLanguage: monitor(function () {
     var _this = this
     _this.language = (function () {
@@ -311,7 +287,6 @@ var MethodLibrary = {
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
     return timeZone
   }),
-  // 浏览器信息
   getBrowserInfo: monitor(function () {
     var _this = this
     MethodLibrary.matchInfoMap(_this)
@@ -362,22 +337,22 @@ var MethodLibrary = {
     if (match['IE'] || match['Edge']) {
       var navigator_top = window.screenTop - window.screenY
       switch (navigator_top) {
-        case 71: // 无收藏栏,贴边
+        case 71:
           break
-        case 74: // 无收藏栏,非贴边
+        case 74:
           break
-        case 99: // 有收藏栏,贴边
+        case 99:
           break
-        case 102: // 有收藏栏,非贴边
+        case 102:
           match['360EE'] = true
           break
-        case 75: // 无收藏栏,贴边
+        case 75:
           break
-        case 74: // 无收藏栏,非贴边
+        case 74:
           break
-        case 105: // 有收藏栏,贴边
+        case 105:
           break
-        case 104: // 有收藏栏,非贴边
+        case 104:
           match['360SE'] = true
           break
         default:
@@ -596,16 +571,13 @@ var MethodLibrary = {
       browserMajor: _this.browserMajor
     }
   }),
-  // 获取地理位置
   getGeoPostion: monitor(function (callback) {
     navigator &&
       navigator.geolocation &&
       navigator.geolocation.getCurrentPosition(
-        // 位置获取成功
         function (position) {
           callback(position)
         },
-        // 位置获取失败
         function (error) {
           display.warn(error)
         }

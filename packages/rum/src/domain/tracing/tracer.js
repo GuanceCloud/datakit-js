@@ -69,7 +69,6 @@ export function startTracer(configuration, sessionManager) {
               })
             }
             // context.init.headers = headers.concat(objectEntries(tracingHeaders))
-            // 转换成对象，兼容部分
             var headersMap = {}
             each(
               headers.concat(objectEntries(tracingHeaders)),

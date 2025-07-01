@@ -176,7 +176,6 @@ function getPositionSelector(element) {
     sibling = sibling.nextElementSibling
   }
   var tagName = cssEscape(element.tagName)
-  // 伪元素需要做特殊处理，没有nth-of-type选择器
   if (/^::/.test(tagName)) {
     return tagName
   }

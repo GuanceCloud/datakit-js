@@ -16,7 +16,6 @@ export function escapeJsonValue(value, isTag) {
   if (typeof value === 'object' && value) {
     value = jsonStringify(value)
   } else if (isTag) {
-    // tag  json  只能是字符串
     value = '' + value
   }
 

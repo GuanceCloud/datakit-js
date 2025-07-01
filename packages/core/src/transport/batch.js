@@ -39,7 +39,7 @@ export var processedMessageByDataMap = function (message) {
       rowData.measurement = key
       var tagsStr = []
       var tags = extend({}, commonTags, value.tags)
-      var filterFileds = ['date', 'type', CUSTOM_KEYS] // 已经在datamap中定义过的fields和tags
+      var filterFileds = ['date', 'type', CUSTOM_KEYS]
       each(tags, function (value_path, _key) {
         var _value = findByPath(message, value_path)
         filterFileds.push(_key)
@@ -57,7 +57,7 @@ export var processedMessageByDataMap = function (message) {
           var _valueData = findByPath(message, value_path)
           filterFileds.push(_key)
           if (_valueData !== undefined && _valueData !== null) {
-            rowData.fields[_key] = escapeJsonValue(_valueData) // 这里不需要转译
+            rowData.fields[_key] = escapeJsonValue(_valueData)
             fieldsStr.push(
               escapeRowData(_key) + '=' + escapeRowField(_valueData)
             )
@@ -66,7 +66,7 @@ export var processedMessageByDataMap = function (message) {
           var _valueData = findByPath(message, _value)
           filterFileds.push(_key)
           if (_valueData !== undefined && _valueData !== null) {
-            rowData.fields[_key] = escapeJsonValue(_valueData) // 这里不需要转译
+            rowData.fields[_key] = escapeJsonValue(_valueData)
             fieldsStr.push(
               escapeRowData(_key) + '=' + escapeRowField(_valueData)
             )
@@ -78,15 +78,13 @@ export var processedMessageByDataMap = function (message) {
         isObject(message.context) &&
         !isEmptyObject(message.context)
       ) {
-        // 自定义tag， 存储成field
         var _tagKeys = []
         each(message.context, function (_value, _key) {
-          // 如果和之前tag重名，则舍弃
           if (filterFileds.indexOf(_key) > -1) return
           filterFileds.push(_key)
           if (_value !== undefined && _value !== null) {
             _tagKeys.push(_key)
-            rowData.fields[_key] = escapeJsonValue(_value) // 这里不需要转译
+            rowData.fields[_key] = escapeJsonValue(_value)
             fieldsStr.push(escapeRowData(_key) + '=' + escapeRowField(_value))
           }
         })
@@ -98,14 +96,13 @@ export var processedMessageByDataMap = function (message) {
         }
       }
       if (message.type === RumEventType.LOGGER) {
-        // 这里处理日志类型数据自定义字段
         each(message, function (value, key) {
           if (
             filterFileds.indexOf(key) === -1 &&
             value !== undefined &&
             value !== null
           ) {
-            rowData.fields[key] = escapeJsonValue(value) // 这里不需要转译
+            rowData.fields[key] = escapeJsonValue(value)
             fieldsStr.push(escapeRowData(key) + '=' + escapeRowField(value))
           }
         })
@@ -119,7 +116,7 @@ export var processedMessageByDataMap = function (message) {
         hasFileds = true
       }
       rowStr = rowStr + ' ' + message.date
-      rowData.time = message.date // 这里不需要转译
+      rowData.time = message.date
     }
   })
   return {
@@ -231,7 +228,6 @@ export function createBatch(options) {
       // it and always send a single request.
       encoder.isAsync
     ) {
-      // 咱不支持json 模式
       var encoderResult = encoder.finishSync()
 
       // Send encoded messages

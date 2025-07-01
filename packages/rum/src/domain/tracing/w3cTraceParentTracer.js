@@ -14,7 +14,7 @@ function randomTraceId() {
 /**
  *
  * @param {*} traceSampled
- * @param {*} isHexTraceId 是否需要转换成10进制上报数据
+ * @param {*} isHexTraceId
  */
 export function W3cTraceParentTracer(
   configuration,
@@ -49,7 +49,6 @@ W3cTraceParentTracer.prototype = {
       return this.customTraceId
     }
     if (this.isHexTraceId) {
-      // 转化为二进制之后上报
       return this._traceId.toDecimalString()
     } else {
       return (
@@ -61,7 +60,6 @@ W3cTraceParentTracer.prototype = {
   getTraceParent: function () {
     // '{version}-{traceId}-{spanId}-{sampleDecision}'
     if (this.isHexTraceId) {
-      // 短64位，前面补0
       return (
         '00-0000000000000000' +
         this._traceId.toPaddedHexadecimalString() +

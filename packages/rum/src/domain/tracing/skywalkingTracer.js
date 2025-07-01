@@ -57,8 +57,8 @@ function getSkyWalkingSw8(
 }
 /**
  *
- * @param {*} configuration  配置信息
- * @param {*} requestUrl 请求的url
+ * @param {*} configuration
+ * @param {*} requestUrl
  */
 export function SkyWalkingTracer(configuration, requestUrl, traceSampled) {
   this._spanId = uuid()

@@ -25,70 +25,70 @@ export type RawReportType = (typeof RawReportType)[keyof typeof RawReportType]
 
 export interface SiteInitConfiguration {
   /**
-   *  以openway 方式上报数据令牌，从观测云控制台获取，必填
+   *  Data reporting token in openway mode, obtained from the TrueWatch Cloud console. Required.
    */
   clientToken: string | undefined
 
   /**
-   *  以 公共openway 方式上报数据地址，从观测云控制台获取，必填
+   *  Data reporting address in public openway mode, obtained from the TrueWatch Cloud console. Required.
    */
   site: string | undefined
 }
 export interface DatakitInitConfiguration {
-  /** DataKit 数据上报 Origin 注释:
-   * 协议（包括：//），域名（或IP地址）[和端口号]
-   * 例如：
-   * https://www.datakit.com；
-   * http://100.20.34.3:8088。
+  /** DataKit data reporting Origin:
+   * Protocol (including ://), domain name (or IP address) [and port number]
+   * For example:
+   * https://www.datakit.com;
+   * http://100.20.34.3:8088.
    */
   datakitOrigin: string
 }
 export interface InitConfiguration {
   /**
-   *  数据发送前的的拦截器
-   * @param event  事件内容
-   * @param context  事件额外属性
+   *  Interceptor before sending data
+   * @param event  Event content
+   * @param context  Additional event properties
    * @returns
    */
   beforeSend?: (event: any, context?: any) => unknown | undefined
   /**
-   * 数据上报采样率，100 表示全收集；0 表示不收集。默认 100
+   * Data reporting sample rate, 100 means collect all; 0 means do not collect. Default is 100
    */
   sessionSampleRate?: number | undefined
   telemetrySampleRate?: number | undefined
   silentMultipleInit?: boolean | undefined
 
   service?: string | undefined
-  /** Web 应用当前环境，如 prod：线上环境；gray：灰度环境；pre：预发布环境；common：日常环境；local：本地环境。 */
+  /** Current environment of the web application, such as prod: production; gray: gray environment; pre: pre-release; common: daily; local: local environment. */
   env?: string | undefined
-  /** Web 应用的版本号。 */
+  /** Version number of the web application. */
   version?: string | undefined
-  /** 链路数据采样百分比：100 表示全收集；0 表示不收集。 */
+  /** Trace data sampling percentage: 100 means collect all; 0 means do not collect. */
   tracingSampleRate?: number | undefined
   /**
    * @deprecated use usePartitionedCrossSiteSessionCookie instead
    */
   useCrossSiteSessionCookie?: boolean | undefined
   /**
-   * 是否使用跨域 cookie，开启第三方 cookie 跨分区实现。默认不允许跨域，例如嵌套跨域 iframe 的情况。
+   * Whether to use cross-site cookies, enabling third-party cookie partitioning. By default, cross-site is not allowed, such as nested cross-domain iframes.
    */
   usePartitionedCrossSiteSessionCookie?: boolean | undefined
   useSecureSessionCookie?: boolean | undefined
   trackSessionAcrossSubdomains?: boolean | undefined
   /**
-   * 是否把公共数据存储到localstorage,默认不存储
+   * Whether to store public data in localStorage, default is not to store
    */
   storeContextsToLocal?: boolean | undefined
   /**
-   * 定义存储到 localstorage 的 key ，默认不填，自动生成, 该参数主要是为了区分在同一个域名下，不同子路径共用store 的问题
+   * Define the key for storing in localStorage. If not filled, it is automatically generated. This parameter is mainly to distinguish the problem of sharing store under different subpaths of the same domain.
    */
   storeContextsKey?: string | undefined
   /**
-   * 数据以 application/json 的发送方式，默认text
+   * Send data as application/json, default is text
    */
   sendContentTypeByJson?: boolean | undefined
   /**
-   * 在 cookie 不可用的情况下，可以开启该选项，把数据储存到 localstorage
+   * When cookies are not available, you can enable this option to store data in localStorage
    */
   allowFallbackToLocalStorage?: boolean | undefined
 }
@@ -138,93 +138,93 @@ export declare function matchList(
 ): boolean
 
 export interface RumBaseInitConfiguration extends InitConfiguration {
-  /**从观测云创建的应用 ID */
+  /** Application ID created from TrueWatch Cloud */
   applicationId: string
   /**
-   * 排除一些影响 loadingtime 的指标准确性的url，具体可参考下面文档
-   * https://docs.guance.com/security/page-performance/#_3
+   * Exclude some URLs that affect the accuracy of loadingtime indicators. See the following documentation for details:
+   * https://docs.truewatch.com/security/page-performance/#_3
    */
   excludedActivityUrls?: MatchOption[] | undefined
   /**
-     * 允许注入 trace 采集器所需 header 头部的所有请求列表。可以是请求的 origin，也可以是正则，origin: 协议（包括：//），域名（或IP地址）[和端口号]。例如：
-     ["https://api.example.com", /https:\\/\\/.*\\.my-api-domain\\.com/]。
-    */
+       * List of all requests allowed to inject trace collector required headers. Can be the request origin or a regex. Origin: protocol (including ://), domain name (or IP address) [and port number]. For example:
+       ["https://api.example.com", /https:\\/\\/.*\\.my-api-domain\\.com/].
+      */
   allowedTracingUrls?: Array<MatchOption | TracingOption> | undefined
   defaultPrivacyLevel?: DefaultPrivacyLevel | undefined
   /**
-   * 错误会话补偿采样率：
-   * - 当会话未被 `sessionSampleRate` 采样时，若会话期间发生错误，则按此比例采集
-   * 此类会话将在错误发生时开始记录事件，并持续记录直到会话结束。
-   * - 取值范围 0-100，100 表示全采错误会话，0 表示忽略错误会话
+   * Error session compensation sample rate:
+   * - When the session is not sampled by `sessionSampleRate`, if an error occurs during the session, it will be collected according to this ratio.
+   * Such sessions will start recording events when an error occurs and continue until the session ends.
+   * - Value range 0-100, 100 means collect all error sessions, 0 means ignore error sessions
    */
   sessionOnErrorSampleRate?: number | undefined
 
   /**
-   * Session Replay 全量采集采样率：
-   * - 用于控制所有会话重放的全量数据采集比例
-   * - 取值范围 0-100，100 表示全量采集，0 表示不采集
+   * Session Replay full collection sample rate:
+   * - Used to control the proportion of full data collection for all session replays
+   * - Value range 0-100, 100 means full collection, 0 means no collection
    **/
   sessionReplaySampleRate?: number | undefined
 
-  /** 错误会话重放补偿采样率：
-   * - 当会话未被 `sessionReplaySampleRate` 采样时，若会话期间发生错误，则按此比例采集
-   * 此类回放将记录错误发生前最多一分钟的事件，并持续记录直到会话结束。
-100 表示全收集；0 表示不收集。
-     */
+  /** Error session replay compensation sample rate:
+   * - When the session is not sampled by `sessionReplaySampleRate`, if an error occurs during the session, it will be collected according to this ratio.
+   * Such replays will record up to one minute of events before the error occurs and continue recording until the session ends.
+   * 100 means collect all; 0 means do not collect.
+   */
   sessionReplayOnErrorSampleRate?: number | undefined
   /**
-   * 是否开启用户行为采集。
+   * Whether to enable user interaction collection.
    */
   trackUserInteractions?: boolean | undefined
   /**
-   * 指定 action 数据 name 获取方式，默认自动获取，可以指定元素特定属性名称,alt,name,title,aria-labelledby,aria-label,data-guance-action-name 这些属性
+   * Specify how to get the action data name. By default, it is obtained automatically. You can specify the element's specific attribute name, such as alt, name, title, aria-labelledby, aria-label, data-truewatch-action-name, etc.
    */
   actionNameAttribute?: string | undefined
   trackViewsManually?: boolean | undefined
   /**
-   * sessionReplay 和 compressIntakeRequests数据压缩都是在 webwork 线程中完成，所以默认情况下，需要在开启csp 安全访问的情况下，允许 worker-src blob:; workerUrl 配置允许自行托管 worker 地址
+   * sessionReplay and compressIntakeRequests data compression are both done in the web worker thread, so by default, you need to allow worker-src blob: under CSP security access, or use workerUrl to host the worker address yourself
    */
   workerUrl?: string
   /**
-   * 压缩 RUM 数据请求内容，以减少发送大量数据时的带宽使用量。压缩在 Worker 线程中完成。
+   * Compress RUM data request content to reduce bandwidth usage when sending large amounts of data. Compression is done in the Worker thread.
    */
   compressIntakeRequests?: boolean | undefined
   /**
-   * 是否开启数据采集的远程配置功能，默认不开启
-   * 远程配置功能可以在不发布新版本的情况下，动态修改数据采集的配置项
-   * 例如：可以在远程配置中修改采样率、是否开启用户行为采集等
-   * 远程配置功能需要在观测云控制台中开启
+   * Whether to enable remote configuration for data collection. Disabled by default.
+   * The remote configuration feature allows you to dynamically modify data collection configuration items without releasing a new version.
+   * For example: you can modify the sampling rate, whether to enable user interaction collection, etc. in the remote configuration.
+   * The remote configuration feature needs to be enabled in the TrueWatch Cloud console.
    *
    */
   remoteConfiguration?: boolean | undefined
   /**
-   * 配置链路追踪工具类型，如果不配置默认为 ddtrace。目前支持 ddtrace、zipkin、skywalking_v3、jaeger、zipkin_single_header、w3c_traceparent 6 种数据类型。
+   * Configure the type of trace tool. If not configured, ddtrace is used by default. Currently supports 6 types: ddtrace, zipkin, skywalking_v3, jaeger, zipkin_single_header, w3c_traceparent.
    */
   traceType?: TraceType
   /**
-   * 是否以 128 字节的方式生成 traceID，与 traceType 对应，目前支持类型 zipkin、jaeger。
+   * Whether to generate traceID in 128-bit mode, corresponding to traceType. Currently supported types: zipkin, jaeger.
    */
   traceId128Bit?: boolean | undefined
   /**
-   * Fetch/Xhr 拦截之后，往请求 header 添加额外 header-key，受 allowedTracingUrls 影响
-   * @param context  请求附带额外信息，包括traceid spanid url 等内容
-   * @returns 返回 key: value 对象, 请求添加的额外 key
+   * After Fetch/Xhr interception, add extra header-keys to the request header, affected by allowedTracingUrls
+   * @param context  Additional information attached to the request, including traceid, spanid, url, etc.
+   * @returns Returns a key: value object, the extra keys to be added to the request
    */
   injectTraceHeader?: (content: any) => { [key: string]: string } | undefined
   /**
-   * traceId 生成器，覆盖 SDK 内部traceId 实现,默认不配置。
-   * @returns 返回对应 traceType 类型的traceId。
+   * traceId generator, overrides the SDK's internal traceId implementation. Default is not configured.
+   * @returns Returns the traceId corresponding to the traceType type.
    */
   generateTraceId?: () => string
   /**
-   * 是否开启 longAnimationFrame 采集，覆盖 longtask 采集，目前调试阶段
+   * Whether to enable longAnimationFrame collection, overriding longtask collection. Currently in debugging stage.
    */
   enableLongAnimationFrame?: boolean | undefined
   /**
-   * session replay 是否屏蔽某个节点数据，可用于实现对某些特定 node 屏蔽效果
-   * @param node 节点对象
-   * @param privacyLevel 当前隐私等级
-   * @returns true 表示屏蔽该节点，false 表示不屏蔽节点 继续执行 privacyLevel 逻辑
+   * Whether to mask a node's data in session replay, can be used to implement masking for specific nodes
+   * @param node Node object
+   * @param privacyLevel Current privacy level
+   * @returns true means mask the node, false means do not mask and continue privacyLevel logic
    */
   shouldMaskNode?: (node: Node, privacyLevel: NodePrivacyLevel) => boolean
 }

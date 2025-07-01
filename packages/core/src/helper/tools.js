@@ -352,7 +352,7 @@ export var getScreenOrientation = function () {
     screen.msOrientation ||
     screen.mozOrientation ||
     (screen.orientation || {}).type
-  var screenOrientation = '未取到值'
+  var screenOrientation = 'unknown'
   if (screenOrientationAPI) {
     screenOrientation =
       screenOrientationAPI.indexOf('landscape') > -1 ? 'landscape' : 'portrait'
@@ -466,14 +466,7 @@ export var formatJsonString = function (obj) {
     return JSON.stringify(obj)
   }
 }
-// export var formatString = function (str) {
-//   if (str.length > MAX_STRING_LENGTH) {
-//     sd.log('字符串长度超过限制，已经做截取--' + str)
-//     return str.slice(0, MAX_STRING_LENGTH)
-//   } else {
-//     return str
-//   }
-// }
+
 export var searchObjString = function (o) {
   if (isObject(o)) {
     each(o, function (a, b) {
@@ -619,7 +612,6 @@ export function UUID(placeholder) {
     : `${1e7}-${1e3}-${4e3}-${8e3}-${1e11}`.replace(/[018]/g, UUID)
 }
 
-// 替换url包含数字的路由
 export function replaceNumberCharByPath(path) {
   var pathGroup = ''
   if (path) {
@@ -962,7 +954,7 @@ export var loadScript = function (para) {
 }
 export var getHostname = function (url, defaultValue) {
   if (!defaultValue || typeof defaultValue !== 'string') {
-    defaultValue = 'hostname解析异常'
+    defaultValue = 'hostname expception!'
   }
   var hostname = null
   try {
@@ -1104,9 +1096,9 @@ export function deepClone(value) {
 export var getCurrentDomain = function (url) {
   var cookieTopLevelDomain = getCookieTopLevelDomain()
   if (url === '') {
-    return 'url解析失败'
+    return 'URL parsing failed'
   } else if (cookieTopLevelDomain === '') {
-    return 'url解析失败'
+    return 'URL parsing failed'
   } else {
     return cookieTopLevelDomain
   }
@@ -1187,19 +1179,12 @@ export var strip_sa_properties = function (p) {
         if (isString(arrv)) {
           temp.push(arrv)
         } else {
-          console.log(
-            '您的数据-',
-            k,
-            v,
-            '的数组里的值必须是字符串,已经将其删除'
-          )
         }
       })
       if (temp.length !== 0) {
         p[k] = temp
       } else {
         delete p[k]
-        console.log('已经删除空的数组')
       }
     }
     if (
@@ -1213,7 +1198,6 @@ export var strip_sa_properties = function (p) {
         k === '$option'
       )
     ) {
-      console.log('您的数据-', k, v, '-格式不满足要求，我们已经将其删除')
       delete p[k]
     }
   })
@@ -1229,7 +1213,7 @@ export var searchConfigData = function (data) {
     return {}
   }
 }
-// 从字符串 src 中查找 k+sp 和  e 之间的字符串，如果 k==e 且 k 只有一个，或者 e 不存在，从 k+sp 截取到字符串结束
+
 // abcd=1&b=1&c=3;
 // abdc=1;b=1;a=3;
 export var stringSplice = function (src, k, e, sp) {
@@ -1255,7 +1239,6 @@ export function getStatusGroup(status) {
 export var getReferrer = function () {
   var ref = document.referrer.toLowerCase()
   var re = /^[^\?&#]*.swf([\?#])?/
-  // 如果页面 Referer 为空，从 URL 中获取
   if (ref === '' || ref.match(re)) {
     ref = stringSplice(window.location.href, 'ref', '&', '')
     if (ref !== '') {

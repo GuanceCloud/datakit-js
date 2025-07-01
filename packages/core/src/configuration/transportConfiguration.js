@@ -14,7 +14,6 @@ function getEndPointUrl(configuration, type) {
     configuration.datakitUrl ||
     configuration.site
   if (url.indexOf('/') === 0) {
-    // 绝对路径这种 /xxx
     url = location.origin + trim(url)
   }
   var endpoint = url
@@ -71,7 +70,6 @@ export function isIntakeRequest(url, configuration) {
   if (configuration.sessionReplayEndPoint) {
     notTakeRequest.push(configuration.sessionReplayEndPoint)
   }
-  // datakit 地址，log 地址，以及客户自定义过滤方法定义url
   return (
     some(notTakeRequest, function (takeUrl) {
       return url.indexOf(takeUrl) === 0
