@@ -29,6 +29,5 @@
         "directory": "packages/logs"
     },
     "author": "dataflux",
-    "license": "MIT",
-    "gitHead": "47f9fa1890683efb7cf6995e4d038eb5dec7113a"
+    "license": "MIT"
 }
