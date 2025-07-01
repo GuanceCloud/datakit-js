@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.2.28
+
+- fix: add translate
+- fix: remove unicode translate
+
 ## v3.2.27
 
 - fix: update trackFirstHidden handler
