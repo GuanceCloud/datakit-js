@@ -1,13 +1,20 @@
 import { setTimeout } from '../helper/timer'
-import { UUID, assign } from '../helper/tools'
 import {
-  expandSessionState,
-  isSessionInExpiredState,
-  isSessionInNotStartedState
-} from './sessionState'
-
+  UUID,
+  assign,
+  ONE_SECOND,
+  timeStampNow,
+  elapsed
+} from '../helper/tools'
+import { expandSessionState, isSessionInExpiredState } from './sessionState'
+import { addTelemetryDebug } from '../telemetry/telemetry'
 export const LOCK_RETRY_DELAY = 10
 export const LOCK_MAX_TRIES = 100
+
+// Locks should be hold for a few milliseconds top, just the time it takes to read and write a
+// cookie. Using one second should be enough in most situations.
+export const LOCK_EXPIRATION_DELAY = ONE_SECOND
+const LOCK_SEPARATOR = '--'
 const bufferedOperations = []
 let ongoingOperations
 
@@ -21,15 +28,11 @@ export function processSessionStoreOperations(
     return persistSession(assign({}, session, { lock: currentLock }))
   }
   const retrieveStore = function () {
-    const session = sessionStoreStrategy.retrieveSession()
-    const lock = session.lock
-    if (session.lock) {
-      delete session.lock
-    }
+    const { lock, ...session } = sessionStoreStrategy.retrieveSession()
 
     return {
       session,
-      lock
+      lock: lock && !isLockExpired(lock) ? lock : undefined
     }
   }
 
@@ -41,6 +44,9 @@ export function processSessionStoreOperations(
     return
   }
   if (isLockEnabled && numberOfRetries >= LOCK_MAX_TRIES) {
+    addTelemetryDebug('Aborted session operation after max lock retries', {
+      currentStore: retrieveStore()
+    })
     next(sessionStoreStrategy)
     return
   }
@@ -53,7 +59,7 @@ export function processSessionStoreOperations(
       return
     }
     // acquire lock
-    currentLock = UUID()
+    currentLock = createLock()
     persistWithLock(currentStore.session)
     // if lock is not acquired, retry later
     currentStore = retrieveStore()
@@ -119,4 +125,16 @@ function next(sessionStore) {
   if (nextOperations) {
     processSessionStoreOperations(nextOperations, sessionStore)
   }
+}
+
+export function createLock() {
+  return UUID() + LOCK_SEPARATOR + timeStampNow()
+}
+
+function isLockExpired(lock) {
+  const [, timeStamp] = lock.split(LOCK_SEPARATOR)
+  return (
+    !timeStamp ||
+    elapsed(Number(timeStamp), timeStampNow()) > LOCK_EXPIRATION_DELAY
+  )
 }

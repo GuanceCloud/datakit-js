@@ -87,5 +87,11 @@ export function isDead(click) {
   ) {
     return false
   }
-  return !elementMatches(click.event.target, DEAD_CLICK_EXCLUDE_SELECTOR)
+  let target = click.event.target
+
+  if (target.tagName === 'LABEL' && target.hasAttribute('for')) {
+    target = document.getElementById(target.getAttribute('for'))
+  }
+
+  return !target || !elementMatches(target, DEAD_CLICK_EXCLUDE_SELECTOR)
 }
