@@ -118,7 +118,7 @@ export const NodePrivacyLevel = {
 } as const
 export type NodePrivacyLevel =
   (typeof NodePrivacyLevel)[keyof typeof NodePrivacyLevel]
-
+export type OriginMatchOption = string | RegExp
 export type MatchOption = string | RegExp | ((value: string) => boolean)
 export type TracingOption = {
   match: MatchOption
@@ -146,10 +146,15 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    */
   excludedActivityUrls?: MatchOption[] | undefined
   /**
+       * List of all requests allowed to inject trace collector required headers. For example:
+       ["https://api.example.com/test", /https:\\/\\/.*\\.my-api-domain\\.com/, (url) => { return true }].
+      */
+  allowedTracingUrls?: Array<MatchOption | TracingOption> | undefined
+  /**
        * List of all requests allowed to inject trace collector required headers. Can be the request origin or a regex. Origin: protocol (including ://), domain name (or IP address) [and port number]. For example:
        ["https://api.example.com", /https:\\/\\/.*\\.my-api-domain\\.com/].
       */
-  allowedTracingUrls?: Array<MatchOption | TracingOption> | undefined
+  allowedTracingOrigins?: Array<OriginMatchOption> | undefined
   defaultPrivacyLevel?: DefaultPrivacyLevel | undefined
   /**
    * Error session compensation sample rate:
