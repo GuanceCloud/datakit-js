@@ -20,7 +20,7 @@ import {
   displayAlreadyInitializedError
 } from '@cloudcare/browser-core'
 import { buildCommonContext } from '../domain/contexts/commonContext'
-import { createPreStartStrategy } from './perStartRum'
+import { createPreStartStrategy } from './preStartRum'
 var RUM_STORAGE_KEY = 'rum'
 export function makeRumPublicApi(startRumImpl, recorderApi, options) {
   if (options === undefined) {
