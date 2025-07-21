@@ -58,6 +58,7 @@ export var dataMap = {
       view_privacy_replay_level: 'privacy.replay_level'
     },
     fields: {
+      view_update_time: '_gc.view_update_time',
       sampled_for_replay: 'session.sampled_for_replay',
       sampled_for_error_replay: 'session.sampled_for_error_replay',
       sampled_for_error_session: 'session.sampled_for_error_session',

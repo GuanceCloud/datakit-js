@@ -7,7 +7,8 @@ import {
   LifeCycleEventType,
   extend2Lev,
   findByPath,
-  discardNegativeDuration
+  discardNegativeDuration,
+  timeStampNow
 } from '@cloudcare/browser-core'
 import { trackViews } from './trackViews'
 export function startViewCollection(
@@ -116,7 +117,8 @@ function processViewUpdate(view, configuration, recorderApi, pageStateHistory) {
     _gc: {
       document_version: view.documentVersion,
       replay_stats: replayStats,
-      page_states: pageStates
+      page_states: pageStates,
+      view_update_time: timeStampNow()
     },
     date: view.startClocks.timeStamp,
     type: RumEventType.VIEW,
