@@ -109,17 +109,19 @@ export function fetchKeepAliveStrategy(
         'Content-Type': payload.type
       }
     }
-    fetch(url, fetchOption).then(
-      monitor(function (response) {
-        if (typeof onResponse === 'function') {
-          onResponse({ status: response.status, type: response.type })
-        }
-      }),
-      monitor(function () {
-        // failed to queue the request
-        sendXHR(url, payload, onResponse)
-      })
-    )
+    fetch(url, fetchOption)
+      .then(
+        monitor(function (response) {
+          if (typeof onResponse === 'function') {
+            onResponse({ status: response.status, type: response.type })
+          }
+        })
+      )
+      .catch(
+        monitor(function () {
+          fetchStrategy(url, payload, onResponse)
+        })
+      )
   } else {
     sendXHR(url, payload, onResponse)
   }
@@ -157,4 +159,32 @@ function sendXHR(url, payload, onResponse) {
     }
   )
   request.send(data)
+}
+function fetchStrategy(url, payload, onResponse) {
+  const fetchOption = {
+    method: 'POST',
+    body: payload.data,
+    keepalive: true,
+    mode: 'cors'
+  }
+  if (payload.type) {
+    fetchOption.headers = {
+      'Content-Type': payload.type
+    }
+  }
+  fetch(url, fetchOption)
+    .then(
+      monitor(function (response) {
+        if (typeof onResponse === 'function') {
+          onResponse({ status: response.status, type: response.type })
+        }
+      })
+    )
+    .catch(
+      monitor(function () {
+        if (typeof onResponse === 'function') {
+          onResponse({ status: 0 })
+        }
+      })
+    )
 }
