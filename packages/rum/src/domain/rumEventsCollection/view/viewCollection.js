@@ -118,7 +118,7 @@ function processViewUpdate(view, configuration, recorderApi, pageStateHistory) {
       document_version: view.documentVersion,
       replay_stats: replayStats,
       page_states: pageStates,
-      view_update_time: timeStampNow()
+      view_update_time: view.documentVersion
     },
     date: view.startClocks.timeStamp,
     type: RumEventType.VIEW,
