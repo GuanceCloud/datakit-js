@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.2.29
+
+- fix: remove console
+- fix: add sessionPersistence config to select store
+- fix: add view update time to docuemnt version
+- fix: fix xhr to fetch send
+- fix: add view_update_time
+- fix: add allowedTracingOrigins type
+- fix: session lock bug
+- fix: add gitignore
+- fix: remove unicode translate
+
 ## v3.2.28
 
 - fix: add translate
