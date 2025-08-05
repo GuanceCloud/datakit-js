@@ -7,6 +7,8 @@ export interface User {
   name?: string | undefined
   [key: string]: unknown
 }
+export type SessionPersistence = 'cookie' | 'local-storage'
+
 export declare const ConsoleApiName: {
   readonly log: 'log'
   readonly debug: 'debug'
@@ -91,6 +93,13 @@ export interface InitConfiguration {
    * When cookies are not available, you can enable this option to store data in localStorage
    */
   allowFallbackToLocalStorage?: boolean | undefined
+  /**
+   * Which storage strategy to use for persisting sessions. Can be either 'cookie' or 'local-storage'.
+   *
+   * Important: If you are using the RUM and Logs Browser SDKs, this option must be configured with identical values
+   * @default "cookie"
+   */
+  sessionPersistence?: SessionPersistence | undefined
 }
 export enum TraceType {
   DDTRACE = 'ddtrace',

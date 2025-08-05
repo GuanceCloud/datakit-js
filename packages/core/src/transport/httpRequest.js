@@ -104,10 +104,19 @@ export function fetchKeepAliveStrategy(
       keepalive: true,
       mode: 'cors'
     }
+    const headers = {}
+
     if (payload.type) {
-      fetchOption.headers = {
-        'Content-Type': payload.type
-      }
+      headers['Content-Type'] = payload.type
+    }
+    if (payload.outputBase64Head) {
+      headers['x-base64-head'] = payload.outputBase64Head
+    }
+    if (payload.outputBase64Tail) {
+      headers['x-base64-tail'] = payload.outputBase64Tail
+    }
+    if (Object.keys(headers).length) {
+      fetchOption.headers = headers
     }
     fetch(url, fetchOption)
       .then(

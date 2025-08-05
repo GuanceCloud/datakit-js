@@ -5,7 +5,7 @@ import {
   getExpiredSessionState
 } from './sessionState'
 
-import { SESSION_STORE_KEY } from './sessionConstants'
+import { SESSION_STORE_KEY, SessionPersistence } from './sessionConstants'
 
 const LOCAL_STORAGE_TEST_KEY = '_gc_test_'
 
@@ -16,7 +16,9 @@ export function selectLocalStorageStrategy() {
     localStorage.setItem(testKey, id)
     const retrievedId = localStorage.getItem(testKey)
     localStorage.removeItem(testKey)
-    return id === retrievedId ? { type: 'LocalStorage' } : undefined
+    return id === retrievedId
+      ? { type: SessionPersistence.LOCAL_STORAGE }
+      : undefined
   } catch (e) {
     return undefined
   }

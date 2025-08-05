@@ -1,5 +1,6 @@
 import { clearInterval, setInterval } from '../helper/timer'
 import { Observable } from '../helper/observable'
+import { display } from '../helper/display'
 import { ONE_SECOND, dateNow, throttle, UUID, assign } from '../helper/tools'
 import { selectCookieStrategy, initCookieStrategy } from './sessionInCookie'
 import {
@@ -13,6 +14,7 @@ import {
   selectLocalStorageStrategy
 } from './sessionInLocalStorage'
 import { processSessionStoreOperations } from './sessionStoreOperations'
+import { SessionPersistence } from './sessionConstants'
 
 /**
  * Every second, the storage will be polled to check for any change that can occur
@@ -26,14 +28,31 @@ export const STORAGE_POLL_DELAY = ONE_SECOND
  * Else, checks if LocalStorage is allowed and available
  */
 export function selectSessionStoreStrategyType(initConfiguration) {
-  let sessionStoreStrategyType = selectCookieStrategy(initConfiguration)
-  if (
-    !sessionStoreStrategyType &&
-    initConfiguration.allowFallbackToLocalStorage
-  ) {
-    sessionStoreStrategyType = selectLocalStorageStrategy()
+  switch (initConfiguration.sessionPersistence) {
+    case SessionPersistence.COOKIE:
+      return selectCookieStrategy(initConfiguration)
+
+    case SessionPersistence.LOCAL_STORAGE:
+      return selectLocalStorageStrategy()
+
+    case undefined: {
+      let sessionStoreStrategyType = selectCookieStrategy(initConfiguration)
+      if (
+        !sessionStoreStrategyType &&
+        initConfiguration.allowFallbackToLocalStorage
+      ) {
+        sessionStoreStrategyType = selectLocalStorageStrategy()
+      }
+      return sessionStoreStrategyType
+    }
+
+    default:
+      display.error(
+        `Invalid session persistence '${String(
+          initConfiguration.sessionPersistence
+        )}'`
+      )
   }
-  return sessionStoreStrategyType
 }
 
 /**
@@ -51,7 +70,7 @@ export function startSessionStore(
   const expireObservable = new Observable()
   const sessionStateUpdateObservable = new Observable()
   const sessionStoreStrategy =
-    sessionStoreStrategyType.type === 'Cookie'
+    sessionStoreStrategyType.type === SessionPersistence.COOKIE
       ? initCookieStrategy(sessionStoreStrategyType.cookieOptions)
       : initLocalStorageStrategy()
   const { expireSession } = sessionStoreStrategy

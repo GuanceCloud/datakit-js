@@ -8,7 +8,8 @@ import {
 import {
   SESSION_EXPIRATION_DELAY,
   SESSION_TIME_OUT_DELAY,
-  SESSION_STORE_KEY
+  SESSION_STORE_KEY,
+  SessionPersistence
 } from './sessionConstants'
 import {
   toSessionString,
@@ -19,7 +20,7 @@ import {
 export function selectCookieStrategy(initConfiguration) {
   const cookieOptions = buildCookieOptions(initConfiguration)
   return areCookiesAuthorized(cookieOptions)
-    ? { type: 'Cookie', cookieOptions }
+    ? { type: SessionPersistence.COOKIE, cookieOptions }
     : undefined
 }
 

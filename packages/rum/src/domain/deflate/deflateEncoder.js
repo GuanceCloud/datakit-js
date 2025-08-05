@@ -40,7 +40,18 @@ export function createDeflateEncoder(worker, streamId) {
       addTelemetryDebug('Worker responses received out of order.')
     }
   })
+  function uint8ToBase64(uint8, start = 0, end = uint8.length) {
+    // 截取需要的部分
+    const sliced = uint8.slice(start, end)
 
+    // 转成字符串
+    const binary = Array.from(sliced, (byte) => String.fromCharCode(byte)).join(
+      ''
+    )
+
+    // 编码成 base64
+    return btoa(binary)
+  }
   var removeMessageListener = wokerListener.stop
   function consumeResult() {
     var output =
@@ -51,6 +62,8 @@ export function createDeflateEncoder(worker, streamId) {
       rawBytesCount: rawBytesCount,
       output: output,
       outputBytesCount: output.byteLength,
+      outputBase64Head: uint8ToBase64(output, 0, 6),
+      outputBase64Tail: uint8ToBase64(output, output.byteLength - 6),
       encoding: 'deflate'
     }
     rawBytesCount = 0
