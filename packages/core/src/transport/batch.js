@@ -292,8 +292,6 @@ function formatPayloadFromEncoder(encoderResult, sendContentTypeByJson) {
     data: data,
     type: sendContentTypeByJson ? 'application/json;UTF-8' : undefined,
     bytesCount: encoderResult.outputBytesCount,
-    encoding: encoderResult.encoding,
-    outputBase64Head: encoderResult.outputBase64Head,
-    outputBase64Tail: encoderResult.outputBase64Tail
+    encoding: encoderResult.encoding
   }
 }

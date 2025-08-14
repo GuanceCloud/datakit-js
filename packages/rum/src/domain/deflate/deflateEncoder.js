@@ -52,18 +52,24 @@ export function createDeflateEncoder(worker, streamId) {
     // 编码成 base64
     return btoa(binary)
   }
+  function uint8ToHex(uint8, start = 0, end = uint8.length) {
+    const sliced = uint8.slice(start, end)
+    return Array.from(sliced)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('')
+  }
   var removeMessageListener = wokerListener.stop
+
   function consumeResult() {
     var output =
       compressedData.length === 0
         ? new Uint8Array(0)
         : concatBuffers(compressedData.concat(compressedDataTrailer))
+
     var result = {
       rawBytesCount: rawBytesCount,
       output: output,
       outputBytesCount: output.byteLength,
-      outputBase64Head: uint8ToBase64(output, 0, 6),
-      outputBase64Tail: uint8ToBase64(output, output.byteLength - 6),
       encoding: 'deflate'
     }
     rawBytesCount = 0

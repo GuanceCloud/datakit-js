@@ -104,20 +104,15 @@ export function fetchKeepAliveStrategy(
       keepalive: true,
       mode: 'cors'
     }
-    const headers = {}
+    const headers = {
+      'x-client-timestamp': Date.now().toString()
+    }
 
     if (payload.type) {
       headers['Content-Type'] = payload.type
     }
-    if (payload.outputBase64Head) {
-      headers['x-base64-head'] = payload.outputBase64Head
-    }
-    if (payload.outputBase64Tail) {
-      headers['x-base64-tail'] = payload.outputBase64Tail
-    }
-    if (Object.keys(headers).length) {
-      fetchOption.headers = headers
-    }
+
+    fetchOption.headers = headers
     fetch(url, fetchOption)
       .then(
         monitor(function (response) {
@@ -154,7 +149,7 @@ function sendXHR(url, payload, onResponse) {
   } else if (payload.type) {
     request.setRequestHeader('Content-Type', payload.type)
   }
-
+  request.setRequestHeader('x-client-timestamp', Date.now().toString())
   addEventListener(
     request,
     'loadend',
@@ -176,11 +171,14 @@ function fetchStrategy(url, payload, onResponse) {
     keepalive: true,
     mode: 'cors'
   }
-  if (payload.type) {
-    fetchOption.headers = {
-      'Content-Type': payload.type
-    }
+  const headers = {
+    'x-client-timestamp': Date.now().toString()
   }
+  if (payload.type) {
+    headers['Content-Type'] = payload.type
+  }
+  fetchOption.headers = headers
+
   fetch(url, fetchOption)
     .then(
       monitor(function (response) {
