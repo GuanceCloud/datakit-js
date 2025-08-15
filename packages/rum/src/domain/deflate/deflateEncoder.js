@@ -129,14 +129,12 @@ export function createDeflateEncoder(worker, streamId) {
     finishSync: function () {
       sendResetIfNeeded()
 
-      var pendingData = pendingWriteActions
-        .map(function (pendingWriteAction) {
-          // Make sure we do not call any write or finish callback
-          delete pendingWriteAction.writeCallback
-          delete pendingWriteAction.finishCallback
-          return pendingWriteAction.data
-        })
-        .join('')
+      var pendingData = pendingWriteActions.map(function (pendingWriteAction) {
+        // Make sure we do not call any write or finish callback
+        delete pendingWriteAction.writeCallback
+        delete pendingWriteAction.finishCallback
+        return pendingWriteAction.data
+      })
 
       return assign(consumeResult(), {
         pendingData: pendingData

@@ -29,7 +29,7 @@ export function createIdentityEncoder() {
         output: output,
         outputBytesCount: outputBytesCount,
         rawBytesCount: outputBytesCount,
-        pendingData: ''
+        pendingData: []
       }
       output = ''
       outputBytesCount = 0
