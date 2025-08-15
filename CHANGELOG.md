@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.2.30
+
+- fix: add pendingData handler
+- fix: add x-client-timestamp
+- fix: updated changelog.md
+
 ## v3.2.29
 
 - fix: removed console logs
