@@ -51,6 +51,7 @@ export function validateAndBuildConfiguration(initConfiguration) {
         ),
       sessionStoreStrategyType:
         selectSessionStoreStrategyType(initConfiguration),
+      isOpenWay: initConfiguration.site && initConfiguration.clientToken,
       sessionSampleRate: isNullUndefinedDefaultValue(sessionSampleRate, 100),
       service: initConfiguration.service,
       version: initConfiguration.version,

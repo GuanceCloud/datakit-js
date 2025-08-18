@@ -105,14 +105,14 @@ export function fetchKeepAliveStrategy(
       mode: 'cors'
     }
     const headers = {
-      'x-client-timestamp': Date.now().toString()
+      //   'x-client-timestamp': Date.now().toString()
     }
-
     if (payload.type) {
       headers['Content-Type'] = payload.type
     }
-
-    fetchOption.headers = headers
+    if (Object.keys(headers).length) {
+      fetchOption.headers = headers
+    }
     fetch(url, fetchOption)
       .then(
         monitor(function (response) {
@@ -149,7 +149,7 @@ function sendXHR(url, payload, onResponse) {
   } else if (payload.type) {
     request.setRequestHeader('Content-Type', payload.type)
   }
-  request.setRequestHeader('x-client-timestamp', Date.now().toString())
+  //   request.setRequestHeader('x-client-timestamp', Date.now().toString())
   addEventListener(
     request,
     'loadend',
@@ -172,12 +172,14 @@ function fetchStrategy(url, payload, onResponse) {
     mode: 'cors'
   }
   const headers = {
-    'x-client-timestamp': Date.now().toString()
+    // 'x-client-timestamp': Date.now().toString()
   }
   if (payload.type) {
     headers['Content-Type'] = payload.type
   }
-  fetchOption.headers = headers
+  if (Object.keys(headers).length) {
+    fetchOption.headers = headers
+  }
 
   fetch(url, fetchOption)
     .then(
