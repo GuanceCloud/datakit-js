@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.31
+
+- fix: remove x-client-timestamp
+
 ## v3.2.30
 
 - fix: add pendingData handler
