@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.32
+
+- fix: add x-client-timestamp header
+
 ## v3.2.31
 
 - fix: remove x-client-timestamp
