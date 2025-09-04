@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.33
+
+- fix: add url hash path
+
 ## v3.2.32
 
 - fix: add x-client-timestamp header
