@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.2.35
+
+- v3.2.34
+- fix: deflate pendingData bug
+
 ## v3.2.34
 
 - fix: deflate pendingData bug
