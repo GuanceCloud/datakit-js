@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.34
+
+- fix: deflate pendingData bug
+
 ## v3.2.33
 
 - fix: add url hash path
