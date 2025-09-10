@@ -13,6 +13,7 @@ export function createDeflateEncoder(worker, streamId) {
   var compressedData = []
   var compressedDataTrailer
 
+  var isEmpty = true
   var nextWriteActionId = 0
   var pendingWriteActions = []
 
@@ -24,40 +25,41 @@ export function createDeflateEncoder(worker, streamId) {
     ) {
       return
     }
+    var nextPendingAction = pendingWriteActions[0]
+    if (nextPendingAction) {
+      if (nextPendingAction.id === workerResponse.id) {
+        pendingWriteActions.shift()
 
-    rawBytesCount += workerResponse.additionalBytesCount
-    compressedData.push(workerResponse.result)
-    compressedDataTrailer = workerResponse.trailer
-    var nextPendingAction = pendingWriteActions.shift()
-    if (nextPendingAction && nextPendingAction.id === workerResponse.id) {
-      if (nextPendingAction.writeCallback) {
-        nextPendingAction.writeCallback(workerResponse.result.byteLength)
-      } else if (nextPendingAction.finishCallback) {
-        nextPendingAction.finishCallback()
+        rawBytesCount += workerResponse.additionalBytesCount
+        compressedData.push(workerResponse.result)
+        compressedDataTrailer = workerResponse.trailer
+
+        if (nextPendingAction.writeCallback) {
+          nextPendingAction.writeCallback(workerResponse.result.byteLength)
+        } else if (nextPendingAction.finishCallback) {
+          nextPendingAction.finishCallback()
+        }
+      } else if (nextPendingAction.id < workerResponse.id) {
+        removeMessageListener()
+        addTelemetryDebug('Worker responses received out of order.')
       }
-    } else {
-      removeMessageListener()
-      addTelemetryDebug('Worker responses received out of order.')
     }
+    // rawBytesCount += workerResponse.additionalBytesCount
+    // compressedData.push(workerResponse.result)
+    // compressedDataTrailer = workerResponse.trailer
+    // var nextPendingAction = pendingWriteActions.shift()
+    // if (nextPendingAction && nextPendingAction.id === workerResponse.id) {
+    //   if (nextPendingAction.writeCallback) {
+    //     nextPendingAction.writeCallback(workerResponse.result.byteLength)
+    //   } else if (nextPendingAction.finishCallback) {
+    //     nextPendingAction.finishCallback()
+    //   }
+    // } else {
+    //   removeMessageListener()
+    //   addTelemetryDebug('Worker responses received out of order.')
+    // }
   })
-  function uint8ToBase64(uint8, start = 0, end = uint8.length) {
-    // 截取需要的部分
-    const sliced = uint8.slice(start, end)
 
-    // 转成字符串
-    const binary = Array.from(sliced, (byte) => String.fromCharCode(byte)).join(
-      ''
-    )
-
-    // 编码成 base64
-    return btoa(binary)
-  }
-  function uint8ToHex(uint8, start = 0, end = uint8.length) {
-    const sliced = uint8.slice(start, end)
-    return Array.from(sliced)
-      .map((byte) => byte.toString(16).padStart(2, '0'))
-      .join('')
-  }
   var removeMessageListener = wokerListener.stop
 
   function consumeResult() {
@@ -78,18 +80,18 @@ export function createDeflateEncoder(worker, streamId) {
   }
 
   function sendResetIfNeeded() {
-    if (nextWriteActionId > 0) {
+    if (!isEmpty) {
       worker.postMessage({
         action: 'reset',
         streamId: streamId
       })
-      nextWriteActionId = 0
+      isEmpty = true
     }
   }
   return {
     isAsync: true,
     isEmpty: function () {
-      return nextWriteActionId === 0
+      return isEmpty
     },
 
     write: function (data, callback) {
@@ -104,6 +106,7 @@ export function createDeflateEncoder(worker, streamId) {
         writeCallback: callback,
         data: data
       })
+      isEmpty = false
       nextWriteActionId += 1
     },
 
@@ -129,13 +132,12 @@ export function createDeflateEncoder(worker, streamId) {
     finishSync: function () {
       sendResetIfNeeded()
 
-      var pendingData = pendingWriteActions.map(function (pendingWriteAction) {
-        // Make sure we do not call any write or finish callback
-        delete pendingWriteAction.writeCallback
-        delete pendingWriteAction.finishCallback
-        return pendingWriteAction.data
-      })
-
+      var pendingData = pendingWriteActions
+        .map(function (pendingWriteAction) {
+          return pendingWriteAction.data
+        })
+        .join('')
+      pendingWriteActions.length = 0
       return assign(consumeResult(), {
         pendingData: pendingData
       })

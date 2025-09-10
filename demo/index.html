@@ -72,9 +72,9 @@
       //   }
       window.DATAFLUX_RUM &&
         window.DATAFLUX_RUM.init({
-          applicationId: 'd1b454d0_22eb_11ef_9b66_95ca11aa2c6c',
-          clientToken: 'a47fb0cdddaa4561a90d941317cdbc0b',
-          site: 'http://testing-openway.dataflux.cn',
+          applicationId: 'test_dcl',
+          site: 'https://cn3-rum-openway.guance.com',
+          clientToken: 'b806cd20126446c4848605cb254f92ed',
           service: 'browser',
           env: 'production',
           version: '1.0.0',
@@ -85,7 +85,7 @@
           //   sessionReplayOnErrorSampleRate: 100,
           trackInteractions: true,
           //   workerUrl: './worker.js',
-          compressIntakeRequests: false,
+          compressIntakeRequests: true,
           allowFallbackToLocalStorage: true,
           usePartitionedCrossSiteSessionCookie: true,
           trackSessionAcrossSubdomains: true,

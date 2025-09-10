@@ -235,7 +235,7 @@ export function createBatch(options) {
         send(formatPayloadFromEncoder(encoderResult, sendContentTypeByJson))
       }
       // Send messages that are not yet encoded at this point
-      var pendingMessages = [...encoderResult.pendingData, upsertMessages]
+      var pendingMessages = [encoderResult.pendingData, upsertMessages]
         .filter(Boolean)
         .join('\n')
 
