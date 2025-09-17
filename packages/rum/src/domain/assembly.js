@@ -157,6 +157,7 @@ export function startRumAssembly(
             host: urlContext.host,
             path: urlContext.path,
             pathGroup: urlContext.pathGroup,
+            pathname: urlContext.pathname,
             urlQuery: urlContext.urlQuery
           },
           action:

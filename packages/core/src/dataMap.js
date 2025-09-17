@@ -30,7 +30,8 @@ export var commonTags = {
   view_host: 'view.host',
   view_path: 'view.path',
   view_name: 'view.name',
-  view_path_group: 'view.path_group'
+  view_path_group: 'view.path_group',
+  view_path_name: 'view.pathname'
 }
 export var commonFields = {
   view_url_query: 'view.url_query',

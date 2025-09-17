@@ -65,7 +65,8 @@ export function startUrlContexts(
   })
 
   function buildUrlContext(data, isLocationChange = false) {
-    var path = data.location.pathname
+    var pathname = data.location.pathname
+    var path = pathname
     var hash = data.location.hash
     if (hash && hash.indexOf('#/') === 0) {
       path = '/' + getPathFromHash(hash)
@@ -76,7 +77,8 @@ export function startUrlContexts(
       host: data.location.host,
       path: path,
       pathGroup: replaceNumberCharByPath(path),
-      urlQuery: getQueryParamsFromUrl(data.location.href)
+      urlQuery: getQueryParamsFromUrl(data.location.href),
+      pathname: pathname
     }
   }
 

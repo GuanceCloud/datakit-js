@@ -20,6 +20,7 @@ export interface InternalContext {
     path: string
     urlQuery: string
     pathGroup: string
+    pathname: string
   }
   userAction?: {
     id: string
