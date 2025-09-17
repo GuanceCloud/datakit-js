@@ -4,7 +4,7 @@ import { ErrorSource } from '../helper/errorTools'
 import { setTimeout } from '../helper/timer'
 export var MAX_ONGOING_BYTES_COUNT = 80 * ONE_KIBI_BYTE
 export var MAX_ONGOING_REQUESTS = 32
-export var MAX_QUEUE_BYTES_COUNT = 3 * ONE_MEBI_BYTE
+export var MAX_QUEUE_BYTES_COUNT = 20 * ONE_MEBI_BYTE
 export var MAX_BACKOFF_TIME = 256 * ONE_SECOND
 export var INITIAL_BACKOFF_TIME = ONE_SECOND
 
