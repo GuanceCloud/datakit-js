@@ -1,12 +1,12 @@
 {
     "name": "@cloudcare/browser-rum",
-    "version": "3.2.35",
+    "version": "3.2.36",
     "main": "cjs/index.js",
     "module": "esm/index.js",
     "types": "types/index.d.ts",
     "dependencies": {
-        "@cloudcare/browser-core": "3.2.35",
-        "@cloudcare/browser-worker": "3.2.35"
+        "@cloudcare/browser-core": "3.2.36",
+        "@cloudcare/browser-worker": "3.2.36"
     },
     "description": "Guance Browser SDK RUM Package",
     "scripts": {

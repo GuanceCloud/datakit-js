@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.2.36
+
+- fix: update max queue bytes
+- fix: add track history
+
 ## v3.2.35
 
 - v3.2.34
