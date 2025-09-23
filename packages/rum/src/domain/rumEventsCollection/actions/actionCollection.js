@@ -79,7 +79,7 @@ function processAction(action, pageStateHistory) {
       }
     : {
         action: {
-          loadingTime: 0
+          loadingTime: action.context?.duration || 0
         }
       }
   var customerContext = !isAutoAction(action) ? action.context : undefined
