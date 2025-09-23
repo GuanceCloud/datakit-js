@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.2.37
+
+- fix: source action type
+- fix: update duration
+- fix: add addTypeAction method
+
 ## v3.2.36
 
 - fix: update max queue bytes
