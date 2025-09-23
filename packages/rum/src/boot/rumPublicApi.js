@@ -184,9 +184,21 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     addDebugSession: monitor(function (id) {}),
     clearDebugSession: monitor(function () {}),
     getDebugSession: monitor(function () {}),
+    addTypeAction: monitor(function (name, type, context) {
+      const handlingStack = createHandlingStack()
+      callMonitored(function () {
+        strategy.addAction({
+          name: sanitize(name),
+          context: sanitize(context),
+          startClocks: clocksNow(),
+          type: type ? type : ActionType.CUSTOM,
+          handlingStack: handlingStack
+        })
+        addTelemetryUsage({ feature: 'add-type-action' })
+      })
+    }),
     addAction: monitor(function (name, context) {
       const handlingStack = createHandlingStack()
-
       callMonitored(function () {
         strategy.addAction({
           name: sanitize(name),

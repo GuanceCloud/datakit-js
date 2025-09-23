@@ -115,5 +115,6 @@ function processAction(action, pageStateHistory) {
 }
 
 function isAutoAction(action) {
-  return action.type !== ActionType.CUSTOM
+  return action.type === ActionType.CLICK
+  //   return action.type !== ActionType.CUSTOM
 }

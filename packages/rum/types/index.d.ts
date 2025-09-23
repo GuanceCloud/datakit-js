@@ -50,6 +50,11 @@ export declare const datafluxRum: {
     | RumSiteInitConfiguration
     | undefined
   addAction: (name: string, context?: object | undefined) => void
+  addTypeAction: (
+    name: string,
+    type?: string,
+    context?: object | undefined
+  ) => void
   addError: (error: unknown, context?: object | undefined) => void
   addTiming: (name: string, time?: number | undefined) => void
   setUser: (newUser: User) => void

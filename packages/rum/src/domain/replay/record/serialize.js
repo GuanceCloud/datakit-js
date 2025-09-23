@@ -435,7 +435,6 @@ function getAttributesForPrivacyLevel(element, nodePrivacyLevel, options) {
       return s.href === element.href
     })
     var cssText = getCssRulesString(stylesheet)
-
     if (cssText && stylesheet) {
       safeAttrs._cssText = cssText
     }

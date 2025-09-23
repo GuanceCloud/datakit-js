@@ -191,6 +191,15 @@ export function createPreStartStrategy(
     },
 
     getViewContext: () => {},
+
+    addTypeAction: function (action, type, commonContext) {
+      if (commonContext === undefined) {
+        commonContext = getCommonContext()
+      }
+      bufferApiCalls.add(function (startRumResult) {
+        startRumResult.addTypeAction(action, type, commonContext)
+      })
+    },
     addAction: function (action, commonContext) {
       if (commonContext === undefined) {
         commonContext = getCommonContext()
