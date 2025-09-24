@@ -49,3 +49,51 @@ After initializing RUM, use the `addAction('<NAME>', '<JSON_OBJECT>')` API to ad
         items: ['socks', 't-shirt'],
     });
     ```
+
+---
+
+use addTypeAction('<NAME>', '<ACTION_TYPE>', '<JSON_OBJECT>') to modify the action_type of a custom action.
+
+=== "CDN Synchronous"
+
+    ```javascript
+    window.DATAFLUX_RUM && window.DATAFLUX_RUM.addTypeAction('<NAME>','<ACTION_TYPE>', '<JSON_OBJECT>');
+
+    // Code example
+    window.DATAFLUX_RUM && window.DATAFLUX_RUM.addTypeAction('cart','custom_action_type', {
+        amount: 42,
+        nb_items: 2,
+        items: ['socks', 't-shirt'],
+    });
+    ```
+
+=== "CDN Asynchronous"
+
+    ```javascript
+    DATAFLUX_RUM.onReady(function() {
+        DATAFLUX_RUM.addTypeAction('<NAME>', '<ACTION_TYPE>','<JSON_OBJECT>');
+    })
+
+    // Code example
+    DATAFLUX_RUM.onReady(function() {
+        DATAFLUX_RUM.addTypeAction('cart','custom_action_type',  {
+        amount: 42,
+        nb_items: 2,
+        items: ['socks', 't-shirt'],
+    });
+    })
+    ```
+
+=== "NPM"
+
+    ```javascript
+    import { datafluxRum } from '@cloudcare/browser-rum'
+    datafluxRum.addTypeAction('<NAME>','<ACTION_TYPE>', '<JSON_OBJECT>');
+
+    // Code example
+    datafluxRum && datafluxRum.addTypeAction('cart','custom_action_type', {
+        amount: 42,
+        nb_items: 2,
+        items: ['socks', 't-shirt'],
+    });
+    ```
