@@ -128,7 +128,6 @@ export function createPreStartStrategy(
 
       // Expose the initial configuration regardless of initialization success.
       cachedInitConfiguration = initConfiguration
-
       // If we are in a Synthetics test configured to automatically inject a RUM instance, we want
       // to completely discard the customer application RUM instance by ignoring their init() call.
       // But, we should not ignore the init() call from the Synthetics-injected RUM instance, so the

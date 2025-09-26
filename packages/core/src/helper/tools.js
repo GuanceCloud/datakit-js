@@ -1497,9 +1497,9 @@ function detectBrowserCached() {
 }
 export function detectBrowser(browserWindow) {
   if (typeof browserWindow === 'undefined') {
-    browserWindow = window
+    browserWindow = window || {}
   }
-  var userAgent = browserWindow.navigator.userAgent
+  var userAgent = browserWindow?.navigator?.userAgent || ''
   if (browserWindow.chrome || /HeadlessChrome/.test(userAgent)) {
     return Browser.CHROMIUM
   }

@@ -3,7 +3,7 @@ import {
   setCookie,
   UUID,
   ONE_HOUR,
-  SessionPersistence
+  noop
 } from '@cloudcare/browser-core'
 export var USR_ID_COOKIE_NAME = '_gc_usr_id'
 export var ANONYMOUS_ID_EXPIRATION = 60 * 24 * ONE_HOUR
@@ -30,7 +30,12 @@ function initUsrLocalStorage() {
   return usrCacheId
 }
 export var startCacheUsrCache = function (configuration) {
-  if (!configuration.sessionStoreStrategyType) return
+  if (!configuration.sessionStoreStrategyType) {
+    return {
+      getId: noop
+    }
+  }
+
   let usrCacheId
   if (
     configuration.sessionStoreStrategyType.type === SessionPersistence.COOKIE

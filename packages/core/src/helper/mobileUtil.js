@@ -1,4 +1,4 @@
-export var userAgent = navigator.userAgent.toLowerCase()
+export var userAgent = navigator?.userAgent?.toLowerCase() || ''
 export var isAndroid = function () {
   return /android/.test(userAgent)
 }
