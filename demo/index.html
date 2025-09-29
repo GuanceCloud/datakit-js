@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Document</title>
-    <!-- <script src="./dataflux-rum.js"></script> -->
+    <script src="./dataflux-rum.js"></script>
     <link rel="stylesheet" href="/index.css" type="text/css" />
-    <!-- <script src="./dataflux-logs.js"></script> -->
+    <script src="./dataflux-logs.js"></script>
 
     <style>
       .open-window {
@@ -38,7 +38,7 @@
           defaultPrivacyLevel: 'mask-user-input'
         })
     </script> -->
-    <script>
+    <!-- <script>
       ;(function (h, o, u, n, d) {
         h = h[d] = h[d] || {
           q: [],
@@ -194,8 +194,8 @@
       //       sendContentTypeByJson: true
       //     })
       //   window.DATAFLUX_LOGS && window.DATAFLUX_LOGS._setDebug(true)
-    </script>
-    <!-- <script src="./dataflux-rum.js"></script>
+    </script> -->
+    <script src="./dataflux-rum.js"></script>
     <script>
       window.DATAFLUX_RUM &&
         window.DATAFLUX_RUM.init({
@@ -237,7 +237,7 @@
         })
       window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
       window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
-    </script> -->
+    </script>
     <script>
       function instrumentMethod(targetPrototype, method, onPreCall) {
         var original = targetPrototype[method]
