@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.2.38
+
+- fix: add demo
+- fix: pendingData to string
+- fix: add SessionPersistence import
+- fix: remove monitor
+- fix: update getId
+- fix: add md
+
 ## v3.2.37
 
 - fix: source action type
