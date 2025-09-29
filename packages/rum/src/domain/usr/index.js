@@ -3,7 +3,8 @@ import {
   setCookie,
   UUID,
   ONE_HOUR,
-  noop
+  noop,
+  SessionPersistence
 } from '@cloudcare/browser-core'
 export var USR_ID_COOKIE_NAME = '_gc_usr_id'
 export var ANONYMOUS_ID_EXPIRATION = 60 * 24 * ONE_HOUR
