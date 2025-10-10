@@ -16,6 +16,9 @@
         position: absolute;
         top: 10px;
       }
+      custom-element {
+        background-color: red;
+      }
     </style>
     <!-- <script
       src="https://www.datadoghq-browser-agent.com/us1/v6/datadog-rum.js"
@@ -199,15 +202,15 @@
     <script>
       window.DATAFLUX_RUM &&
         window.DATAFLUX_RUM.init({
-          applicationId: 'test_dcl_2',
-          clientToken: '58489c99f8614a2495055ed865780c19',
-          site: 'http://testing-openway.dataflux.cn',
+          applicationId: 'test_dcl',
+          site: 'https://cn3-rum-openway.guance.com',
+          clientToken: 'b806cd20126446c4848605cb254f92ed',
           service: 'browser',
           env: 'production',
           version: '1.0.0',
           sessionSampleRate: 100,
           traceType: 'ddtrace',
-          sessionReplaySampleRate: 0,
+          sessionReplaySampleRate: 100,
           trackInteractions: true,
           //   workerUrl: './worker.js',
           compressIntakeRequests: false,
@@ -538,6 +541,7 @@
     </div>
     <img src="/test.png" alt="" />
     <input id="demo" />
+    <custom-element>custom tag: xxxxxxxxx</custom-element>
     <div id="operation">
       <button delay="testSourceMap">test sourcemap</button>
       <button delay="testAddAction">test addAction</button>

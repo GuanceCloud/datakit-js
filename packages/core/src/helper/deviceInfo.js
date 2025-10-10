@@ -284,8 +284,13 @@ var MethodLibrary = {
     return _this.language
   }),
   getTimeZone: monitor(function () {
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    return timeZone
+    try {
+      const intl = new Intl.DateTimeFormat()
+
+      return intl.resolvedOptions().timeZone
+    } catch {
+      return undefined
+    }
   }),
   getBrowserInfo: monitor(function () {
     var _this = this
