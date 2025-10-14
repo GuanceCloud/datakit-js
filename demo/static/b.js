@@ -77,3 +77,23 @@ export function getPathFromHash(hash) {
   var index = hash.indexOf('?')
   return index < 0 ? hash : hash.slice(0, index)
 }
+export function longtask() {
+  const start = performance.now()
+  while (performance.now() - start < 150) {
+    // 做点没用的运算，让主线程卡住
+    Math.sqrt(Math.random() * 1e8)
+  }
+}
+export function longtask2() {
+  const start = performance.now()
+  while (performance.now() - start < 200) {
+    // 做点没用的运算，让主线程卡住
+    Math.sqrt(Math.random() * 1e8)
+  }
+}
+export function heavyComputation(name) {
+  longtask()
+  const a = '===name' + name
+  console.log(a)
+  longtask2()
+}

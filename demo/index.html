@@ -202,9 +202,9 @@
     <script>
       window.DATAFLUX_RUM &&
         window.DATAFLUX_RUM.init({
-          applicationId: 'test_dcl',
-          site: 'https://cn3-rum-openway.guance.com',
-          clientToken: 'b806cd20126446c4848605cb254f92ed',
+          applicationId: 'dcl_test_longtask',
+          site: 'http://testing-openway.dataflux.cn',
+          clientToken: '81d61f901d754a078953c55e879f2f93',
           service: 'browser',
           env: 'production',
           version: '1.0.0',
@@ -261,7 +261,7 @@
         //这里可以添加代码逻辑，打开自己业务tab页
       })
     </script>
-    <!-- <script src="./build/test-sourcemap.js"></script> -->
+
     <!-- <script src="https://static.guance.com/browser-sdk/v3/dataflux-rum.js" type="text/javascript"></script> -->
     <!-- <script>
  (function (h, o, u, n, d) {
@@ -572,6 +572,10 @@
       <button onclick="getSessionReplyData()">getSessionReplyData</button>
       <div id="session_replay_content"></div>
     </div>
+    <div id="longtask">
+      <button id="longtask_button">longtask</button>
+      <button id="longtask_button_func_name">longtask_button_func_name</button>
+    </div>
     <div
       style="height: 500px; width: 100%; margin-top: 100px; position: relative"
     >
@@ -730,5 +734,6 @@
       }
       init()
     </script>
+    <script src="./build/test-sourcemap.js"></script>
   </body>
 </html>

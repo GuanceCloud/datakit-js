@@ -1,4 +1,5 @@
 const TerserPlugin = require('terser-webpack-plugin')
+const { SourceMapUploadWebpackPlugin } = require('@cloudcare/webpack-plugin')
 const webpack = require('webpack')
 const path = require('path')
 module.exports = (env, args) => ({
@@ -18,6 +19,17 @@ module.exports = (env, args) => ({
     ]
   },
   plugins: [
+    new SourceMapUploadWebpackPlugin({
+      applicationId: 'dcl_test_longtask',
+      apiKey: 'p7YK53AvcIFyHRPnbfrhQXxkdWS8j09e',
+      server: 'http://testing-ft2x-open-api.dataflux.cn',
+      filepaths: ['build/'],
+      logLevel: 'verbose',
+      root: 'build/',
+      env: 'production',
+      version: '1.0.0'
+      //   deleteAfterUpload: true,
+    }),
     new webpack.SourceMapDevToolPlugin({
       filename: '[file].map',
       append: '\n//# sourceMappingURL=[url]'
