@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.2.39
+
+- fix: encoder pendingdata bug
+- fix: add demo
+- fix: add timeZone
+
 ## v3.2.38
 
 - fix: add demo
