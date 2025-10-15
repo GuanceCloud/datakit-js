@@ -44,20 +44,6 @@ export function createDeflateEncoder(worker, streamId) {
         addTelemetryDebug('Worker responses received out of order.')
       }
     }
-    // rawBytesCount += workerResponse.additionalBytesCount
-    // compressedData.push(workerResponse.result)
-    // compressedDataTrailer = workerResponse.trailer
-    // var nextPendingAction = pendingWriteActions.shift()
-    // if (nextPendingAction && nextPendingAction.id === workerResponse.id) {
-    //   if (nextPendingAction.writeCallback) {
-    //     nextPendingAction.writeCallback(workerResponse.result.byteLength)
-    //   } else if (nextPendingAction.finishCallback) {
-    //     nextPendingAction.finishCallback()
-    //   }
-    // } else {
-    //   removeMessageListener()
-    //   addTelemetryDebug('Worker responses received out of order.')
-    // }
   })
 
   var removeMessageListener = wokerListener.stop
@@ -132,11 +118,10 @@ export function createDeflateEncoder(worker, streamId) {
     finishSync: function () {
       sendResetIfNeeded()
 
-      var pendingData = pendingWriteActions
-        .map(function (pendingWriteAction) {
-          return pendingWriteAction.data
-        })
-        .join('')
+      var pendingData = pendingWriteActions.map(function (pendingWriteAction) {
+        return pendingWriteAction.data
+      })
+
       pendingWriteActions.length = 0
       return assign(consumeResult(), {
         pendingData: pendingData
