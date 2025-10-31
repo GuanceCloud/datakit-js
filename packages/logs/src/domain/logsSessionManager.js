@@ -1,13 +1,14 @@
 import {
   performDraw,
   startSessionManager,
-  Observable
+  Observable,
+  SESSION_NOT_TRACKED
 } from '@cloudcare/browser-core'
 
 export var LOGS_SESSION_KEY = 'logs'
 
 export var LoggerTrackingType = {
-  NOT_TRACKED: '0',
+  NOT_TRACKED: SESSION_NOT_TRACKED,
   TRACKED: '1'
 }
 

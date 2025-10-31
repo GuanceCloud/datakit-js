@@ -32,7 +32,7 @@ export function createPreStartStrategy(
 
   var cachedInitConfiguration
   var cachedConfiguration
-
+  var cachedRemoteConfiguration
   function tryStartRum() {
     if (!cachedInitConfiguration || !cachedConfiguration) {
       return
@@ -63,7 +63,7 @@ export function createPreStartStrategy(
     bufferApiCalls.drain(startRumResult)
   }
 
-  function doInit(initConfiguration) {
+  function doInit(initConfiguration, remoteConfiguration) {
     var eventBridgeAvailable = canUseEventBridge()
     if (eventBridgeAvailable) {
       initConfiguration = overrideInitConfigurationForBridge(initConfiguration)
@@ -71,6 +71,7 @@ export function createPreStartStrategy(
 
     // Update the exposed initConfiguration to reflect the bridge and remote configuration overrides
     cachedInitConfiguration = initConfiguration
+    cachedRemoteConfiguration = remoteConfiguration
     addTelemetryConfiguration(deepClone(initConfiguration))
     if (cachedConfiguration) {
       displayAlreadyInitializedError('DATAFLUX_RUM', initConfiguration)
@@ -145,11 +146,13 @@ export function createPreStartStrategy(
     getInitConfiguration: function () {
       return cachedInitConfiguration
     },
-
+    getRemoteConfiguration: function () {
+      return cachedRemoteConfiguration
+    },
     getInternalContext: noop,
 
     stopSession: noop,
-
+    setForcedSession: noop,
     addTiming: function (name, time) {
       if (time === undefined) {
         time = timeStampNow()

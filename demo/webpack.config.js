@@ -20,9 +20,9 @@ module.exports = (env, args) => ({
   },
   plugins: [
     new SourceMapUploadWebpackPlugin({
-      applicationId: 'dcl_test_longtask',
-      apiKey: 'p7YK53AvcIFyHRPnbfrhQXxkdWS8j09e',
-      server: 'http://testing-ft2x-open-api.dataflux.cn',
+      applicationId: 'test_longtask',
+      apiKey: 'eSpWHk7EMdlXKRs60tUOPgv3qVGmoxi2',
+      server: 'https://openapi.guance.com',
       filepaths: ['build/'],
       logLevel: 'verbose',
       root: 'build/',

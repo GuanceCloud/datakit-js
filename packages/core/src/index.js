@@ -46,7 +46,8 @@ export {
 export {
   SESSION_TIME_OUT_DELAY,
   SESSION_STORE_KEY,
-  SessionPersistence
+  SessionPersistence,
+  SESSION_NOT_TRACKED
 } from './session/sessionConstants'
 export { STORAGE_POLL_DELAY } from './session/sessionStore'
 export * from './transport'

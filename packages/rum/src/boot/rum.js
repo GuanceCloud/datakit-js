@@ -184,7 +184,9 @@ export function startRum(
     lifeCycle: lifeCycle,
     viewContexts: viewContexts,
     session: session,
-
+    setForcedSession: function () {
+      session.setForcedSession()
+    },
     stopSession: function () {
       session.expire()
     },

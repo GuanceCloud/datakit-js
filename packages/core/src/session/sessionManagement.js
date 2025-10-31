@@ -7,7 +7,7 @@ import {
   addEventListeners
 } from '../browser/addEventListener'
 import { clearInterval, setInterval } from '../helper/timer'
-import { SESSION_TIME_OUT_DELAY } from './sessionConstants'
+import { SESSION_TIME_OUT_DELAY, SESSION_NOT_TRACKED } from './sessionConstants'
 import { startSessionStore } from './sessionStore'
 
 export const VISIBILITY_CHECK_DELAY = ONE_MINUTE
@@ -62,10 +62,20 @@ export function startSessionManager(
   })
 
   function buildSessionContext() {
+    const session = sessionStore.getSession()
+    if (!session) {
+      return {
+        id: 'invalid',
+        trackingType: SESSION_NOT_TRACKED,
+        isSessionForced: false,
+        hasError: false
+      }
+    }
     return {
-      id: sessionStore.getSession().id,
-      trackingType: sessionStore.getSession()[productKey],
-      hasError: !!sessionStore.getSession().hasError
+      id: session.id,
+      trackingType: session[productKey],
+      hasError: !!session.hasError,
+      isSessionForced: !!session.forcedSession
     }
   }
 

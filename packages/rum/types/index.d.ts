@@ -49,6 +49,7 @@ export declare const datafluxRum: {
     | RumInitConfiguration
     | RumSiteInitConfiguration
     | undefined
+  getRemoteConfiguration: () => Object | undefined
   addAction: (name: string, context?: object | undefined) => void
   addTypeAction: (
     name: string,
@@ -63,6 +64,7 @@ export declare const datafluxRum: {
   removeUserProperty: (key: any) => void
   clearUser: () => void
   stopSession: () => void
+  setForcedSession: () => void
   startSessionReplayRecording: () => void
   stopSessionReplayRecording: () => void
 } & {

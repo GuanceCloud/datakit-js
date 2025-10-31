@@ -5,7 +5,8 @@ import { objectEntries, getType } from '../helper/tools'
 export function fetchAndApplyRemoteConfiguration(initConfiguration, callback) {
   fetchRemoteConfiguration(initConfiguration, (remoteInitConfiguration) => {
     callback(
-      applyRemoteConfiguration(initConfiguration, remoteInitConfiguration)
+      applyRemoteConfiguration(initConfiguration, remoteInitConfiguration),
+      getSimpleRemoteConfiguration(initConfiguration, remoteInitConfiguration)
     )
   })
 }
@@ -48,7 +49,7 @@ function modificationByFieldsPath(remoteConfiguration, modifiableFieldPaths) {
   })
   return result
 }
-export function applyRemoteConfiguration(
+export function getSimpleRemoteConfiguration(
   initConfiguration,
   remoteInitConfiguration
 ) {
@@ -70,6 +71,16 @@ export function applyRemoteConfiguration(
       simpleRemoteInitConfiguration[simpleKey] = remoteInitConfiguration[key]
     }
   }
+  return simpleRemoteInitConfiguration
+}
+export function applyRemoteConfiguration(
+  initConfiguration,
+  remoteInitConfiguration
+) {
+  const simpleRemoteInitConfiguration = getSimpleRemoteConfiguration(
+    initConfiguration,
+    remoteInitConfiguration
+  )
   return {
     ...initConfiguration,
     ...modificationByFieldsPath(

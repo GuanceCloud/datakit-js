@@ -6,7 +6,8 @@ import {
   Observable,
   timeStampNow,
   bridgeSupports,
-  BridgeCapability
+  BridgeCapability,
+  SESSION_NOT_TRACKED
 } from '@cloudcare/browser-core'
 
 export var RUM_SESSION_KEY = 'rum'
@@ -18,7 +19,7 @@ export var RumSessionPlan = {
 }
 export const ERROR_SESSION = '1'
 export var RumTrackingType = {
-  NOT_TRACKED: '0',
+  NOT_TRACKED: SESSION_NOT_TRACKED,
   // Note: the "tracking type" value (stored in the session cookie) does not match the "session
   // plan" value (sent in RUM events). This is expected, and was done to keep retrocompatibility
   // with active sessions when upgrading the SDK.
@@ -56,12 +57,21 @@ export function startRumSessionManager(configuration, lifeCycle) {
           sessionEntity.ets = newState.ets || timeStampNow()
         }
       }
+      if (!previousState.forcedSession && newState.forcedSession) {
+        const sessionEntity = sessionManager.findSession()
+        if (sessionEntity) {
+          sessionEntity.isSessionForced = true
+        }
+      }
     }
   )
   return {
     findTrackedSession: function (startTime) {
       var session = sessionManager.findSession(startTime)
-      if (!session || !isTypeTracked(session.trackingType)) {
+      if (!session) {
+        return
+      }
+      if (!isTypeTracked(session.trackingType) && !session.isSessionForced) {
         return
       }
       const isErrorSession =
@@ -99,14 +109,18 @@ export function startRumSessionManager(configuration, lifeCycle) {
         sessionErrorTimestamp: session.ets,
         sessionReplayAllowed:
           plan === RumSessionPlan.WITH_SESSION_REPLAY ||
-          plan === RumSessionPlan.WITH_ERROR_SESSION_REPLAY
+          plan === RumSessionPlan.WITH_ERROR_SESSION_REPLAY ||
+          session.isSessionForced
       }
     },
     expire: sessionManager.expire,
     expireObservable: sessionManager.expireObservable,
     sessionStateUpdateObservable: sessionManager.sessionStateUpdateObservable,
     setErrorForSession: () =>
-      sessionManager.updateSessionState({ hasError: '1', ets: timeStampNow() })
+      sessionManager.updateSessionState({ hasError: '1', ets: timeStampNow() }),
+    setForcedSession: () => {
+      sessionManager.updateSessionState({ forcedSession: '1' })
+    }
   }
 }
 
@@ -132,7 +146,13 @@ export function startRumSessionManagerStub() {
     },
     expire: noop,
     expireObservable: new Observable(),
-    setErrorForSession: function () {}
+    setErrorForSession: function () {
+      session.sessionErrorTimestamp = timeStampNow()
+      session.sessionHasError = true
+      session.isErrorSession = true
+      session.errorSessionReplayAllowed = true
+    },
+    setForcedSession: noop
   }
 }
 

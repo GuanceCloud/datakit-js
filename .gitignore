@@ -11,3 +11,4 @@ lerna-debug.log
 .tw-npmrc
 demo/node_modules
 config
+demo
