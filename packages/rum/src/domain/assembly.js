@@ -147,7 +147,8 @@ export function startRumAssembly(
             // must be computed on each event because synthetics instrumentation can be done after sdk execution
             // cf https://github.com/puppeteer/puppeteer/issues/3667
             type: getSessionType(),
-            id: session.id
+            id: session.id,
+            is_forced_session: session.isSessionForced
           },
           view: {
             id: viewContext.id,

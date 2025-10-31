@@ -107,6 +107,7 @@ export function startRumSessionManager(configuration, lifeCycle) {
         sessionHasError: session.hasError,
         isErrorSession: isErrorSession,
         sessionErrorTimestamp: session.ets,
+        isSessionForced: session.isSessionForced,
         sessionReplayAllowed:
           plan === RumSessionPlan.WITH_SESSION_REPLAY ||
           plan === RumSessionPlan.WITH_ERROR_SESSION_REPLAY ||
@@ -131,14 +132,14 @@ export function startRumSessionManager(configuration, lifeCycle) {
 export function startRumSessionManagerStub() {
   var session = {
     id: '00000000-aaaa-0000-aaaa-000000000000',
-    plan: RumSessionPlan.WITHOUT_SESSION_REPLAY, // plan value should not be taken into account for mobile
     isErrorSession: false,
     sessionErrorTimestamp: 0,
     sessionReplayAllowed: bridgeSupports(BridgeCapability.RECORDS)
       ? true
       : false,
     errorSessionReplayAllowed: false,
-    sessionHasError: false
+    sessionHasError: false,
+    isSessionForced: false
   }
   return {
     findTrackedSession: function () {
