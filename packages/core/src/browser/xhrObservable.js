@@ -28,7 +28,11 @@ function createXhrObservable() {
       },
       { computeHandlingStack: true }
     )
-
+    var setRequestHeaderInstrumentMethod = instrumentMethod(
+      XMLHttpRequest.prototype,
+      'setRequestHeader',
+      setRequestHeaderXhr
+    )
     var abortInstrumentMethod = instrumentMethod(
       XMLHttpRequest.prototype,
       'abort',
@@ -39,6 +43,7 @@ function createXhrObservable() {
       openInstrumentMethod.stop()
       sendInstrumentMethod.stop()
       abortInstrumentMethod.stop()
+      setRequestHeaderInstrumentMethod.stop()
     }
   })
 }
@@ -53,7 +58,17 @@ function openXhr(params) {
     url: normalizeUrl(String(url))
   })
 }
-
+function setRequestHeaderXhr(params) {
+  var xhr = params.target
+  var headerKey = params.parameters[0]
+  var headerValue = params.parameters[1]
+  var context = xhrContexts.get(xhr)
+  if (context && headerKey) {
+    var requestHeaderContexts = context.requestHeaderContexts || {}
+    requestHeaderContexts[headerKey] = headerValue
+    context.requestHeaderContexts = requestHeaderContexts
+  }
+}
 function sendXhr(params, observable) {
   var xhr = params.target
   var handlingStack = params.handlingStack

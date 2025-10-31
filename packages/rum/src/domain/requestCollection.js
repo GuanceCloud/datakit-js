@@ -55,6 +55,7 @@ export function trackXhr(lifeCycle, configuration, tracer) {
           url: context.url,
           xhr: context.xhr,
           isAborted: context.isAborted,
+          requestHeaderContexts: context.requestHeaderContexts,
           handlingStack: context.handlingStack
         })
         break
@@ -98,6 +99,7 @@ export function trackFetch(lifeCycle, configuration, tracer) {
             status: context.status,
             traceId: context.traceId,
             traceSampled: context.traceSampled,
+            requestHeaderContexts: context.init?.headers,
             type: RequestType.FETCH,
             url: context.url,
             response: context.response,

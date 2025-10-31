@@ -225,15 +225,13 @@
             console.log('===context', context)
             return 'xxxx'
           },
-          //   beforeSend: function (event, context) {
-          //     if (event.type === 'resource' && event.resource.type === 'fetch') {
-          //       // 这里可以往数据之中添加 responseHeaders 字段上报
-          //       event.context.responseHeaders = Object.fromEntries(
-          //         context.response.headers
-          //       )
-          //     }
-          //     return true // 这里代表需要上报数据
-          //   }
+          beforeSend: function (event, context) {
+            if (event.type === 'resource' && event.resource.type === 'xhr') {
+              // 这里可以往数据之中添加 responseHeaders 字段上报
+              console.log('====event', context)
+            }
+            return true // 这里代表需要上报数据
+          },
           allowedDDTracingOrigins: [
             'https://console-api.guance.com',
             'http://testing-ft2x-api.dataflux.cn'

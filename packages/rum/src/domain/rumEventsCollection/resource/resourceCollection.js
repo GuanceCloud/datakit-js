@@ -146,6 +146,7 @@ function processRequest(request, pageStateHistory) {
     domainContext: {
       performanceEntry: matchingTiming,
       xhr: request.xhr,
+      requestHeaderContexts: request.requestHeaderContexts,
       response: request.response,
       requestInput: request.input,
       requestInit: request.init,
