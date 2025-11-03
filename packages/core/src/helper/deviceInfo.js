@@ -601,7 +601,8 @@ if (typeof window !== 'undefined') {
     screenSize: window.screen.width + '*' + window.screen.height,
     networkType: MethodLibrary.getNetwork(),
     device: MethodLibrary.getDeviceType(),
-    timeZone: MethodLibrary.getTimeZone()
+    timeZone: MethodLibrary.getTimeZone(),
+    userAgent: VariableLibrary.navigator.userAgent || ''
   }
 }
 export var deviceInfo = _deviceInfo

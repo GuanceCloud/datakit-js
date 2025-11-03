@@ -25,6 +25,7 @@ export var commonTags = {
   network_type: 'device.network_type',
   time_zone: 'device.time_zone',
   device: 'device.device',
+  user_agent: 'device.user_agent',
   view_id: 'view.id',
   view_referrer: 'view.referrer',
   view_url: 'view.url',
