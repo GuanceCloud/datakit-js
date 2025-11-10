@@ -17,7 +17,7 @@
         "sdk"
     ],
     "repository": {
-        "url": "https://github.com/DataFlux-cn/datakit-js",
+        "url": "https://github.com/GuanceCloud/datakit-js",
         "type": "git",
         "directory": "packages/worker"
     },

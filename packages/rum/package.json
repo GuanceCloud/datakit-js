@@ -26,12 +26,12 @@
         "sdk"
     ],
     "repository": {
-        "url": "https://github.com/DataFlux-cn/datakit-js",
+        "url": "https://github.com/GuanceCloud/datakit-js",
         "type": "git",
         "directory": "packages/rum"
     },
     "author": "dataflux",
     "license": "MIT",
-    "homepage": "https://github.com/DataFlux-cn/datakit-js/README.md",
+    "homepage": "https://github.com/GuanceCloud/datakit-js/README.md",
     "gitHead": "47f9fa1890683efb7cf6995e4d038eb5dec7113a"
 }
