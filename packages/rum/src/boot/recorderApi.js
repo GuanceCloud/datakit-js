@@ -36,6 +36,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     return {
       start: noop,
       stop: noop,
+      takeSubsequentFullSnapshot: noop,
       getReplayStats: function () {
         return undefined
       },
@@ -56,6 +57,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
   var stopStrategy = function () {
     state = { status: RecorderStatus.Stopped }
   }
+  var takeSubsequentFullSnapshot = function () {}
   return {
     start: function (options) {
       startStrategy(options)
@@ -151,7 +153,8 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
           )
           state = {
             status: RecorderStatus.Started,
-            stopRecording: recordingImpl.stop
+            stopRecording: recordingImpl.stop,
+            takeSubsequentFullSnapshot: recordingImpl.takeSubsequentFullSnapshot
           }
         })
       }
@@ -169,12 +172,16 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
           status: RecorderStatus.Stopped
         }
       }
-
+      takeSubsequentFullSnapshot = function () {
+        state.takeSubsequentFullSnapshot()
+      }
       if (state.status === RecorderStatus.IntentToStart) {
         startStrategy()
       }
     },
-
+    takeSubsequentFullSnapshot() {
+      takeSubsequentFullSnapshot()
+    },
     isRecording: function () {
       return (
         getDeflateWorkerStatus() === DeflateWorkerStatus.Initialized &&

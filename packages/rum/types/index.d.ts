@@ -67,6 +67,7 @@ export declare const datafluxRum: {
   setForcedSession: () => void
   startSessionReplayRecording: () => void
   stopSessionReplayRecording: () => void
+  takeSubsequentFullSnapshot: () => void
 } & {
   onReady(callback: () => void): void
 }

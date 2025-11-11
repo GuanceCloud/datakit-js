@@ -275,7 +275,8 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
         force: options && options.force
       })
     }),
-    stopSessionReplayRecording: monitor(recorderApi.stop)
+    stopSessionReplayRecording: monitor(recorderApi.stop),
+    takeSubsequentFullSnapshot: monitor(recorderApi.takeSubsequentFullSnapshot)
   })
   return rumPublicApi
 }

@@ -129,6 +129,7 @@ export function startRecording(
       cleanupTasks.forEach(function (task) {
         task()
       })
-    }
+    },
+    takeSubsequentFullSnapshot: takeSubsequentFullSnapshot
   }
 }
