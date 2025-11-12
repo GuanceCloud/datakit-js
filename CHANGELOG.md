@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.41
+
+- fix: add EventListener EventTarget bug
+
 ## v3.2.40
 
 - fix: unsubscrbe
