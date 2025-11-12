@@ -15,12 +15,14 @@ export function createFlushController({
   pageExitObservable,
   sessionExpireObservable
 }) {
-  pageExitObservable.subscribe(function (event) {
+  var pageExitSubscription = pageExitObservable.subscribe(function (event) {
     return flush(event.reason)
   })
-  sessionExpireObservable.subscribe(function () {
-    return flush('session_expire')
-  })
+  var sessionExpireSubscription = sessionExpireObservable.subscribe(
+    function () {
+      return flush('session_expire')
+    }
+  )
   var flushObservable = new Observable(function () {
     return function () {
       pageExitSubscription.unsubscribe()
