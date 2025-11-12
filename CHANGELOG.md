@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.2.40
+
+- fix: unsubscrbe
+- fix: add takeSubsequentFullSnapshot method
+- fix: update repository
+- fix: add user agent
+- feat: add session_is_forced
+- feat: add requestHeaderContexts
+- feat: add force session
+
 ## v3.2.39
 
 - fix: encoder pendingdata bug
