@@ -4,6 +4,7 @@ import {
   CustomerDataType,
   clocksNow,
   ActionType,
+  ResourceType,
   deepClone,
   createHandlingStack,
   sanitizeUser,
@@ -188,6 +189,19 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     addDebugSession: monitor(function (id) {}),
     clearDebugSession: monitor(function () {}),
     getDebugSession: monitor(function () {}),
+    addResource: monitor(function (context) {
+      const handlingStack = createHandlingStack()
+      console.log('====ResourceType.CUSTOM', ResourceType)
+      callMonitored(function () {
+        strategy.addResource({
+          context: sanitize(context),
+          startClocks: clocksNow(),
+          type: ResourceType.CUSTOM,
+          handlingStack: handlingStack
+        })
+        addTelemetryUsage({ feature: 'add-resource' })
+      })
+    }),
     addTypeAction: monitor(function (name, type, context) {
       const handlingStack = createHandlingStack()
 

@@ -139,6 +139,7 @@ export function startRum(
     configuration,
     pageStateHistory
   )
+  var addResource = _startResourceCollection.addResource
   cleanupTasks.push(_startResourceCollection.stop)
   if (
     PerformanceObserver.supportedEntryTypes &&
@@ -172,6 +173,7 @@ export function startRum(
     urlContexts
   )
   return {
+    addResource: addResource,
     addAction: addAction,
     addError: addError,
     addTiming: addTiming,

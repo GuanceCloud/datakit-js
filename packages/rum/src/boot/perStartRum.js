@@ -210,7 +210,14 @@ export function createPreStartStrategy(
         startRumResult.addAction(action, commonContext)
       })
     },
-
+    addResource: function (resource, commonContext) {
+      if (commonContext === undefined) {
+        commonContext = getCommonContext()
+      }
+      bufferApiCalls.add(function (startRumResult) {
+        startRumResult.addResource(resource, commonContext)
+      })
+    },
     addError: function (providedError, commonContext) {
       if (commonContext === undefined) {
         commonContext = getCommonContext()

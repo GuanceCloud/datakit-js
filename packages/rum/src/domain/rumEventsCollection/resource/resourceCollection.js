@@ -1,6 +1,7 @@
 import {
   getStatusGroup,
   UUID,
+  extend,
   extend2Lev,
   relativeToClocks,
   urlParse,
@@ -90,6 +91,14 @@ export function startResourceCollection(
   return {
     stop: function () {
       performanceResourceSubscription.unsubscribe()
+    },
+    addResource: (resource, savedCommonContext) => {
+      handleResource(function () {
+        return extend(
+          { savedCommonContext: savedCommonContext },
+          processCustomResource(resource)
+        )
+      })
     }
   }
 }
@@ -193,7 +202,24 @@ function processResourceEntry(entry, configuration) {
     }
   }
 }
-
+function processCustomResource(resource) {
+  var resourceEvent = {
+    date: resource.startClocks.timeStamp,
+    resource: {
+      id: UUID(),
+      type: resource.type
+    },
+    type: RumEventType.RESOURCE
+  }
+  return {
+    customerContext: resource.context,
+    startTime: resource.startClocks.relative,
+    rawRumEvent: resourceEvent,
+    domainContext: {
+      resource: resource
+    }
+  }
+}
 function computeResourceEntryMetrics(entry) {
   return {
     resource: extend2Lev(

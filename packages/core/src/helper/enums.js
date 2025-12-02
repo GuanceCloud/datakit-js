@@ -44,7 +44,8 @@ export var ResourceType = {
   IMAGE: 'image',
   FONT: 'font',
   MEDIA: 'media',
-  OTHER: 'other'
+  OTHER: 'other',
+  CUSTOM: 'custom'
 }
 
 export var ActionType = {
