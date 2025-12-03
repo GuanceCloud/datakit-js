@@ -12,10 +12,10 @@ import {
   initFetchObservable,
   deepClone,
   fetchAndApplyRemoteConfiguration,
-  getEventBridge
+  getEventBridge,
+  getType
 } from '@cloudcare/browser-core'
 import { validateAndBuildRumConfiguration } from '../domain/configuration'
-import { getType } from '@cloudcare/browser-core/src/helper/tools'
 
 export function createPreStartStrategy(
   rumPublicApiOptions,
