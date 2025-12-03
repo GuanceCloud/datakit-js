@@ -2,10 +2,10 @@
     "name": "@cloudcare/browser-logs",
     "main": "cjs/index.js",
     "module": "esm/index.js",
-    "version": "3.2.41",
+    "version": "3.2.42",
     "types": "types/index.d.ts",
     "dependencies": {
-        "@cloudcare/browser-core": "3.2.41"
+        "@cloudcare/browser-core": "3.2.42"
     },
     "description": "Guance Browser SDK Logs Package",
     "scripts": {

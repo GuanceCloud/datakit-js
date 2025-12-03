@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.2.42
+
+- fix: remove monitor
+- fix: update getRemoteConfigration handler
+- fix: add addResource method
+- fix: display noop handler
+
 ## v3.2.41
 
 - fix: add EventListener EventTarget bug
