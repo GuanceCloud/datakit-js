@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.43
+
+- fix: remove getType
+
 ## v3.2.42
 
 - fix: remove monitor
