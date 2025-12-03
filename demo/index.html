@@ -213,7 +213,7 @@
           sessionReplaySampleRate: 100,
           trackInteractions: true,
           //   workerUrl: './worker.js',
-          compressIntakeRequests: false,
+          compressIntakeRequests: true,
           allowFallbackToLocalStorage: true,
           usePartitionedCrossSiteSessionCookie: true,
           trackSessionAcrossSubdomains: true,
@@ -239,6 +239,9 @@
         })
       window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
       window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+      DATAFLUX_RUM.getRemoteConfiguration((remoteConfiguration) => {
+        console.log('===remoteConfiguration', remoteConfiguration)
+      })
     </script>
     <script>
       function instrumentMethod(targetPrototype, method, onPreCall) {

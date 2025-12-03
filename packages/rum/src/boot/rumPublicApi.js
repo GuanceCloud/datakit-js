@@ -180,8 +180,8 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     getInitConfiguration: monitor(function () {
       return deepClone(strategy.initConfiguration)
     }),
-    getRemoteConfiguration: monitor(function () {
-      return deepClone(strategy.remoteConfiguration)
+    getRemoteConfiguration: monitor(function (callback) {
+      return strategy.getRemoteConfiguration(callback)
     }),
     getInternalContext: monitor(function (startTime) {
       return strategy.getInternalContext(startTime)
@@ -191,7 +191,6 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     getDebugSession: monitor(function () {}),
     addResource: monitor(function (context) {
       const handlingStack = createHandlingStack()
-      console.log('====ResourceType.CUSTOM', ResourceType)
       callMonitored(function () {
         strategy.addResource({
           context: sanitize(context),
@@ -300,8 +299,7 @@ function createPostStartStrategy(preStartStrategy, startRumResult) {
       init: function (initConfiguration) {
         displayAlreadyInitializedError('DATAFLUX_RUM', initConfiguration)
       },
-      initConfiguration: preStartStrategy.getInitConfiguration(),
-      remoteConfiguration: preStartStrategy.getRemoteConfiguration()
+      initConfiguration: preStartStrategy.getInitConfiguration()
     },
     startRumResult
   )

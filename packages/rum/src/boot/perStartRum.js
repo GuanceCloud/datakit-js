@@ -15,6 +15,7 @@ import {
   getEventBridge
 } from '@cloudcare/browser-core'
 import { validateAndBuildRumConfiguration } from '../domain/configuration'
+import { getType } from '@cloudcare/browser-core/src/helper/tools'
 
 export function createPreStartStrategy(
   rumPublicApiOptions,
@@ -25,7 +26,7 @@ export function createPreStartStrategy(
     rumPublicApiOptions.ignoreInitIfSyntheticsWillInjectRum
   var startDeflateWorker = rumPublicApiOptions.startDeflateWorker
   var bufferApiCalls = createBoundedBuffer()
-
+  var remoteConfigrationCallbacks = createBoundedBuffer()
   var firstStartViewCall
 
   var deflateWorker
@@ -72,6 +73,7 @@ export function createPreStartStrategy(
     // Update the exposed initConfiguration to reflect the bridge and remote configuration overrides
     cachedInitConfiguration = initConfiguration
     cachedRemoteConfiguration = remoteConfiguration
+    remoteConfigrationCallbacks.drain(cachedRemoteConfiguration)
     addTelemetryConfiguration(deepClone(initConfiguration))
     if (cachedConfiguration) {
       displayAlreadyInitializedError('DATAFLUX_RUM', initConfiguration)
@@ -146,8 +148,14 @@ export function createPreStartStrategy(
     getInitConfiguration: function () {
       return cachedInitConfiguration
     },
-    getRemoteConfiguration: function () {
-      return cachedRemoteConfiguration
+    getRemoteConfiguration: function (callback) {
+      if (getType(callback) === 'function') {
+        if (cachedRemoteConfiguration) {
+          callback(cachedRemoteConfiguration)
+        } else {
+          remoteConfigrationCallbacks.add(callback)
+        }
+      }
     },
     getInternalContext: noop,
 

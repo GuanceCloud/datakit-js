@@ -49,7 +49,9 @@ export declare const datafluxRum: {
     | RumInitConfiguration
     | RumSiteInitConfiguration
     | undefined
-  getRemoteConfiguration: () => Object | undefined
+  getRemoteConfiguration: (
+    callback: (remoteConfiguration: object) => void
+  ) => undefined
   addResource: (context?: object | undefined) => void
   addAction: (name: string, context?: object | undefined) => void
   addTypeAction: (

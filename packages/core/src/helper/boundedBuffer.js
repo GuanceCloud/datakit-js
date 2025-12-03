@@ -23,7 +23,7 @@ export function createBoundedBuffer() {
 
   return {
     add: add,
-    remove: add,
+    remove: remove,
     drain: drain
   }
 }
