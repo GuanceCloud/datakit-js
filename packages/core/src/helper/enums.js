@@ -10,6 +10,7 @@ export var DOM_EVENT = {
   TOUCH_END: 'touchend',
   TOUCH_MOVE: 'touchmove',
   VISIBILITY_CHANGE: 'visibilitychange',
+  PRERENDERING_CHANGE: 'prerenderingchange',
   PAGE_SHOW: 'pageshow',
   FREEZE: 'freeze',
   RESUME: 'resume',

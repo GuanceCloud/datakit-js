@@ -7,10 +7,13 @@ export function trackFirstHidden(viewStart, eventTarget) {
   if (typeof eventTarget === 'undefined') {
     eventTarget = window
   }
-  if (document.visibilityState === 'hidden') {
+  if (document.visibilityState === 'hidden' && !document.prerendering) {
     return { getTimeStamp: () => 0, stop: noop }
   }
-  if (supportPerformanceTimingEvent(RumPerformanceEntryType.VISIBILITY_STATE)) {
+  if (
+    supportPerformanceTimingEvent(RumPerformanceEntryType.VISIBILITY_STATE) &&
+    !document.prerendering
+  ) {
     const firstHiddenEntry = performance
       .getEntriesByType(RumPerformanceEntryType.VISIBILITY_STATE)
       .filter((entry) => entry.name === 'hidden')
@@ -23,7 +26,11 @@ export function trackFirstHidden(viewStart, eventTarget) {
 
   const { stop } = addEventListeners(
     eventTarget,
-    [DOM_EVENT.PAGE_HIDE, DOM_EVENT.VISIBILITY_CHANGE],
+    [
+      DOM_EVENT.PAGE_HIDE,
+      DOM_EVENT.VISIBILITY_CHANGE,
+      DOM_EVENT.PRERENDERING_CHANGE
+    ],
     (event) => {
       if (
         event.type === DOM_EVENT.PAGE_HIDE ||
