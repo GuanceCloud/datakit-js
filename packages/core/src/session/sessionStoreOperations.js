@@ -77,6 +77,7 @@ export function processSessionStoreOperations(
       return
     }
   }
+
   if (processedSession) {
     if (isSessionInExpiredState(processedSession)) {
       expireSession()

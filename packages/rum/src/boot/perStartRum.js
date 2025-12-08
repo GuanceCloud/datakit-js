@@ -160,7 +160,9 @@ export function createPreStartStrategy(
     getInternalContext: noop,
 
     stopSession: noop,
-    setForcedSession: noop,
+    setForcedSession: function () {
+      bufferApiCalls.add((startRumResult) => startRumResult.setForcedSession())
+    },
     addTiming: function (name, time) {
       if (time === undefined) {
         time = timeStampNow()

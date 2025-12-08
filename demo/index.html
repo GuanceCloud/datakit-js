@@ -208,7 +208,7 @@
           service: 'browser',
           env: 'production',
           version: '1.0.0',
-          sessionSampleRate: 100,
+          sessionSampleRate: 0,
           traceType: 'ddtrace',
           sessionReplaySampleRate: 100,
           trackInteractions: true,
@@ -239,8 +239,14 @@
         })
       window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
       window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+
       DATAFLUX_RUM.getRemoteConfiguration((remoteConfiguration) => {
-        console.log('===remoteConfiguration', remoteConfiguration)
+        console.log(
+          '===remoteConfiguration',
+          remoteConfiguration,
+          DATAFLUX_RUM.setForcedSession
+        )
+        DATAFLUX_RUM.setForcedSession()
       })
     </script>
     <script>
