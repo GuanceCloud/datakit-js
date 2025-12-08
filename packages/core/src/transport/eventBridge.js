@@ -32,9 +32,13 @@ export function getEventBridge() {
     },
     send(eventType, event, viewId) {
       const view = viewId ? { id: viewId } : undefined
-      eventBridgeGlobal.sendEvent(
-        JSON.stringify({ name: eventType, data: event, view })
-      )
+      try {
+        eventBridgeGlobal.sendEvent(
+          JSON.stringify({ name: eventType, data: event, view })
+        )
+      } catch (e) {
+        // unload postmessage error
+      }
     }
   }
 }
