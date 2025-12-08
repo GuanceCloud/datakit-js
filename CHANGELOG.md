@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.2.44
+
+- fix: remove console
+- fix: add bridge sendEvent error
+- fix: add  prerenderingchange lis
+
 ## v3.2.43
 
 - fix: remove getType
