@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.46
+
+- fix: style
+
 ## v3.2.45
 
 - fix: getRemoteConfiguration pre bug

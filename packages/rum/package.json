@@ -1,6 +1,6 @@
 {
     "name": "@cloudcare/browser-rum",
-    "version": "3.2.45",
+    "version": "3.2.46",
     "main": "cjs/index.js",
     "module": "esm/index.js",
     "types": "types/index.d.ts",
