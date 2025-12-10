@@ -14,7 +14,7 @@ import {
  * Track the largest contentful paint (LCP) occurring during the initial View.  This can yield
  * multiple values, only the most recent one should be used.
  * Documentation: https://web.dev/lcp/
- * Reference implementation: https://github.com/GoogleChrome/web-vitals/blob/master/src/getLCP.ts
+ * Reference implementation: https://github.com/GoogleChrome/web-vitals/blob/master/src/onLCP.ts
  */
 // It happens in some cases like sleep mode or some browser implementations
 export var LCP_MAXIMUM_DELAY = 10 * ONE_MINUTE

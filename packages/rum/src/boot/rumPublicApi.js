@@ -299,7 +299,10 @@ function createPostStartStrategy(preStartStrategy, startRumResult) {
       init: function (initConfiguration) {
         displayAlreadyInitializedError('DATAFLUX_RUM', initConfiguration)
       },
-      initConfiguration: preStartStrategy.getInitConfiguration()
+      initConfiguration: preStartStrategy.getInitConfiguration(),
+      getRemoteConfiguration: function (callback) {
+        preStartStrategy.getRemoteConfiguration(callback)
+      }
     },
     startRumResult
   )

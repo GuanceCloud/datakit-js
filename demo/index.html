@@ -198,9 +198,23 @@
       //     })
       //   window.DATAFLUX_LOGS && window.DATAFLUX_LOGS._setDebug(true)
     </script> -->
-    <script src="./dataflux-rum.js"></script>
+    <!-- <script src="./dataflux-rum.js"></script> -->
+
     <script>
-      window.DATAFLUX_RUM &&
+      ;(function (h, o, u, n, d) {
+        h = h[d] = h[d] || {
+          q: [],
+          onReady: function (c) {
+            h.q.push(c)
+          }
+        }
+        d = o.createElement(u)
+        d.src = n
+        d.async = 1
+        n = o.getElementsByTagName(u)[0]
+        n.parentNode.insertBefore(d, n)
+      })(window, document, 'script', './dataflux-rum.js', 'DATAFLUX_RUM')
+      window.DATAFLUX_RUM.onReady(() => {
         window.DATAFLUX_RUM.init({
           applicationId: 'test_longtask',
           site: 'https://rum-openway.guance.com',
@@ -237,16 +251,8 @@
             'http://testing-ft2x-api.dataflux.cn'
           ]
         })
-      window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
-      window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
-
-      DATAFLUX_RUM.getRemoteConfiguration((remoteConfiguration) => {
-        console.log(
-          '===remoteConfiguration',
-          remoteConfiguration,
-          DATAFLUX_RUM.setForcedSession
-        )
-        DATAFLUX_RUM.setForcedSession()
+        window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
+        window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
       })
     </script>
     <script>
@@ -575,6 +581,7 @@
       <button delay="open">window.open</button>
       <button delay="dataclone">data clone</button>
       <button delay="longtask">longtask</button>
+      <button delay="remoteConfiguration">remoteConfiguration</button>
     </div>
     <div class="get_session_repaly">
       <input id="session_replay_input" />
@@ -647,6 +654,12 @@
           action()
         } else if (delay === 'displayDate') {
           displayDate()
+        } else if (delay === 'remoteConfiguration') {
+          window.DATAFLUX_RUM.onReady(() => {
+            window.DATAFLUX_RUM.getRemoteConfiguration((res) => {
+              console.log('===getRemoteConfiguration', res)
+            })
+          })
         } else if (delay === 'testError') {
           //   sdf = xxx
           console.log(tes222t)
