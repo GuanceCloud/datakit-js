@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.45
+
+- fix: getRemoteConfiguration pre bug
+
 ## v3.2.44
 
 - fix: remove console
