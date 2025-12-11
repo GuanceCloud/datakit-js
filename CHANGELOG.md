@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.2.48
+
+- fix: update publishconfig
+- fix: add author
+- fix: style
+- fix: style
+
 ## v3.2.47
 
 - fix: add traceSmapled
