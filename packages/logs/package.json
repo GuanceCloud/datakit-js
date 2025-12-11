@@ -29,6 +29,9 @@
         "type": "git",
         "directory": "packages/logs"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "author": "dataflux",
     "license": "MIT"
 }

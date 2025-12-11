@@ -19,6 +19,9 @@
         "type": "git",
         "directory": "packages/core"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "author": "dataflux",
     "license": "MIT"
 }

@@ -30,8 +30,11 @@
         "type": "git",
         "directory": "packages/rum"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "author": "dataflux",
     "license": "MIT",
     "homepage": "https://github.com/GuanceCloud/datakit-js/README.md",
-    "gitHead": "3625f9035dd53d28c266b12e7b60144bfd442bc3"
+    "gitHead": "544efac44f6d030cf637e8af36baf5a4c5faf823"
 }
