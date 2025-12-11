@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.47
+
+- fix: add traceSmapled
+
 ## v3.2.46
 
 - fix: style
