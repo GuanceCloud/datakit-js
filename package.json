@@ -57,7 +57,10 @@
         "url": "https://github.com/DataFlux-cn/datakit-js",
         "type": "git"
     },
-    "author": "dataflux",
+    "author": {
+        "name": "dataflux",
+        "email": "dcl@jiagouyun.com"
+    },
     "license": "MIT",
     "dependencies": {
         "@babel/runtime": "^7.26.0"
