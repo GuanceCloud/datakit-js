@@ -120,7 +120,7 @@ export function injectHeadersIfTracingAllowed(
     configuration.tracingSampleRate
   )
 
-  if (!traceSampled) return
+  //   if (!traceSampled) return
   var tracer,
     traceType = tracingOption.traceType
   switch (traceType) {
