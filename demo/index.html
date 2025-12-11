@@ -222,7 +222,7 @@
           service: 'browser',
           env: 'production',
           version: '1.0.0',
-          sessionSampleRate: 0,
+          sessionSampleRate: 100,
           traceType: 'ddtrace',
           sessionReplaySampleRate: 100,
           trackInteractions: true,
@@ -235,10 +235,7 @@
           enableLongAnimationFrame: true,
           retryMaxSize: 10,
           remoteConfiguration: true,
-          generateTraceId: (context) => {
-            console.log('===context', context)
-            return 'xxxx'
-          },
+
           beforeSend: function (event, context) {
             if (event.type === 'resource' && event.resource.type === 'xhr') {
               // 这里可以往数据之中添加 responseHeaders 字段上报
