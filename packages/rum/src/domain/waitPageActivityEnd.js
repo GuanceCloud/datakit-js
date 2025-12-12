@@ -74,7 +74,6 @@ export function doWaitPageActivityEnd(
 ) {
   var pageActivityEndTimeoutId
   var hasCompleted = false
-
   var validationTimeoutId = setTimeout(function () {
     complete({ hadActivity: false })
   }, PAGE_ACTIVITY_VALIDATION_DELAY)
@@ -99,7 +98,6 @@ export function doWaitPageActivityEnd(
       }, PAGE_ACTIVITY_END_DELAY)
     }
   })
-
   var stop = function () {
     hasCompleted = true
     clearTimeout(validationTimeoutId)
@@ -107,12 +105,11 @@ export function doWaitPageActivityEnd(
     clearTimeout(maxDurationTimeoutId)
     pageActivitySubscription.unsubscribe()
   }
-
   function complete(event) {
     if (hasCompleted) {
       return
     }
-    stop()
+    stop && stop()
     pageActivityEndCallback(event)
   }
   return { stop: stop }

@@ -46,15 +46,16 @@ export function startMutationObserver(
   })
 
   var observer = new MutationObserver(monitor(mutationBatch.addMutations))
-
-  observer.observe(target, {
-    attributeOldValue: true,
-    attributes: true,
-    characterData: true,
-    characterDataOldValue: true,
-    childList: true,
-    subtree: true
-  })
+  try {
+    observer.observe(target, {
+      attributeOldValue: true,
+      attributes: true,
+      characterData: true,
+      characterDataOldValue: true,
+      childList: true,
+      subtree: true
+    })
+  } catch (err) {}
 
   return {
     stop: function () {

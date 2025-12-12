@@ -17,12 +17,15 @@ export function createDOMMutationObservable() {
         return observable.notify()
       })
     )
-    observer.observe(document, {
-      attributes: true,
-      characterData: true,
-      childList: true,
-      subtree: true
-    })
+    try {
+      observer.observe(document, {
+        attributes: true,
+        characterData: true,
+        childList: true,
+        subtree: true
+      })
+    } catch (err) {}
+
     return function () {
       return observer.disconnect()
     }
