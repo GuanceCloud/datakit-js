@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.49
+
+- fix: add mutaion try catch
+
 ## v3.2.48
 
 - fix: update publishconfig
