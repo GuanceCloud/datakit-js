@@ -20,6 +20,23 @@
         background-color: red;
       }
     </style>
+    <script>
+      window.DATAFLUX_LOGS &&
+        window.DATAFLUX_LOGS.init({
+          site: 'https://cn3-rum-openway.guance.com',
+          clientToken: 'b806cd20126446c4848605cb254f92ed',
+          version: '0.1',
+          service: 'test',
+          trackSessionAcrossSubdomains: true,
+          usePartitionedCrossSiteSessionCookie: true,
+          telemetryEnabled: true,
+          retryMaxSize: 12,
+          storeContextsToLocal: true,
+          forwardConsoleLogs: ['warn', 'info'],
+          sendContentTypeByJson: true
+        })
+      window.DATAFLUX_LOGS && window.DATAFLUX_LOGS._setDebug(true)
+    </script>
     <!-- <script
       src="https://www.datadoghq-browser-agent.com/us1/v6/datadog-rum.js"
       type="text/javascript"
@@ -678,11 +695,17 @@
           window.test()
         } else if (delay === 'testLog') {
           window.DATAFLUX_LOGS &&
-            window.DATAFLUX_LOGS.logger.info('sendMessage', {
-              name: 'sendMessage',
-              action: 'sendMessage',
-              botId: 'xxxx'
-            })
+            window.DATAFLUX_LOGS.logger.info(
+              {
+                dd: 'xxx',
+                DD_RUM_TEST: 'xxx'
+              },
+              {
+                name: 'sendMessage',
+                action: 'sendMessage',
+                botId: 'xxxx'
+              }
+            )
         } else if (delay === 'testAddAction') {
           window.DATAFLUX_RUM.addAction('test action', {
             a: 'a',

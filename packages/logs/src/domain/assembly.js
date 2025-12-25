@@ -61,25 +61,29 @@ export function startLogsAssembly(
         device: deviceInfo,
         type: RumEventType.LOGGER
       },
-      commonContext.context,
-      getRUMInternalContext(startTime),
-      rawLogsEvent,
-      messageContext
+      getRUMInternalContext(startTime)
     )
 
+    let serverLogEvent = withSnakeCaseKeys(log)
+    serverLogEvent = extend2Lev(
+      serverLogEvent,
+      commonContext.context,
+      messageContext,
+      rawLogsEvent
+    )
     if (
       (configuration.beforeSend &&
-        configuration.beforeSend(log, domainContext) === false) ||
-      (log.origin !== ErrorSource.AGENT &&
+        configuration.beforeSend(serverLogEvent, domainContext) === false) ||
+      (serverLogEvent.origin !== ErrorSource.AGENT &&
         isNullUndefinedDefaultValue(
-          logRateLimiters[log.status],
+          logRateLimiters[serverLogEvent.status],
           logRateLimiters['custom']
         ).isLimitReached())
     ) {
       return
     }
 
-    lifeCycle.notify(LifeCycleEventType.LOG_COLLECTED, withSnakeCaseKeys(log))
+    lifeCycle.notify(LifeCycleEventType.LOG_COLLECTED, serverLogEvent)
   })
 }
 
