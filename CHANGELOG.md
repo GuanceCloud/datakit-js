@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.2.50
+
+- fix: log handle sankbug
+
 ## v3.2.49
 
 - fix: add mutaion try catch
