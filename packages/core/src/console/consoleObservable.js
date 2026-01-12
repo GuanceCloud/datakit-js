@@ -2,16 +2,17 @@ import { computeStackTrace } from '../tracekit'
 import {
   createHandlingStack,
   formatErrorMessage,
-  toStackTraceString,
-  flattenErrorCauses
+  computeRawError,
+  isError
 } from '../helper/errorTools'
 import { mergeObservables, Observable } from '../helper/observable'
 import { find, map, clocksNow } from '../helper/tools'
 import { jsonStringify } from '../helper/serialisation/jsonStringify'
 import { ConsoleApiName } from '../helper/display'
 import { callMonitored } from '../helper/monitor'
-import { ErrorHandling } from '../helper/enums'
+import { ErrorHandling, NonErrorPrefix } from '../helper/enums'
 import { ErrorSource } from '../helper/errorTools'
+import { sanitize } from '../helper/sanitize'
 var consoleObservablesByApi = {}
 
 export function initConsoleObservable(apis) {
@@ -49,22 +50,23 @@ function buildConsoleLog(params, api, handlingStack) {
   var message = map(params, function (param) {
     return formatConsoleParameters(param)
   }).join(' ')
-  var error
   if (api === ConsoleApiName.error) {
-    var firstErrorParam = find(params, function (param) {
-      return param instanceof Error
-    })
-    error = {
-      stack: firstErrorParam
-        ? toStackTraceString(computeStackTrace(firstErrorParam))
-        : undefined,
-      causes: firstErrorParam
-        ? flattenErrorCauses(firstErrorParam, 'console')
-        : undefined,
+    var firstErrorParam = find(params, isError)
+    const rawError = computeRawError({
+      originalError: firstErrorParam,
       startClocks: clocksNow(),
       message: message,
       source: ErrorSource.CONSOLE,
       handling: ErrorHandling.HANDLED,
+      handlingStack: handlingStack,
+      nonErrorPrefix: NonErrorPrefix.PROVIDED,
+      useFallbackStack: false
+    })
+    rawError.message = message
+    return {
+      api: api,
+      message: message,
+      error: rawError,
       handlingStack: handlingStack
     }
   }
@@ -72,17 +74,17 @@ function buildConsoleLog(params, api, handlingStack) {
   return {
     api: api,
     message: message,
-    error: error,
+    error: undefined,
     handlingStack: handlingStack
   }
 }
 
 function formatConsoleParameters(param) {
   if (typeof param === 'string') {
-    return param
+    return sanitize(param)
   }
-  if (param instanceof Error) {
+  if (isError(param)) {
     return formatErrorMessage(computeStackTrace(param))
   }
-  return jsonStringify(param, undefined, 2)
+  return jsonStringify(sanitize(param), undefined, 2)
 }

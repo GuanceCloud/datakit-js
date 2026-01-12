@@ -23,31 +23,34 @@ export function computeRawError(data) {
   var nonErrorPrefix = data.nonErrorPrefix
   var source = data.source
   var handling = data.handling
-  var isErrorInstance = originalError instanceof Error
+  var useFallbackStack =
+    data.useFallbackStack === undefined ? true : data.useFallbackStack
+  var isErrorInstance = isError(originalError)
+  if (!stackTrace && isErrorInstance) {
+    stackTrace = computeStackTrace(originalError)
+  }
   var message = computeMessage(
     stackTrace,
     isErrorInstance,
     nonErrorPrefix,
     originalError
   )
-  var stack = hasUsableStack(isErrorInstance, stackTrace)
-    ? toStackTraceString(stackTrace)
-    : NO_ERROR_STACK_PRESENT_MESSAGE
-  var causes = isErrorInstance
-    ? flattenErrorCauses(originalError, source)
-    : undefined
-  var type = stackTrace && stackTrace.name
-
   return {
     startClocks: startClocks,
     source: source,
     handling: handling,
     originalError: originalError,
     message: message,
-    stack: stack,
+    stack: stackTrace
+      ? toStackTraceString(stackTrace)
+      : useFallbackStack
+      ? NO_ERROR_STACK_PRESENT_MESSAGE
+      : undefined,
     handlingStack: handlingStack,
-    type: type,
-    causes: causes
+    type: stackTrace ? stackTrace.name : undefined,
+    causes: isErrorInstance
+      ? flattenErrorCauses(originalError, source)
+      : undefined
   }
 }
 function computeMessage(
@@ -176,4 +179,11 @@ export function flattenErrorCauses(error, parentSource) {
     currentError = currentError.cause
   }
   return causes.length ? causes : undefined
+}
+
+export function isError(error) {
+  return (
+    error instanceof Error ||
+    Object.prototype.toString.call(error) === '[object Error]'
+  )
 }
