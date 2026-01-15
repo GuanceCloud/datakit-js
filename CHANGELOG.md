@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.2.51
+
+- feat: add monitorError
+- fix: console error format
+
 ## v3.2.50
 
 - fix: log handle sankbug
