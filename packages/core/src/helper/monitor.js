@@ -25,17 +25,19 @@ export function callMonitored(fn, context, args) {
   try {
     return fn.apply(context, args)
   } catch (e) {
-    displayIfDebugEnabled(e)
-    if (onMonitorErrorCollected) {
-      try {
-        onMonitorErrorCollected(e)
-      } catch (e) {
-        displayIfDebugEnabled(e)
-      }
+    monitorError(e)
+  }
+}
+export function monitorError(e) {
+  displayIfDebugEnabled(e)
+  if (onMonitorErrorCollected) {
+    try {
+      onMonitorErrorCollected(e)
+    } catch (e) {
+      displayIfDebugEnabled(e)
     }
   }
 }
-
 export function displayIfDebugEnabled() {
   var args = [].slice.call(arguments)
   //   display.error.apply(null, ['[MONITOR]'].concat(args))
