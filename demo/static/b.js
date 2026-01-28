@@ -1,4 +1,4 @@
-import { each, isArray, map, some, keys } from './c'
+import { each, isArray, map, some, keys, triggerCError } from './c'
 /**
  * IE fallback
  * https://developer.mozilla.org/en-US/docs/Web/API/HTMLHyperlinkElementUtils/origin
@@ -96,4 +96,8 @@ export function heavyComputation(name) {
   const a = '===name' + name
   console.log(a)
   longtask2()
+}
+
+export function triggerCrossFileError() {
+  return triggerCError()
 }

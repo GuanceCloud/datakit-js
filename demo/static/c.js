@@ -210,6 +210,28 @@ export var every = function (arr, fn, self) {
   }
   return flag
 }
+
+function helperLevel3(target) {
+  if (target === null) {
+    var err = new Error('Multi-frame error for sourcemap testing')
+    throw err
+  }
+  return target.notExists
+}
+
+function helperLevel2() {
+  var target = null
+  return helperLevel3(target)
+}
+
+function helperLevel1() {
+  return helperLevel2()
+}
+
+export function triggerCError() {
+  // Intentionally cause a multi-frame TypeError for sourcemap testing
+  return helperLevel1()
+}
 export var matchList = function (list, value, useStartsWith) {
   if (useStartsWith === undefined) {
     useStartsWith = false

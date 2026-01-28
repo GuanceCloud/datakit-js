@@ -1,19 +1,29 @@
-// export * from './a'
-// export * from './b'
-// export * from './c'
-import { objectHasValue, heavyComputation } from './b'
+export * from './a'
+export * from './b'
+export * from './c'
+// import { objectHasValue, heavyComputation } from './b'
 
-document.getElementById('longtask_button').addEventListener('click', () => {
-  let start = Date.now()
-  while (Date.now() - start < 100) {
-    // block main thread for 100ms
-  }
-  console.log('long task done')
-})
-document
-  .getElementById('longtask_button_func_name')
-  .addEventListener('click', () => {
-    heavyComputation('test')
-  })
+// document.getElementById('longtask_button').addEventListener('click', () => {
+//   let start = Date.now()
+//   while (Date.now() - start < 100) {
+//     // block main thread for 100ms
+//   }
+//   console.log('long task done')
+// })
+// document
+//   .getElementById('longtask_button_func_name')
+//   .addEventListener('click', () => {
+//     heavyComputation('test')
+//   })
 
-objectHasValue('xxx')
+// objectHasValue('xxx')
+
+import { triggerCrossFileError } from './b'
+
+setTimeout(() => {
+  triggerCrossFileError()
+}, 3000)
+
+export function loadCModule() {
+  return import(/* webpackChunkName: "c-chunk" */ './c')
+}
