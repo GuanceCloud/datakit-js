@@ -1,3 +1,4 @@
+const path = require('path')
 const webpackConfig = require('../../webpack.base')({
   mode: 'development',
   types: ['jasmine', 'chrome'],
@@ -35,6 +36,22 @@ module.exports = {
     devtool: false,
     mode: 'development',
     plugins: webpackConfig.plugins,
+    resolve: {
+      alias: {
+        '@cloudcare/browser-core$': path.resolve(
+          __dirname,
+          '../../packages/core/src/index.js'
+        ),
+        '@cloudcare/browser-core/worker$': path.resolve(
+          __dirname,
+          '../../packages/core/src/worker.js'
+        ),
+        '@cloudcare/browser-worker$': path.resolve(
+          __dirname,
+          '../../packages/worker/src/index.js'
+        )
+      }
+    },
     optimization: {
       // By default, karma-webpack creates a bundle with one entry point for each spec file, but
       // with all dependencies shared.  Our test suite does not support sharing dependencies, each

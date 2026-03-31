@@ -1,0 +1,461 @@
+# TODOLIST
+
+## Current Status
+
+- Monorepo docs added: `AGENTS.md`
+- Unit test expansion focused on `packages/core/src`
+- Current test command status: `npm run test:unit` passes
+- Latest observed result: `463 SUCCESS`
+- Latest observed coverage:
+  - Statements: `65.63%`
+  - Branches: `55.04%`
+  - Functions: `68.07%`
+  - Lines: `65.85%`
+
+## Completed
+
+- Added helper tests:
+  - `boundedBuffer`
+  - `catchUserErrors`
+  - `createEventRateLimiter`
+  - `errorTools`
+  - `eventEmitter`
+  - `instrumentMethod`
+  - `limitModification`
+  - `connectivity`
+  - `displayAlreadyInitializedError`
+  - `display`
+  - `encoder`
+  - `enums`
+  - `lifeCycle`
+  - `mobileUtil`
+  - `monitor`
+  - `polyfills`
+  - `sanitize`
+  - `tools`
+  - `tools.browser`
+  - `tools.more`
+  - `tools.legacy`
+  - `valueHistory`
+  - `byteUtils`
+  - `deviceInfo`
+  - `getZoneJsOriginalValue`
+  - `readBytesFromStream`
+  - `requestIdleCallback`
+  - `taskQueue`
+  - `timer`
+- Added serialisation tests:
+  - `const`
+  - `contextManager`
+  - `customerDataTracker`
+  - `jsonStringify`
+  - `rowData`
+  - `storedContextManager`
+- Added session tests:
+  - `sessionConstants`
+  - `sessionInCookie`
+  - `sessionInLocalStorage`
+  - `sessionManagement`
+  - `sessionStore`
+  - `sessionState`
+  - `sessionStoreOperations`
+- Added transport tests:
+  - `batch`
+  - `eventBridge`
+  - `flushController`
+  - `httpRequest`
+  - `sendWithRetryStrategy`
+  - `startBatchWithReplica`
+- Added browser tests:
+  - `addEventListener`
+  - `asyncClocks`
+  - `cookie`
+  - `fetchObservable`
+  - `htmlDomUtils`
+  - `pageExitObservable`
+  - `runOnReadyState`
+  - `scroll`
+  - `urlPolyfill`
+  - `xhrObservable`
+- Added console/report/error/trace tests:
+  - `consoleObservable`
+  - `trackRuntimeError`
+  - `reportObservable`
+  - `computeStackTrace`
+  - `tracekit`
+- Added telemetry tests:
+  - `telemetry`
+  - `types`
+  - `types`
+- Added init tests:
+  - `init`
+- Added barrel/export tests:
+  - `index`
+  - `tracekit/index`
+  - `transport/index`
+  - `user/index`
+- Added configuration tests:
+  - `configuration`
+  - `remoteConfiguration`
+  - `transportConfiguration`
+- Added data mapping tests:
+  - `dataMap`
+- Added user tests:
+  - `user`
+- Added initial `packages/rum/src` tests:
+  - `constants`
+  - `types/index`
+  - `types/sessionReplayConstants`
+  - `domain/replay/replayStats`
+- Added more `packages/rum/src` tests:
+  - `domain/trackEventCounts`
+  - `domain/performanceUtils`
+  - `domain/replay/segmentCollection/buildReplayPayload`
+  - `domain/contexts/commonContext`
+  - `domain/contexts/displayContext`
+  - `domain/contexts/internalContext`
+  - `domain/contexts/urlContexts`
+  - `domain/contexts/viewContexts`
+  - `domain/contexts/pageStateHistory`
+  - `domain/configuration`
+  - `transport/startRumBatch`
+  - `transport/startRumEventBridge`
+  - `domain/rumSessionManager`
+  - `domain/contexts/foregroundContexts`
+  - `domain/replay/startRecordBridge`
+  - `domain/replay/segmentCollection/segment`
+  - `domain/waitPageActivityEnd`
+  - `domain/deflate/deflateEncoder`
+  - `domain/deflate/deflateWorker`
+  - `boot/recorderApi`
+  - `index`
+  - `domain/performanceObservable`
+  - `domain/waitPageActivityEnd` (`createPageActivityObservable`)
+  - `domain/assembly`
+  - `domain/firstInputPolyfill`
+  - `domain/domMutationObservable`
+  - `domain/deflate/index`
+  - `domain/usr/index`
+  - `domain/rumEventsCollection/longTask/longTaskCollection`
+  - `domain/rumEventsCollection/longTask/longAnimationFrameCollection`
+  - `domain/rumEventsCollection/view/trackInteractionToNextPaint`
+  - `domain/replay/segmentCollection/index`
+  - `domain/replay/record/index`
+  - `domain/replay/record/utils`
+  - `domain/replay/record/serializationUtils`
+  - `domain/rumEventsCollection/resource/resourceUtils`
+  - `domain/replay/segmentCollection/segmentCollection`
+  - `domain/tracing/sampler`
+  - `domain/tracing/traceIdentifier`
+  - `domain/tracing/getDocumentTraceId`
+  - `domain/tracing/ddtraceTracer`
+  - `domain/tracing/jaegerTracer`
+  - `domain/tracing/w3cTraceParentTracer`
+  - `domain/tracing/zipkinMultiTracer`
+  - `domain/tracing/zipkinSingleTracer`
+  - `domain/tracing/skywalkingTracer`
+  - `domain/tracing/tracer`
+  - `domain/rumEventsCollection/error/errorCollection`
+  - `domain/rumEventsCollection/error/trackConsoleError`
+  - `domain/rumEventsCollection/error/trackReportError`
+  - `domain/rumEventsCollection/actions/computeFrustration`
+  - `domain/rumEventsCollection/actions/actionCollection`
+  - `domain/rumEventsCollection/actions/clickChain`
+  - `domain/rumEventsCollection/actions/interactionSelectorCache`
+  - `domain/rumEventsCollection/actions/getActionNameFromElement`
+  - `domain/rumEventsCollection/actions/getSelectorsFromElement`
+  - `domain/rumEventsCollection/actions/listenActionEvents`
+  - `domain/rumEventsCollection/view/interactionCountPolyfill`
+  - `domain/rumEventsCollection/view/trackFirstHidden`
+  - `domain/rumEventsCollection/view/trackNavigationTimings`
+  - `domain/rumEventsCollection/view/trackScrollMetrics`
+  - `domain/rumEventsCollection/view/trackViewEventCounts`
+  - `domain/rumEventsCollection/view/trackFirstContentfulPaint`
+  - `domain/rumEventsCollection/view/trackLargestContentfulPaint`
+  - `domain/rumEventsCollection/view/trackFirstInput`
+  - `domain/rumEventsCollection/view/trackLoadingTime`
+  - `domain/rumEventsCollection/view/viewCollection`
+  - `domain/initViewportObservable`
+  - `domain/locationChangeObservable`
+  - `domain/rumEventsCollection/resource/matchRequestResourceEntry`
+  - `domain/rumEventsCollection/resource/resourceCollection`
+  - `domain/rumEventsCollection/resource/retrieveInitialDocumentResourceTiming`
+- Fixed one real implementation issue in `packages/core/src/report/reportObservable.js`
+  - Added missing `ErrorSource` / `ErrorHandling` imports so report events are emitted correctly
+- Fixed one real implementation issue in `packages/core/src/browser/asyncClocks.js`
+  - Passed the request start timestamp into remote clock offset computation instead of reading an out-of-scope variable
+- Fixed one real implementation issue in `packages/core/src/helper/polyfills.js`
+  - Passed the constructor context into `initialValues.forEach()` so `WeakSet` initialization works with seed values
+- Fixed real implementation issues in `packages/core/src/helper/tools.js`
+  - `sessionStorage.isSupport()` now checks `window.sessionStorage` instead of recursively calling the helper object itself
+  - `getHostname()` now uses `new URL(url)` so valid URLs resolve correctly
+- Fixed one real implementation issue in `packages/core/src/synthetics/syntheticsWorkerValues.js`
+  - Non-string globals no longer block fallback to cookie-backed synthetics ids
+- Fixed one real implementation issue in `packages/core/src/synthetics/syntheticsWorkerValues.js`
+  - Non-string globals no longer block fallback to cookie-backed synthetics ids
+- Fixed the unit-test bundling path for workspace package imports
+  - Karma now aliases `@cloudcare/browser-core`, `@cloudcare/browser-core/worker`, and `@cloudcare/browser-worker` to local source entrypoints
+  - This prevents coverage collisions caused by mixing `src` imports with `cjs`/`esm`/`bundle` package entrypoints in the same test run
+- Improved `packages/core/src/helper/deviceInfo.js`
+  - Fixed version-field mixups
+  - Removed malformed browser list entry
+  - Added safer `mimeTypes` access
+  - Added runtime `getDeviceInfo()` entry point while preserving `deviceInfo` export
+  - Kept `getGeoPostion` compatibility through aliasing
+  - Refactored internal parsing to use explicit per-call state instead of relying on ambient `this`
+  - Added HarmonyOS detection and version parsing
+  - Expanded tests for HarmonyOS, Edge UA variants, Opera+iPad classification, and missing `mimeTypes` fallback
+- Fixed one real implementation issue in `packages/rum/src/domain/tracing/skywalkingTracer.js`
+  - `getSkyWalkingSw8()` now reads `this._env` instead of undefined `this.env`, so the service portion of the `sw8` header is generated correctly
+- Fixed real implementation issues in `packages/rum/src/domain/rumEventsCollection/error/trackReportError.js`
+  - Subscribed to both `cspViolation` and `intervention` report types instead of accidentally collapsing the array with the comma operator
+  - Mapped report payload `type` correctly instead of reading a missing `subtype` field
+
+## In Progress
+
+- Continue pushing `packages/core/src` coverage above current level
+- Prefer stable pure-logic and light browser-integration tests
+- Expand `packages/rum/src` carefully now that package-alias collisions are fixed
+- Keep prioritizing `packages/rum/src/domain/tracing/*` and other pure-logic modules that raise coverage without heavy browser side effects
+- Continue with `packages/rum/src/domain/rumEventsCollection/resource/*` and nearby pure helper modules before moving to heavier collection flows
+- Start opening `packages/rum/src/domain/rumEventsCollection/error/*` and adjacent collection modules now that the basic resource/error collection wiring is covered
+- Continue with remaining `packages/rum/src/domain/rumEventsCollection/error/*` and then move to adjacent pure collection helpers before heavier view/action flows
+- `domain/rumEventsCollection/error/errorCollection`
+  - `doStartErrorCollection()` raw-error mapping and custom handled errors are covered
+  - `startErrorCollection()` now also has coverage for error-session marking, renewal reset, and already-marked-session behavior
+- `domain/rumEventsCollection/actions/*`
+  - `computeFrustration()` now covers rage-click aggregation, dead-click detection, and interactive-target exclusions
+  - `actionCollection()` now covers auto action assembly and manual action injection
+  - `clickChain()` now covers append/finalize, dissimilar-click rejection, and stop behavior
+  - `interactionSelectorCache` now covers read-and-delete plus stale-entry eviction
+  - `getActionNameFromElement()` now covers default/custom programmatic attributes, labels, and `aria-labelledby`
+  - `getSelectorsFromElement()` now covers detached elements, stable attributes, id selectors, ancestor composition, and scope-support probing
+  - `listenActionEvents()` now covers pointer-down/up wiring, selection/input/scroll activity capture, and invalid pointer filtering
+- `domain/rumEventsCollection/view/*`
+  - `interactionCountPolyfill()` now covers observer-based interaction id estimation
+  - `trackFirstHidden()` now covers already-hidden, performance-entry, and event-driven branches
+  - `trackNavigationTimings()` now covers post-load processing and incomplete-navigation filtering
+  - `trackScrollMetrics()` now covers max-depth/max-height aggregation through injected scroll values
+  - `trackViewEventCounts()` now covers view-scoped child-event counting and stop behavior
+  - `trackFirstContentfulPaint()` now covers buffered paint entry filtering
+  - `trackLargestContentfulPaint()` now covers biggest-valid-entry selection and target selector capture
+  - `trackFirstInput()` now covers delay computation and target selector capture
+  - `trackLoadingTime()` now covers initial-load candidate selection and first-hidden filtering
+  - `viewCollection()` now covers `VIEW_UPDATED` to raw view event assembly, replay stats, page states, display scroll metrics, and custom timings
+- `domain/initViewportObservable`
+  - singleton reuse, visual viewport size calculation, and resize notifications are covered
+- `domain/locationChangeObservable`
+  - hash-change and history-change notifications are covered
+- `domain/assembly`
+  - Raw-event assembly, common-context merge, action attachment, and `beforeSend` drop behavior for non-view events are covered
+- `domain/firstInputPolyfill`
+  - First cancelable input capture, non-cancelable filtering, and pointerup/pointercancel branching are covered
+- `domain/domMutationObservable`
+  - Constructor fallback, mutation notifications, disconnect cleanup, and missing-observer behavior are covered
+- `domain/deflate/index`
+  - Deflate barrel exports are covered
+- `domain/usr/index`
+  - No-strategy noop behavior plus localStorage/cookie-backed anonymous id caching are covered
+- `domain/rumEventsCollection/longTask/longTaskCollection`
+  - Long-task performance entry collection, raw event assembly, and stop cleanup are covered
+- `domain/rumEventsCollection/longTask/longAnimationFrameCollection`
+  - Long animation frame event assembly, nested script serialization, and stop cleanup are covered
+- `domain/rumEventsCollection/view/trackInteractionToNextPaint`
+  - Support detection, native interaction-count tracking, unsupported fallback, INP aggregation, selector reuse, and stop cleanup are covered
+- `domain/replay/segmentCollection/index`
+  - Segment collection barrel exports are covered
+- `domain/replay/record/index`
+  - Replay record barrel exports are covered
+- `domain/replay/record/utils`
+  - Touch detection, array-like iteration, incremental snapshot assembly, and nested CSS rule path calculation are covered
+- `domain/replay/record/serializationUtils`
+  - CSS compatibility patching, absolute URL conversion, srcset normalization, and document-relative URL expansion are covered
+
+## Next Priority
+
+- `packages/core/src/helper/tools.js`
+  - Core browser/network/storage helpers are covered
+  - `ajax` and `loadScript` core branches are now covered
+  - Media query / screen orientation branches are now covered
+  - Remaining work is mostly lower-value legacy branches
+- `packages/core/src/helper/lifeCycle.js`
+  - Event constants, notify, and unsubscribe behavior are covered
+- `packages/core/src/helper/display.js`
+  - Export surface and bound console helpers are covered
+- `packages/core/src/helper/enums.js`
+  - Key enum surfaces are covered
+- `packages/core/src/helper/serialisation/rowData.js`
+  - Escaping helpers for row, tag, and field values are covered
+- `packages/core/src/helper/serialisation/const.js`
+  - Customer data type constants are covered
+- `packages/core/src/helper/mobileUtil.js`
+  - Non-iOS bridge construction, send/listen flows, and error swallowing are covered
+  - iOS-specific bootstrap branches are still untested because the module snapshots UA at load time
+- `packages/core/src/helper/encoder.js`
+  - Core behavior is covered
+- `packages/core/src/helper/polyfills.js`
+  - Core behavior is covered
+- `packages/core/src/configuration/transportConfiguration.js`
+  - Core endpoint and intake predicate behavior is covered
+- `packages/core/src/configuration/configuration.js`
+  - Core validation and default-building behavior is covered
+- `packages/core/src/configuration/remoteConfiguration.js`
+  - Core key simplification, modifiable-field filtering, endpoint building, and fetch/apply flow are covered
+- `packages/core/src/dataMap.js`
+  - Key mapping structure is covered with targeted assertions
+- `packages/core/src/telemetry/telemetry.js`
+  - Pre-start buffering, fake telemetry sink, deduplication, formatting, and frame scrubbing are covered
+- `packages/core/src/telemetry/types.js`
+  - Telemetry enum surfaces are covered
+- `packages/core/src/synthetics/syntheticsWorkerValues.js`
+  - Cookie/global fallback behavior is covered
+- `packages/core/src/transport/index.js`
+  - Transport barrel exports are covered
+- `packages/core/src/worker.js`
+  - Worker re-export surface is covered
+- `packages/core/src/telemetry/types.js`
+  - Telemetry enum surfaces are covered
+- `packages/core/src/synthetics/syntheticsWorkerValues.js`
+  - Cookie/global fallback behavior is covered
+- `packages/core/src/transport/index.js`
+  - Transport barrel exports are covered
+- `packages/core/src/worker.js`
+  - Worker re-export surface is covered
+- `packages/core/src/user/user.js`
+  - Core sanitize and validation behavior is covered
+- `packages/core/src/session/sessionStore.js`
+  - Core strategy selection, renew/update/expire flow, and observables are covered
+- `packages/core/src/session/sessionManagement.js`
+  - Initial context creation, expire handling, and activity-triggered renewal are covered
+- `packages/core/src/session/sessionConstants.js`
+  - Session timing and persistence constants are covered
+- `packages/core/src/index.js`
+  - Core public export surface is smoke-tested
+- `packages/core/src/user/index.js`
+  - User barrel exports are covered
+- `packages/core/src/tracekit/index.js`
+  - Tracekit barrel exports are covered
+- `packages/core/src/transport/httpRequest.js`
+  - Keepalive fetch, xhr fallback, and beacon-on-exit paths are covered
+- `packages/core/src/transport/startBatchWithReplica.js`
+  - Batch factory wiring and proxy methods are covered
+- `packages/core/src/helper/deviceInfo.js`
+  - Main compatibility-safe cleanup is done
+  - Further work should only target lower-value heuristic cleanup or extra UA fixtures
+- `packages/core/src/browser/fetchObservable.js`
+  - Most core branches covered; only lower-priority edge cases remain
+- `packages/core/src/helper/readBytesFromStream.js`
+  - Core read/limit/error/cancel branches are now covered; only unusual stream edge cases remain
+- `packages/core/src/browser/xhrObservable.js`
+  - Most core branches covered; only lower-priority edge cases remain
+- `packages/core/src/browser/cookie.js`
+  - Core read/write/auth/site branches covered
+- `packages/rum/src/constants.js`
+  - Privacy constants and default privacy-level mapping are covered
+- `packages/rum/src/types/sessionReplayConstants.js`
+  - Replay enum surfaces are covered
+- `packages/rum/src/types/index.js`
+  - Barrel re-exports are covered
+- `packages/rum/src/domain/replay/replayStats.js`
+  - Stats creation, accumulation, eviction, and empty-delete behavior are covered
+- `packages/rum/src/domain/trackEventCounts.js`
+  - Child-event counting, frustration aggregation, and unsubscribe behavior are covered
+- `packages/rum/src/domain/performanceUtils.js`
+  - Navigation-entry fallback and deprecated timing computation are covered
+- `packages/rum/src/domain/replay/segmentCollection/buildReplayPayload.js`
+  - Nested metadata flattening and multipart payload assembly are covered
+- `packages/rum/src/domain/contexts/commonContext.js`
+  - Global/user/replay context assembly is covered
+- `packages/rum/src/domain/contexts/displayContext.js`
+  - Initial viewport snapshot, resize updates, and stop flow are covered
+- `packages/rum/src/domain/contexts/internalContext.js`
+  - Legacy internal-context assembly, path fallback, and missing-context guard are covered
+- `packages/rum/src/domain/contexts/urlContexts.js`
+  - Initial view URL context, close-on-view-end, route-change rollover, and referrer preservation are covered
+- `packages/rum/src/domain/contexts/viewContexts.js`
+  - View creation, update, close, and session-renew reset behavior are covered
+- `packages/rum/src/domain/contexts/pageStateHistory.js`
+  - State transitions, history selection, selectable-entry cap, and state queries are covered
+- `packages/rum/src/domain/configuration.js`
+  - Application-id requirement, tracing option normalization, legacy precedence warning, build-env merge, and invalid option rejection are covered
+- `packages/rum/src/transport/startRumBatch.js`
+  - Encoder wiring, view-event upsert path, non-view add path, telemetry forwarding, and flush path are covered
+- `packages/rum/src/transport/startRumEventBridge.js`
+  - Bridge send path with processed row-data payload is covered
+- `packages/rum/src/domain/rumSessionManager.js`
+  - Stub session defaults, replay capability gating, error-session transition, and exported constants are covered
+- `packages/rum/src/domain/contexts/foregroundContexts.js`
+  - Initial foreground state, explicit period boundaries, selection windows, and stop cleanup are covered
+- `packages/rum/src/domain/replay/startRecordBridge.js`
+  - Session replay bridge send path with current view binding is covered
+- `packages/rum/src/domain/replay/segmentCollection/segment.js`
+  - Segment record accumulation, metadata generation, replay-stats updates, and empty-flush guard are covered
+- `packages/rum/src/domain/waitPageActivityEnd.js`
+  - Validation timeout, end-delay completion after activity, and explicit stop behavior are covered
+- `packages/rum/src/domain/deflate/deflateEncoder.js`
+  - Async write/finish flow, reset behavior, and finishSync pending-data behavior are covered
+- `packages/rum/src/domain/deflate/deflateWorker.js`
+  - Loading-to-initialized transition, timeout failure path, and error-state transition are covered
+- `packages/rum/src/boot/recorderApi.js`
+  - Unsupported-bridge noop behavior, worker-backed recording startup, page-exit stop, and session renew restart flow are covered
+- `packages/rum/src/index.js`
+  - Top-level public API export is smoke-tested
+- `packages/rum/src/domain/performanceObservable.js`
+  - Supported-entry-type detection and resource-entry filtering are covered
+- `packages/rum/src/domain/waitPageActivityEnd.js`
+  - `createPageActivityObservable` now has request/DOM activity coverage in addition to the end-wait state machine
+- `packages/rum/src/domain/rumEventsCollection/resource/resourceUtils.js`
+  - Resource type classification, protocol/delivery helpers, byte-size logic, cache/304 heuristics, timing validation, performance details, request-url filtering, and data-URL sanitization are covered
+- `packages/rum/src/domain/replay/segmentCollection/segmentCollection.js`
+  - Segment-context building, page-exit flush, duration-limit flush, bytes-limit flush, and locked/unlocked view-change behavior are covered
+- `packages/rum/src/domain/tracing/sampler.js`
+  - Fixed-rate shortcuts, cache reuse, BigInt fallback, and Knuth-factor sampling helper are covered
+- `packages/rum/src/domain/tracing/traceIdentifier.js`
+  - Crypto/msCrypto sourcing, positive identifier generation, decimal conversion, and padded hex formatting are covered
+- `packages/rum/src/domain/tracing/getDocumentTraceId.js`
+  - Meta lookup, comment lookup, trace-data parsing, and outdated-trace rejection are covered
+- `packages/rum/src/domain/assembly.js`
+  - Raw event to final RUM event assembly, context merge behavior, action attachment, and non-view `beforeSend` dropping are covered
+- `packages/rum/src/domain/firstInputPolyfill.js`
+  - First-input polyfill event filtering and pointer-specific completion logic are covered
+- `packages/rum/src/domain/domMutationObservable.js`
+  - MutationObserver constructor selection, notify flow, and unsubscribe cleanup are covered
+- `packages/rum/src/domain/deflate/index.js`
+  - Deflate barrel export surface is covered
+- `packages/rum/src/domain/usr/index.js`
+  - Anonymous id cache initialization for cookie/localStorage strategies is covered
+- `packages/rum/src/domain/rumEventsCollection/longTask/longTaskCollection.js`
+  - Long-task performance entry collection and raw long-task RUM event assembly are covered
+- `packages/rum/src/domain/rumEventsCollection/longTask/longAnimationFrameCollection.js`
+  - Long animation frame collection and nested script field mapping are covered
+- `packages/rum/src/domain/rumEventsCollection/view/trackInteractionToNextPaint.js`
+  - INP support detection, interaction-count tracking, capped INP value reporting, and selector reuse are covered
+- `packages/rum/src/domain/replay/segmentCollection/index.js`
+  - Segment collection barrel export surface is covered
+- `packages/rum/src/domain/replay/record/index.js`
+  - Replay record barrel export surface is covered
+- `packages/rum/src/domain/replay/record/utils.js`
+  - Record utility helpers for touch detection, incremental snapshots, and nested CSS rule paths are covered
+- `packages/rum/src/domain/replay/record/serializationUtils.js`
+  - CSS URL normalization and srcset/document absolute-url helpers are covered
+- `packages/rum/src/domain/rumEventsCollection/actions/interactionSelectorCache.spec.js`
+  - Selector retrieval test now uses the current relative timestamp, removing a random-order expiry flake
+
+## Deferred / Needs Care
+
+- `packages/rum` imports can still regress if tests resolve workspace packages through built artifacts
+  - The March 31, 2026 crash was traced to mixed resolution between direct `packages/core/src/*` imports and `@cloudcare/browser-core` package entrypoints
+  - Keep the Karma alias mapping in place when adding more rum/logs/worker specs
+- Coverage ratio can drop sharply when a new smoke test imports a top-level rum entry
+  - `packages/rum/src/index.spec.js` loads the public entry path, which pulls many previously uncounted rum modules into the coverage denominator
+  - Treat the drop from `70.13%` to `45.8%` on March 31, 2026 as expanded coverage scope, not a regression in passing tests
+- Modules with heavy global side effects or module-load caching
+  - Example: `deviceInfo`
+  - Runtime entry point now exists, but the exported `deviceInfo` constant is still a module-load snapshot by design for compatibility
+
+## Notes
+
+- Existing user changes were left untouched:
+  - `demo/index.html`
+  - `packages/rum/src/domain/rumEventsCollection/view/trackCumulativeLayoutShift.js`
+- `reportObservable.js` is intentionally modified as part of the testing work because the missing imports were a real runtime bug, not a test-only issue

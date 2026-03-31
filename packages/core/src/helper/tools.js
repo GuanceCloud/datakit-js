@@ -764,9 +764,9 @@ export var sessionStorage = {
     var key = '__sensorsdatasupport__'
     var val = 'testIsSupportStorage'
     try {
-      if (sessionStorage && sessionStorage.setItem) {
-        sessionStorage.setItem(key, val)
-        sessionStorage.removeItem(key, val)
+      if (window.sessionStorage && window.sessionStorage.setItem) {
+        window.sessionStorage.setItem(key, val)
+        window.sessionStorage.removeItem(key, val)
         supported = true
       } else {
         supported = false
@@ -958,7 +958,7 @@ export var getHostname = function (url, defaultValue) {
   }
   var hostname = null
   try {
-    hostname = URL(url).hostname
+    hostname = new URL(url).hostname
   } catch (e) {}
   return hostname || defaultValue
 }

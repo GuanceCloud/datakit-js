@@ -1,10 +1,29 @@
 import { display } from '../helper/display'
 import { monitor } from '../helper/monitor'
+
+function getBrowserWindow() {
+  return typeof window !== 'undefined' ? window : undefined
+}
+
+function getNavigator() {
+  const browserWindow = getBrowserWindow()
+  return browserWindow && typeof browserWindow.navigator !== 'undefined'
+    ? browserWindow.navigator
+    : {}
+}
+
+function getUserAgent() {
+  return getNavigator().userAgent || ''
+}
+
+function getTarget(target, context) {
+  return target || context || {}
+}
+
 var VariableLibrary = {
-  navigator:
-    typeof window !== 'undefined' && typeof window.navigator != 'undefined'
-      ? window.navigator
-      : {},
+  get navigator() {
+    return getNavigator()
+  },
   infoMap: {
     engine: ['WebKit', 'Trident', 'Gecko', 'Presto'],
     browser: [
@@ -49,7 +68,6 @@ var VariableLibrary = {
       'Quark',
       'Qiyu',
       'Wechat',
-      ,
       'WechatWork',
       'Taobao',
       'Alipay',
@@ -63,6 +81,7 @@ var VariableLibrary = {
       'Linux',
       'Mac OS',
       'Android',
+      'HarmonyOS',
       'Ubuntu',
       'FreeBSD',
       'Debian',
@@ -130,6 +149,10 @@ var MethodLibrary = {
       Linux: u.indexOf('Linux') > -1 || u.indexOf('X11') > -1,
       'Mac OS': u.indexOf('Macintosh') > -1,
       Android: u.indexOf('Android') > -1 || u.indexOf('Adr') > -1,
+      HarmonyOS:
+        u.indexOf('HarmonyOS') > -1 ||
+        u.indexOf('OpenHarmony') > -1 ||
+        u.indexOf('HMOS') > -1,
       Ubuntu: u.indexOf('Ubuntu') > -1,
       FreeBSD: u.indexOf('FreeBSD') > -1,
       Debian: u.indexOf('Debian') > -1,
@@ -149,8 +172,9 @@ var MethodLibrary = {
       iPad: u.indexOf('iPad') > -1
     }
   }),
-  matchInfoMap: monitor(function (_this) {
-    var u = VariableLibrary.navigator.userAgent || ''
+  matchInfoMap: monitor(function (target) {
+    var _this = getTarget(target, this)
+    var u = getUserAgent()
     var match = MethodLibrary.getMatchMap(u)
     for (var s in VariableLibrary.infoMap) {
       for (var i = 0; i < VariableLibrary.infoMap[s].length; i++) {
@@ -161,14 +185,15 @@ var MethodLibrary = {
       }
     }
   }),
-  getOS: monitor(function () {
-    var _this = this
+  getOS: monitor(function (target) {
+    var _this = getTarget(target, this)
+    _this.os = ''
     MethodLibrary.matchInfoMap(_this)
     return _this.os || 'Unknown'
   }),
-  getOSVersion: monitor(function () {
-    var _this = this
-    var u = VariableLibrary.navigator.userAgent || ''
+  getOSVersion: monitor(function (target) {
+    var _this = getTarget(target, this)
+    var u = getUserAgent()
     _this.osVersion = ''
     _this.osMajor = ''
     var osVersion = {
@@ -188,6 +213,11 @@ var MethodLibrary = {
       },
       Android: function () {
         return u.replace(/^.*Android ([\d.]+);.*$/, '$1')
+      },
+      HarmonyOS: function () {
+        return u
+          .replace(/^.*(?:HarmonyOS|OpenHarmony)[\/\s]([\d.]+).*$/, '$1')
+          .replace(/^.*HMOS[\s\/]([\d.]+).*$/, '$1')
       },
       iOS: function () {
         return u.replace(/^.*OS ([\d_]+) like.*$/, '$1').replace(/_/g, '.')
@@ -221,17 +251,21 @@ var MethodLibrary = {
     }
   }),
 
-  getDeviceType: monitor(function () {
-    var _this = this
+  getDeviceType: monitor(function (target) {
+    var _this = getTarget(target, this)
     _this.device = 'PC'
     MethodLibrary.matchInfoMap(_this)
     return _this.device
   }),
   getNetwork: monitor(function () {
+    var browserWindow = getBrowserWindow()
+    if (!browserWindow || !browserWindow.navigator) {
+      return 'unknown'
+    }
     var connection =
-      window.navigator.connection ||
-      window.navigator.mozConnection ||
-      window.navigator.webkitConnection
+      browserWindow.navigator.connection ||
+      browserWindow.navigator.mozConnection ||
+      browserWindow.navigator.webkitConnection
     var result = 'unknown'
     var type = connection ? connection.type || connection.effectiveType : null
     if (type && typeof type === 'string') {
@@ -268,13 +302,12 @@ var MethodLibrary = {
     }
     return result
   }),
-  getLanguage: monitor(function () {
-    var _this = this
+  getLanguage: monitor(function (target) {
+    var _this = getTarget(target, this)
     _this.language = (function () {
+      var navigator = getNavigator()
       var language =
-        VariableLibrary.navigator.browserLanguage ||
-        VariableLibrary.navigator.language ||
-        ''
+        navigator.browserLanguage || navigator.language || ''
       var arr = language.split('-')
       if (arr[1]) {
         arr[1] = arr[1].toUpperCase()
@@ -292,14 +325,21 @@ var MethodLibrary = {
       return undefined
     }
   }),
-  getBrowserInfo: monitor(function () {
-    var _this = this
+  getBrowserInfo: monitor(function (target) {
+    var _this = getTarget(target, this)
+    _this.engine = ''
+    _this.browser = ''
     MethodLibrary.matchInfoMap(_this)
 
-    var u = VariableLibrary.navigator.userAgent || ''
+    var browserWindow = getBrowserWindow()
+    var navigator = getNavigator()
+    var u = getUserAgent()
 
     var _mime = function (option, value) {
-      var mimeTypes = VariableLibrary.navigator.mimeTypes
+      var mimeTypes = navigator.mimeTypes
+      if (!mimeTypes) {
+        return false
+      }
       for (var key in mimeTypes) {
         if (mimeTypes[key][option] == value) {
           return true
@@ -311,9 +351,9 @@ var MethodLibrary = {
     var match = MethodLibrary.getMatchMap(u)
 
     var is360 = false
-    if (typeof window !== 'undefined' && window.chrome) {
+    if (browserWindow && browserWindow.chrome) {
       var chrome_version = u.replace(/^.*Chrome\/([\d]+).*$/, '$1')
-      if (chrome_version > 36 && window.showModalDialog) {
+      if (chrome_version > 36 && browserWindow.showModalDialog) {
         is360 = true
       } else if (chrome_version > 45) {
         is360 = _mime('type', 'application/vnd.chromium.remoting-viewer')
@@ -329,18 +369,17 @@ var MethodLibrary = {
       if (_mime('type', 'application/gameplugin')) {
         match['360SE'] = true
       } else if (
-        VariableLibrary.navigator &&
-        VariableLibrary.navigator.connection &&
-        typeof VariableLibrary.navigator['connection']['saveData'] ==
-          'undefined'
+        navigator &&
+        navigator.connection &&
+        typeof navigator['connection']['saveData'] == 'undefined'
       ) {
         match['360SE'] = true
       } else {
         match['360EE'] = true
       }
     }
-    if (match['IE'] || match['Edge']) {
-      var navigator_top = window.screenTop - window.screenY
+    if (browserWindow && (match['IE'] || match['Edge'])) {
+      var navigator_top = browserWindow.screenTop - browserWindow.screenY
       switch (navigator_top) {
         case 71:
           break
@@ -542,10 +581,10 @@ var MethodLibrary = {
     }
     if (_this.browser == 'Chrome' && u.match(/\S+Browser/)) {
       _this.browser = u.match(/\S+Browser/)[0]
-      _this.version = u.replace(/^.*Browser\/([\d.]+).*$/, '$1')
+      _this.browserVersion = u.replace(/^.*Browser\/([\d.]+).*$/, '$1')
     }
     if (_this.browser == 'Edge') {
-      if (_this.version > '75') {
+      if (_this.browserVersion > '75') {
         _this.engine = 'Blink'
       } else {
         _this.engine = 'EdgeHTML'
@@ -559,7 +598,7 @@ var MethodLibrary = {
       parseInt(_this.browserVersion) > 27
     ) {
       _this.engine = 'Blink'
-    } else if (_this.browser == 'Opera' && parseInt(_this.version) > 12) {
+    } else if (_this.browser == 'Opera' && parseInt(_this.browserVersion) > 12) {
       _this.engine = 'Blink'
     } else if (_this.browser == 'Yandex') {
       _this.engine = 'Blink'
@@ -567,16 +606,17 @@ var MethodLibrary = {
     if (_this.browserVersion) {
       _this.browserMajor =
         _this.browserVersion.split('.').length &&
-        this.browserVersion.split('.')[0]
+        _this.browserVersion.split('.')[0]
     }
     return {
       browser: _this.browser,
       browserVersion: _this.browserVersion,
-      engine: _this.engine,
+      engine: _this.engine || 'Unknown',
       browserMajor: _this.browserMajor
     }
   }),
-  getGeoPostion: monitor(function (callback) {
+  getGeoPosition: monitor(function (callback) {
+    var navigator = getNavigator()
     navigator &&
       navigator.geolocation &&
       navigator.geolocation.getCurrentPosition(
@@ -589,20 +629,32 @@ var MethodLibrary = {
       )
   })
 }
-var _deviceInfo = {}
-if (typeof window !== 'undefined') {
-  _deviceInfo = {
-    os: MethodLibrary.getOS(),
-    osVersion: MethodLibrary.getOSVersion().version,
-    osVersionMajor: MethodLibrary.getOSVersion().osMajor,
-    browser: MethodLibrary.getBrowserInfo().browser,
-    browserVersion: MethodLibrary.getBrowserInfo().browserVersion,
-    browserVersionMajor: MethodLibrary.getBrowserInfo().browserMajor,
-    screenSize: window.screen.width + '*' + window.screen.height,
+
+MethodLibrary.getGeoPostion = MethodLibrary.getGeoPosition
+
+export function getDeviceInfo() {
+  const browserWindow = getBrowserWindow()
+  if (!browserWindow) {
+    return {}
+  }
+  const screen = browserWindow.screen || { width: 0, height: 0 }
+  const target = {}
+  const osInfo = MethodLibrary.getOS(target)
+  const osVersionInfo = MethodLibrary.getOSVersion(target)
+  const browserInfo = MethodLibrary.getBrowserInfo(target)
+  return {
+    os: osInfo,
+    osVersion: osVersionInfo.version,
+    osVersionMajor: osVersionInfo.osMajor,
+    browser: browserInfo.browser,
+    browserVersion: browserInfo.browserVersion,
+    browserVersionMajor: browserInfo.browserMajor,
+    screenSize: screen.width + '*' + screen.height,
     networkType: MethodLibrary.getNetwork(),
-    device: MethodLibrary.getDeviceType(),
+    device: MethodLibrary.getDeviceType(target),
     timeZone: MethodLibrary.getTimeZone(),
-    userAgent: VariableLibrary.navigator.userAgent || ''
+    userAgent: getUserAgent()
   }
 }
-export var deviceInfo = _deviceInfo
+
+export var deviceInfo = getDeviceInfo()

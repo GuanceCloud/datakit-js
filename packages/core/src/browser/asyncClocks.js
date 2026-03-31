@@ -7,10 +7,10 @@ export function fetchAndApplyRemoteClocks(initConfiguration, callback) {
   fetchRemoteClocks(initConfiguration, (serverTimestamp) => {
     const end = performance.now()
     const rtt = end - start
-    callback(applyRemoteClocks(serverTimestamp, rtt))
+    callback(applyRemoteClocks(serverTimestamp, rtt, start))
   })
 }
-function applyRemoteClocks(serverTimestamp, rtt) {
+function applyRemoteClocks(serverTimestamp, rtt, start) {
   const estimatedClientTime =
     performance.timing.navigationStart + start + rtt / 2
 

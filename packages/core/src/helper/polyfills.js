@@ -5,7 +5,7 @@ export function WeakSet(initialValues) {
   if (initialValues) {
     initialValues.forEach(function (value) {
       this.map.set(value, PLACEHOLDER)
-    })
+    }, this)
   }
 }
 WeakSet.prototype.add = function (value) {

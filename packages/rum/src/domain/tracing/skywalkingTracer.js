@@ -97,7 +97,7 @@ SkyWalkingTracer.prototype = {
       var traceIdStr = String(base64Encode(this.getTraceId()))
       var segmentId = String(base64Encode(this.getSpanId()))
       var service = String(
-        base64Encode(this._applicationId + '_rum_' + this.env)
+        base64Encode(this._applicationId + '_rum_' + this._env)
       )
       var instance = String(base64Encode(this._version))
       var endpoint = String(base64Encode(window.location.href))

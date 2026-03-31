@@ -8,13 +8,14 @@ import {
 
 export function trackReportError(configuration, errorObservable) {
   var subscription = initReportObservable(configuration, [
-    (RawReportType.cspViolation, RawReportType.intervention)
+    RawReportType.cspViolation,
+    RawReportType.intervention
   ]).subscribe(function (reportError) {
     errorObservable.notify({
       startClocks: clocksNow(),
       message: reportError.message,
       stack: reportError.stack,
-      type: reportError.subtype,
+      type: reportError.type,
       source: ErrorSource.REPORT,
       handling: ErrorHandling.UNHANDLED
     })

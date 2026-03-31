@@ -11,6 +11,8 @@ import {
 import { addEventListener } from '../browser/addEventListener'
 import { DOM_EVENT } from '../helper/enums'
 import { monitor } from '../helper/monitor'
+import { ErrorSource } from '../helper/errorTools'
+import { ErrorHandling } from '../helper/enums'
 export var RawReportType = {
   intervention: 'intervention',
   deprecation: 'deprecation',

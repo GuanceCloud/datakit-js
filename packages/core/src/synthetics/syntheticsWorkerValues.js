@@ -13,14 +13,16 @@ export function willSyntheticsInjectRum() {
 
 export function getSyntheticsTestId() {
   var value =
-    window._GUANCE_SYNTHETICS_PUBLIC_ID ||
-    getCookie(SYNTHETICS_TEST_ID_COOKIE_NAME)
+    typeof window._GUANCE_SYNTHETICS_PUBLIC_ID === 'string'
+      ? window._GUANCE_SYNTHETICS_PUBLIC_ID
+      : getCookie(SYNTHETICS_TEST_ID_COOKIE_NAME)
   return typeof value === 'string' ? value : undefined
 }
 
 export function getSyntheticsResultId() {
   var value =
-    window._GUANCE_SYNTHETICS_RESULT_ID ||
-    getCookie(SYNTHETICS_RESULT_ID_COOKIE_NAME)
+    typeof window._GUANCE_SYNTHETICS_RESULT_ID === 'string'
+      ? window._GUANCE_SYNTHETICS_RESULT_ID
+      : getCookie(SYNTHETICS_RESULT_ID_COOKIE_NAME)
   return typeof value === 'string' ? value : undefined
 }
