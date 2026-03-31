@@ -5,12 +5,12 @@
 - Monorepo docs added: `AGENTS.md`
 - Unit test expansion focused on `packages/core/src`
 - Current test command status: `npm run test:unit` passes
-- Latest observed result: `463 SUCCESS`
+- Latest observed result: `487 SUCCESS`
 - Latest observed coverage:
-  - Statements: `65.63%`
-  - Branches: `55.04%`
-  - Functions: `68.07%`
-  - Lines: `65.85%`
+  - Statements: `72.61%`
+  - Branches: `62.97%`
+  - Functions: `73.56%`
+  - Lines: `72.82%`
 
 ## Completed
 
@@ -143,6 +143,13 @@
   - `domain/replay/record/index`
   - `domain/replay/record/utils`
   - `domain/replay/record/serializationUtils`
+  - `domain/replay/record/elementsScrollPositions`
+  - `domain/replay/record/privacy`
+  - `domain/replay/record/viewports`
+  - `domain/replay/record/observers`
+  - `domain/replay/record/shadowRootsController`
+  - `domain/replay/record/serialize`
+  - `domain/replay/record/record`
   - `domain/rumEventsCollection/resource/resourceUtils`
   - `domain/replay/segmentCollection/segmentCollection`
   - `domain/tracing/sampler`
@@ -251,6 +258,11 @@
 - `domain/firstInputPolyfill`
   - First cancelable input capture, non-cancelable filtering, and pointerup/pointercancel branching are covered
 - `domain/domMutationObservable`
+
+## Performance Notes
+
+- `npm run test:unit` now spends noticeable time in webpack bundling before the browser phase. Recent successful runs observed compile times around `58s` to `59s` for `160 assets / 811 modules`.
+- This is not blocking correctness yet, but it is a real iteration-cost issue while expanding `packages/rum` coverage and should be kept in mind when choosing between more pure-unit specs and heavier browser-integrated suites.
   - Constructor fallback, mutation notifications, disconnect cleanup, and missing-observer behavior are covered
 - `domain/deflate/index`
   - Deflate barrel exports are covered
@@ -270,6 +282,14 @@
   - Touch detection, array-like iteration, incremental snapshot assembly, and nested CSS rule path calculation are covered
 - `domain/replay/record/serializationUtils`
   - CSS compatibility patching, absolute URL conversion, srcset normalization, and document-relative URL expansion are covered
+- `domain/replay/record/elementsScrollPositions`
+  - Element/document scroll-position storage and scrollingElement fallback behavior are covered
+- `domain/replay/record/privacy`
+  - Self/inherited privacy levels, masking decisions, text censoring, and text-content normalization are covered
+- `domain/replay/record/viewports`
+  - Visual/layout viewport coordinate normalization and visualViewport snapshotting are covered
+- `domain/replay/record/observers`
+  - Stable record id allocation and frustration-record emission from raw click action events are covered
 
 ## Next Priority
 
@@ -438,6 +458,14 @@
   - Record utility helpers for touch detection, incremental snapshots, and nested CSS rule paths are covered
 - `packages/rum/src/domain/replay/record/serializationUtils.js`
   - CSS URL normalization and srcset/document absolute-url helpers are covered
+- `packages/rum/src/domain/replay/record/elementsScrollPositions.js`
+  - Scroll-position storage and document-to-scrollingElement mapping are covered
+- `packages/rum/src/domain/replay/record/privacy.js`
+  - Privacy-level derivation, masking decisions, and text-content handling are covered
+- `packages/rum/src/domain/replay/record/viewports.js`
+  - Layout/visual viewport coordinate normalization helpers are covered
+- `packages/rum/src/domain/replay/record/observers.js`
+  - Record id allocation and frustration observer emission logic are covered
 - `packages/rum/src/domain/rumEventsCollection/actions/interactionSelectorCache.spec.js`
   - Selector retrieval test now uses the current relative timestamp, removing a random-order expiry flake
 

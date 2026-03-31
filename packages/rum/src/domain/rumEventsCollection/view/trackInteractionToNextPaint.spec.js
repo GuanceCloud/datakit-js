@@ -108,6 +108,7 @@ describe('trackInteractionToNextPaint', () => {
 
   it('should collect the worst interaction and reuse cached selectors', () => {
     let interactionCount = 1
+    const startTime = performance.now()
     Object.defineProperty(performance, 'interactionCount', {
       configurable: true,
       get() {
@@ -125,17 +126,17 @@ describe('trackInteractionToNextPaint', () => {
 
     const tracking = trackInteractionToNextPaint(
       {},
-      10,
+      startTime - 10,
       ViewLoadingType.INITIAL_LOAD
     )
 
-    updateInteractionSelector(20, '.cta-button')
+    updateInteractionSelector(startTime, '.cta-button')
     FakePerformanceObserver.instances[1].callback({
       getEntries() {
         return [
           {
             interactionId: 7,
-            startTime: 20,
+            startTime,
             duration: MAX_INP_VALUE + 100,
             target: null
           }
