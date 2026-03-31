@@ -64,7 +64,6 @@ export function trackCumulativeLayoutShift(configuration, viewStart, callback) {
         maxClsTarget = target ? new WeakRef(target) : undefined
         maxClsStartTime = elapsed(viewStart, entry.startTime)
       }
-
       if (cumulatedValue > maxClsValue) {
         maxClsValue = cumulatedValue
         var target = maxClsTarget && maxClsTarget.deref()

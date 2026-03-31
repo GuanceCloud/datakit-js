@@ -19,12 +19,28 @@
       custom-element {
         background-color: red;
       }
+      .cls-demo {
+        margin: 16px 0 24px;
+        border: 1px solid #d0d7de;
+        padding: 12px;
+        background: #fff8db;
+      }
+      .cls-demo__injected {
+        margin-top: 12px;
+        padding: 12px;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+      }
+      .cls-demo__injected img {
+        display: block;
+        width: 100%;
+      }
     </style>
     <script>
       window.DATAFLUX_LOGS &&
         window.DATAFLUX_LOGS.init({
           site: 'https://cn3-rum-openway.guance.com',
-          clientToken: 'b806cd20126446c4848605cb254f92ed',
+          clientToken: 'd90cd647e3c94442810cd7747a83fb72',
           version: '0.1',
           service: 'test',
           trackSessionAcrossSubdomains: true,
@@ -233,9 +249,9 @@
       })(window, document, 'script', './dataflux-rum.js', 'DATAFLUX_RUM')
       window.DATAFLUX_RUM.onReady(() => {
         window.DATAFLUX_RUM.init({
-          applicationId: 'test_longtask',
-          site: 'https://rum-openway.guance.com',
-          clientToken: '302d899c31c4448591467a862daf01de',
+          applicationId: 'test_sourcemap',
+          site: 'https://cn3-rum-openway.guance.com',
+          clientToken: 'd90cd647e3c94442810cd7747a83fb72',
           service: 'browser',
           env: 'production',
           version: '1.0.0',
@@ -564,6 +580,10 @@
   </head>
 
   <body>
+    <div class="cls-demo">
+      <div>CLS demo: 点击按钮后延迟 700ms 再插入大内容，避免被标记为 hadRecentInput。</div>
+      <div id="cls-demo-slot"></div>
+    </div>
     <div style="background-color: red; width: 100px; height: 100px" id="test">
       test
     </div>
@@ -595,6 +615,7 @@
       <button delay="open">window.open</button>
       <button delay="dataclone">data clone</button>
       <button delay="longtask">longtask</button>
+      <button delay="triggerCls">trigger CLS</button>
       <button delay="remoteConfiguration">remoteConfiguration</button>
     </div>
     <div class="get_session_repaly">
@@ -644,6 +665,23 @@
       function sleep(delay) {
         var end = performance.now() + delay
         while (performance.now() < end) {}
+      }
+      function triggerCls() {
+        const clsDemoSlot = document.getElementById('cls-demo-slot')
+        if (!clsDemoSlot) return
+        setTimeout(() => {
+          const index = clsDemoSlot.childElementCount + 1
+          clsDemoSlot.insertAdjacentHTML(
+            'beforeend',
+            `
+            <div class="cls-demo__injected">
+              <div>第 ${index} 次点击后延迟插入的内容，用来触发 Cumulative Layout Shift。</div>
+              <img src="/test.png" alt="CLS demo image" />
+              <p>这次插入发生在点击 700ms 之后，更容易避开 hadRecentInput 过滤。</p>
+            </div>
+          `
+          )
+        }, 700)
       }
       let right = 10
       function buttonsClickHandle(event) {
@@ -735,6 +773,8 @@
             // block main thread for 100ms
           }
           console.log('long task done')
+        } else if (delay === 'triggerCls') {
+          triggerCls()
         } else {
           sleep(Number(delay) - 5)
           switchColor()
