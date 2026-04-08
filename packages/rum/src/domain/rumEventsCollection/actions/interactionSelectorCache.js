@@ -11,9 +11,10 @@ export function getInteractionSelector(relativeTimestamp) {
 }
 
 export function updateInteractionSelector(relativeTimestamp, selector) {
+  var now = relativeNow()
   interactionSelectorCache.set(relativeTimestamp, selector)
   interactionSelectorCache.forEach(function (_, relativeTimestamp) {
-    if (elapsed(relativeTimestamp, relativeNow()) > CLICK_ACTION_MAX_DURATION) {
+    if (elapsed(relativeTimestamp, now) > CLICK_ACTION_MAX_DURATION) {
       interactionSelectorCache.delete(relativeTimestamp)
     }
   })

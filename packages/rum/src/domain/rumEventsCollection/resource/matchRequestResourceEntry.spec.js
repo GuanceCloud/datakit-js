@@ -81,4 +81,31 @@ describe('matchRequestResourceEntry', () => {
       })
     ).toBeUndefined()
   })
+
+  it('should match entries that are within the one-millisecond error margin', () => {
+    const edgeEntry = {
+      startTime: 9,
+      duration: 12,
+      fetchStart: 9,
+      domainLookupStart: 9,
+      domainLookupEnd: 10,
+      connectStart: 10,
+      connectEnd: 11,
+      requestStart: 11,
+      responseStart: 15,
+      responseEnd: 21,
+      toJSON: jasmine.createSpy('toJSON').and.returnValue({ id: 'edge' })
+    }
+    performance.getEntriesByName = jasmine
+      .createSpy('getEntriesByName')
+      .and.returnValue([edgeEntry])
+
+    expect(
+      matchRequestResourceEntry({
+        url: 'https://example.com/edge.js',
+        startClocks: { relative: 10 },
+        duration: 10
+      })
+    ).toEqual({ id: 'edge' })
+  })
 })

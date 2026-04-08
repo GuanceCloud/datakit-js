@@ -20,4 +20,29 @@ describe('trackConsoleError', () => {
 
     collection.stop()
   })
+
+  it('should stop forwarding console errors after stop is called', () => {
+    const errorObservable = new Observable()
+    const subscriber = jasmine.createSpy('subscriber')
+    const collection = trackConsoleError(errorObservable)
+
+    errorObservable.subscribe(subscriber)
+    collection.stop()
+    console.error(new Error('console failure after stop'))
+
+    expect(subscriber).not.toHaveBeenCalled()
+  })
+
+  it('should ignore non-error console methods', () => {
+    const errorObservable = new Observable()
+    const subscriber = jasmine.createSpy('subscriber')
+    const collection = trackConsoleError(errorObservable)
+
+    errorObservable.subscribe(subscriber)
+    console.warn('not an error')
+
+    expect(subscriber).not.toHaveBeenCalled()
+
+    collection.stop()
+  })
 })

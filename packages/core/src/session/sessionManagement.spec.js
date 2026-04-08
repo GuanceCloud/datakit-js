@@ -86,4 +86,21 @@ describe('sessionManagement', () => {
       })
     )
   })
+
+  it('should renew the session when expandOrRenewSession is called after expiration', () => {
+    const manager = createManager()
+    const renewSpy = jasmine.createSpy('renew')
+    manager.renewObservable.subscribe(renewSpy)
+
+    manager.expire()
+    manager.expandOrRenewSession()
+
+    expect(renewSpy).toHaveBeenCalledTimes(1)
+    expect(manager.findSession()).toEqual(
+      jasmine.objectContaining({
+        trackingType: 'tracked',
+        id: jasmine.any(String)
+      })
+    )
+  })
 })

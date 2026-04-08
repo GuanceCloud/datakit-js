@@ -78,6 +78,50 @@ describe('resourceCollection', () => {
     })
   })
 
+  it('should use request clocks when no matching performance timing exists', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const originalGetEntriesByName = performance.getEntriesByName
+    performance.getEntriesByName = jasmine
+      .createSpy('getEntriesByName')
+      .and.returnValue([])
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/fallback',
+      method: 'GET',
+      status: 200,
+      type: RequestType.XHR,
+      duration: 12,
+      startClocks: {
+        relative: 44,
+        timeStamp: 55
+      }
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.startTime).toBe(44)
+    expect(event.rawRumEvent.date).toBe(55)
+    expect(event.domainContext.performanceEntry).toBeUndefined()
+
+    performance.getEntriesByName = originalGetEntriesByName
+  })
+
   it('should add custom resources and preserve saved context', () => {
     const lifeCycle = new LifeCycle()
     const collected = jasmine.createSpy('collected')
@@ -163,5 +207,673 @@ describe('resourceCollection', () => {
 
     collection.stop()
     expect(FakePerformanceObserver.instances[0].disconnect).toHaveBeenCalled()
+  })
+
+  it('should omit request duration when the request overlaps a frozen page state', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => true
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/frozen',
+      method: 'GET',
+      status: 200,
+      type: RequestType.XHR,
+      duration: 45,
+      startClocks: {
+        relative: 10,
+        timeStamp: 20
+      }
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent.resource.duration).toBeUndefined()
+    expect(event.rawRumEvent.resource.type).toBe(ResourceType.XHR)
+  })
+
+  it('should discard zero response status for performance resource entries', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      (_configuration, callback) => {
+        callback({
+          name: 'https://static.example.com/app.css',
+          entryType: 'resource',
+          initiatorType: 'link',
+          startTime: 0,
+          duration: 10,
+          responseStatus: 0,
+          deliveryType: '',
+          nextHopProtocol: '',
+          decodedBodySize: 1,
+          encodedBodySize: 1,
+          transferSize: 0,
+          fetchStart: 0,
+          domainLookupStart: 0,
+          domainLookupEnd: 0,
+          connectStart: 0,
+          connectEnd: 0,
+          requestStart: 1,
+          responseStart: 5,
+          responseEnd: 10
+        })
+      }
+    )
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent.resource.status).toBeUndefined()
+    expect(event.rawRumEvent.resource.statusGroup).toBeUndefined()
+    expect(event.rawRumEvent.resource.protocol).toBeUndefined()
+  })
+
+  it("should normalize empty deliveryType to 'other' for performance resource entries", () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      (_configuration, callback) => {
+        callback({
+          name: 'https://static.example.com/app.css',
+          entryType: 'resource',
+          initiatorType: 'link',
+          startTime: 0,
+          duration: 10,
+          responseStatus: 200,
+          deliveryType: '',
+          nextHopProtocol: 'h2',
+          decodedBodySize: 1,
+          encodedBodySize: 1,
+          transferSize: 1,
+          fetchStart: 0,
+          domainLookupStart: 0,
+          domainLookupEnd: 0,
+          connectStart: 0,
+          connectEnd: 0,
+          requestStart: 1,
+          responseStart: 5,
+          responseEnd: 10
+        })
+      }
+    )
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent.resource.deliveryType).toBe('other')
+    expect(event.rawRumEvent.resource.protocol).toBe('h2')
+  })
+
+  it('should attach trace identifiers coming from performance resource entries', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      (_configuration, callback) => {
+        callback({
+          name: 'https://static.example.com/app.js',
+          entryType: 'resource',
+          initiatorType: 'script',
+          startTime: 0,
+          duration: 10,
+          responseStatus: 200,
+          deliveryType: 'cache',
+          nextHopProtocol: 'h2',
+          decodedBodySize: 1,
+          encodedBodySize: 1,
+          transferSize: 1,
+          traceId: 'entry-trace-id',
+          fetchStart: 0,
+          domainLookupStart: 0,
+          domainLookupEnd: 0,
+          connectStart: 0,
+          connectEnd: 0,
+          requestStart: 1,
+          responseStart: 5,
+          responseEnd: 10
+        })
+      }
+    )
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent._gc).toEqual({ traceId: 'entry-trace-id' })
+  })
+
+  it('should keep the original performance entry in domain context for resource timings', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const entry = {
+      name: 'https://static.example.com/app.js',
+      entryType: 'resource',
+      initiatorType: 'script',
+      startTime: 0,
+      duration: 10,
+      responseStatus: 204,
+      deliveryType: 'cache',
+      nextHopProtocol: 'h2',
+      decodedBodySize: 1,
+      encodedBodySize: 1,
+      transferSize: 1,
+      fetchStart: 0,
+      domainLookupStart: 0,
+      domainLookupEnd: 0,
+      connectStart: 0,
+      connectEnd: 0,
+      requestStart: 1,
+      responseStart: 5,
+      responseEnd: 10
+    }
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      (_configuration, callback) => {
+        callback(entry)
+      }
+    )
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.domainContext.performanceEntry).toBe(entry)
+    expect(event.rawRumEvent.resource.statusGroup).toBe('2xx')
+  })
+
+  it('should keep non-success response status groups for performance resource entries', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const entry = {
+      name: 'https://static.example.com/missing.css',
+      entryType: 'resource',
+      initiatorType: 'link',
+      startTime: 0,
+      duration: 10,
+      responseStatus: 404,
+      deliveryType: 'cache',
+      nextHopProtocol: 'h2',
+      decodedBodySize: 1,
+      encodedBodySize: 1,
+      transferSize: 1,
+      fetchStart: 0,
+      domainLookupStart: 0,
+      domainLookupEnd: 0,
+      connectStart: 0,
+      connectEnd: 0,
+      requestStart: 1,
+      responseStart: 5,
+      responseEnd: 10
+    }
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      (_configuration, callback) => {
+        callback(entry)
+      }
+    )
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent.resource.status).toBe(404)
+    expect(event.rawRumEvent.resource.statusGroup).toBe('4xx')
+  })
+
+  it('should not attach tracing metadata for performance resource entries without a trace id', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      (_configuration, callback) => {
+        callback({
+          name: 'https://static.example.com/app.js',
+          entryType: 'resource',
+          initiatorType: 'script',
+          startTime: 0,
+          duration: 10,
+          responseStatus: 200,
+          deliveryType: 'cache',
+          nextHopProtocol: 'h2',
+          decodedBodySize: 1,
+          encodedBodySize: 1,
+          transferSize: 1,
+          fetchStart: 0,
+          domainLookupStart: 0,
+          domainLookupEnd: 0,
+          connectStart: 0,
+          connectEnd: 0,
+          requestStart: 1,
+          responseStart: 5,
+          responseEnd: 10
+        })
+      }
+    )
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent._gc).toBeUndefined()
+  })
+
+  it('should add custom resources without a customer context when none is provided', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const collection = startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    collection.addResource({
+      type: ResourceType.OTHER,
+      startClocks: {
+        relative: 7,
+        timeStamp: 8
+      }
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.customerContext).toBeUndefined()
+    expect(event.rawRumEvent.resource.type).toBe(ResourceType.OTHER)
+  })
+
+  it('should keep the original custom resource in domain context', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const collection = startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+    const resource = {
+      type: ResourceType.OTHER,
+      startClocks: {
+        relative: 17,
+        timeStamp: 18
+      }
+    }
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    collection.addResource(resource)
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.startTime).toBe(17)
+    expect(event.domainContext.resource).toBe(resource)
+  })
+
+  it('should use custom resource clocks for the emitted event date', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const collection = startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    collection.addResource(
+      {
+        type: ResourceType.OTHER,
+        startClocks: {
+          relative: 70,
+          timeStamp: 80
+        }
+      },
+      {}
+    )
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.startTime).toBe(70)
+    expect(event.rawRumEvent.date).toBe(80)
+    expect(event.savedCommonContext).toEqual({})
+  })
+
+  it('should keep savedCommonContext undefined for custom resources when none is provided', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const collection = startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    collection.addResource({
+      type: ResourceType.OTHER,
+      startClocks: {
+        relative: 81,
+        timeStamp: 82
+      }
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.savedCommonContext).toBeUndefined()
+    expect(event.domainContext.resource.context).toBeUndefined()
+  })
+
+  it('should not attach tracing metadata when the request was not sampled', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/orders',
+      method: 'GET',
+      status: 200,
+      type: RequestType.FETCH,
+      duration: 10,
+      startClocks: {
+        relative: 50,
+        timeStamp: 60
+      },
+      traceId: 'trace-id',
+      spanId: 'span-id',
+      traceSampled: false
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent._gc).toBeUndefined()
+  })
+
+  it('should not attach tracing metadata when a sampled request is missing span identifiers', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/orders',
+      method: 'GET',
+      status: 200,
+      type: RequestType.FETCH,
+      duration: 10,
+      startClocks: {
+        relative: 50,
+        timeStamp: 60
+      },
+      traceId: 'trace-id',
+      traceSampled: true
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent._gc).toBeUndefined()
+  })
+
+  it('should not attach tracing metadata when a sampled request is missing a trace id', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/orders',
+      method: 'GET',
+      status: 200,
+      type: RequestType.FETCH,
+      duration: 10,
+      startClocks: {
+        relative: 50,
+        timeStamp: 60
+      },
+      spanId: 'span-id',
+      traceSampled: true
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent._gc).toBeUndefined()
+  })
+
+  it('should expose matched timing details and request domain context for completed requests', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const originalGetEntriesByName = performance.getEntriesByName
+    const matchedEntry = {
+      startTime: 19,
+      duration: 10,
+      fetchStart: 19,
+      domainLookupStart: 19,
+      domainLookupEnd: 20,
+      connectStart: 20,
+      connectEnd: 21,
+      requestStart: 21,
+      responseStart: 25,
+      responseEnd: 29,
+      responseStatus: 202,
+      deliveryType: 'cache',
+      nextHopProtocol: 'h3',
+      decodedBodySize: 2,
+      encodedBodySize: 2,
+      transferSize: 2,
+      toJSON: jasmine.createSpy('toJSON').and.returnValue({
+        startTime: 19,
+        duration: 10,
+        responseStatus: 202,
+        deliveryType: 'cache',
+        nextHopProtocol: 'h3',
+        decodedBodySize: 2,
+        encodedBodySize: 2,
+        transferSize: 2,
+        fetchStart: 19,
+        domainLookupStart: 19,
+        domainLookupEnd: 20,
+        connectStart: 20,
+        connectEnd: 21,
+        requestStart: 21,
+        responseStart: 25,
+        responseEnd: 29
+      })
+    }
+    performance.getEntriesByName = jasmine
+      .createSpy('getEntriesByName')
+      .and.returnValue([matchedEntry])
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    const xhr = {}
+    const response = { ok: true }
+    const input = { path: '/orders' }
+    const init = { method: 'POST' }
+    const error = new Error('network')
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/orders?x=1',
+      method: 'POST',
+      status: 202,
+      type: RequestType.FETCH,
+      duration: 8,
+      startClocks: {
+        relative: 20,
+        timeStamp: 30
+      },
+      xhr,
+      response,
+      input,
+      init,
+      error,
+      isAborted: true,
+      handlingStack: 'request-stack',
+      requestHeaderContexts: [{ header: 'x-test' }]
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.startTime).toBe(19)
+    expect(event.rawRumEvent.date).toEqual(jasmine.any(Number))
+    expect(event.rawRumEvent.resource.deliveryType).toBe('cache')
+    expect(event.rawRumEvent.resource.protocol).toBe('h3')
+    expect(event.domainContext.performanceEntry).toEqual(jasmine.objectContaining({ responseStatus: 202 }))
+    expect(event.domainContext.xhr).toBe(xhr)
+    expect(event.domainContext.response).toBe(response)
+    expect(event.domainContext.requestInput).toBe(input)
+    expect(event.domainContext.requestInit).toBe(init)
+    expect(event.domainContext.error).toBe(error)
+    expect(event.domainContext.isAborted).toBeTrue()
+    expect(event.domainContext.handlingStack).toBe('request-stack')
+    expect(event.domainContext.requestHeaderContexts).toEqual([{ header: 'x-test' }])
+
+    performance.getEntriesByName = originalGetEntriesByName
   })
 })

@@ -2,7 +2,9 @@ import {
   absoluteToDoc,
   fixBrowserCompatibilityIssuesInCSS,
   getAbsoluteSrcsetString,
+  getSerializedCanvasNodes,
   makeUrlAbsolute,
+  setSerializedNodeId,
   switchToAbsoluteUrl
 } from './serializationUtils'
 
@@ -51,5 +53,39 @@ describe('replay/record/serializationUtils', () => {
         '/img/a.png 1x, /img/b.png 2x'
       )
     ).toContain('/img/b.png 2x')
+  })
+
+  it('should expose connected serialized canvas nodes for auto replay sampling', () => {
+    const canvas = document.createElement('canvas')
+    document.body.appendChild(canvas)
+    setSerializedNodeId(canvas, 42)
+
+    expect(getSerializedCanvasNodes().some((node) => node === canvas)).toBeTrue()
+
+    const originalContains = document.documentElement.contains.bind(
+      document.documentElement
+    )
+    spyOn(document.documentElement, 'contains').and.callFake((node) =>
+      node === canvas ? false : originalContains(node)
+    )
+
+    expect(getSerializedCanvasNodes().some((node) => node === canvas)).toBeFalse()
+  })
+
+  it('should re-register a canvas after pruning it from the auto replay sampling set', () => {
+    const canvas = document.createElement('canvas')
+    document.body.appendChild(canvas)
+    setSerializedNodeId(canvas, 42)
+
+    let connected = false
+    spyOn(document.documentElement, 'contains').and.callFake((node) =>
+      node === canvas ? connected : false
+    )
+    expect(getSerializedCanvasNodes().some((node) => node === canvas)).toBeFalse()
+
+    connected = true
+    setSerializedNodeId(canvas, 42)
+
+    expect(getSerializedCanvasNodes().some((node) => node === canvas)).toBeTrue()
   })
 })

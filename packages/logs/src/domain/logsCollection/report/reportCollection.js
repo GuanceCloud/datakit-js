@@ -21,7 +21,7 @@ export function startReportCollection(configuration, lifeCycle) {
     var error
     if (status === StatusType.error) {
       error = createErrorFieldFromRawError(rawError)
-    } else if (report.stack) {
+    } else if (rawError.stack) {
       message += ' Found in ' + getFileFromStackTraceString(rawError.stack)
     }
 

@@ -2,9 +2,11 @@ import {
   ONE_SECOND,
   LifeCycleEventType,
   isPageExitReason,
+  assign,
   setTimeout,
   clearTimeout
 } from '@cloudcare/browser-core'
+import { IncrementalSource, RecordType } from '../../../types'
 import { buildReplayPayload } from './buildReplayPayload'
 import { createSegment } from './segment'
 
@@ -47,7 +49,8 @@ export function startSegmentCollection(
   viewContexts,
   httpRequest,
   encoder,
-  isLocked = false
+  isLocked = false,
+  additionalOptions
 ) {
   return doStartSegmentCollection(
     lifeCycle,
@@ -56,7 +59,14 @@ export function startSegmentCollection(
     },
     httpRequest,
     encoder,
-    isLocked
+    isLocked,
+    assign(
+      {
+      flushCanvasImmediately: configuration.replayCanvasFlushImmediately,
+      onSegmentFlushed: undefined
+    },
+      additionalOptions
+    )
   )
 }
 
@@ -71,8 +81,12 @@ export function doStartSegmentCollection(
   getSegmentContext,
   httpRequest,
   encoder,
-  isLocked
+  isLocked,
+  options
 ) {
+  if (options === undefined) {
+    options = {}
+  }
   var state = {
     status: SegmentCollectionStatus.WaitingForInitialRecord,
     nextSegmentCreationReason: 'init',
@@ -105,7 +119,19 @@ export function doStartSegmentCollection(
         if (isLocked) {
           return
         }
-        state.segment.flush(function (metadata, encoderResult) {
+        state.segment.flush(function (metadata, encoderResult, recordCountsByType) {
+          if (options.onSegmentFlushed) {
+            options.onSegmentFlushed({
+              creationReason: metadata.creation_reason,
+              flushReason: flushReason,
+              recordsCount: metadata.records_count,
+              recordCountsByType: recordCountsByType,
+              start: metadata.start,
+              end: metadata.end,
+              indexInView: metadata.index_in_view,
+              rawBytesCount: encoderResult.rawBytesCount
+            })
+          }
           var payload = buildReplayPayload(
             encoderResult.output,
             metadata,
@@ -167,6 +193,13 @@ export function doStartSegmentCollection(
           flushSegment('segment_bytes_limit')
         }
       })
+      if (
+        options.flushCanvasImmediately &&
+        isCanvasMutationRecord(record) &&
+        state.status === SegmentCollectionStatus.SegmentPending
+      ) {
+        flushSegment('canvas_snapshot')
+      }
     },
 
     unlockSegment: function () {
@@ -184,6 +217,15 @@ export function doStartSegmentCollection(
       unsubscribePageExited()
     }
   }
+}
+
+function isCanvasMutationRecord(record) {
+  return (
+    record &&
+    record.type === RecordType.IncrementalSnapshot &&
+    record.data &&
+    record.data.source === IncrementalSource.CanvasMutation
+  )
 }
 
 export function computeSegmentContext(

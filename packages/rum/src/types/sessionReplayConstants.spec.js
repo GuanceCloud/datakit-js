@@ -37,7 +37,8 @@ describe('sessionReplayConstants', () => {
       Input: 5,
       TouchMove: 6,
       MediaInteraction: 7,
-      StyleSheetRule: 8
+      StyleSheetRule: 8,
+      CanvasMutation: 9
     })
     expect(MouseInteractionType.Click).toBe(2)
     expect(MouseInteractionType.TouchEnd).toBe(9)

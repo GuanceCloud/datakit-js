@@ -4,7 +4,8 @@ import {
   LifeCycleEventType,
   addTelemetryDebug,
   ONE_SECOND,
-  canUseEventBridge
+  canUseEventBridge,
+  assign
 } from '@cloudcare/browser-core'
 import { record } from '../domain/replay/record'
 import { startRecordBridge } from '../domain/replay/startRecordBridge'
@@ -25,6 +26,7 @@ export function startRecording(
   httpRequest
 ) {
   var cleanupTasks = []
+  var lastReplaySegmentFlushForDebug
   var reportError = function (error) {
     lifeCycle.notify(LifeCycleEventType.RAW_ERROR_COLLECTED, { error: error })
     addTelemetryDebug('Error reported to customer', {
@@ -53,7 +55,14 @@ export function startRecording(
       viewContexts,
       replayRequest,
       encoder,
-      isRecordErrorSessionReplay
+      isRecordErrorSessionReplay,
+      {
+        onSegmentFlushed: function (segmentFlush) {
+          lastReplaySegmentFlushForDebug = cloneReplaySegmentFlushForDebug(
+            segmentFlush
+          )
+        }
+      }
     )
     addRecord = segmentCollection.addRecord
     let flushBufferSegment = segmentCollection.flushBufferSegment
@@ -92,18 +101,27 @@ export function startRecording(
     _record = record({
       emit: wrappedEmit,
       configuration: configuration,
-      lifeCycle: lifeCycle
+      lifeCycle: lifeCycle,
+      sessionManager: sessionManager
     })
   } else {
     ;({ addRecord } = startRecordBridge(viewContexts))
     _record = record({
       emit: addRecord,
       configuration: configuration,
-      lifeCycle: lifeCycle
+      lifeCycle: lifeCycle,
+      sessionManager: sessionManager
     })
   }
   cleanupTasks.push(_record.stop)
   var takeSubsequentFullSnapshot = _record.takeSubsequentFullSnapshot
+  var snapshotCanvas = _record.snapshotCanvas
+  var getSerializedNodeIdForDebug = _record.getSerializedNodeIdForDebug
+  var getLastAutoCanvasSnapshotResultForDebug =
+    _record.getLastAutoCanvasSnapshotResultForDebug
+  var getLastReplaySegmentFlushForDebug = function () {
+    return cloneReplaySegmentFlushForDebug(lastReplaySegmentFlushForDebug)
+  }
   var flushMutations = _record.flushMutations
   var subscribeViewEnded = lifeCycle.subscribe(
     LifeCycleEventType.VIEW_ENDED,
@@ -130,6 +148,28 @@ export function startRecording(
         task()
       })
     },
-    takeSubsequentFullSnapshot: takeSubsequentFullSnapshot
+    takeSubsequentFullSnapshot: takeSubsequentFullSnapshot,
+    snapshotCanvas: snapshotCanvas,
+    getSerializedNodeIdForDebug: getSerializedNodeIdForDebug,
+    getLastAutoCanvasSnapshotResultForDebug:
+      getLastAutoCanvasSnapshotResultForDebug,
+    getLastReplaySegmentFlushForDebug: getLastReplaySegmentFlushForDebug
+  }
+}
+
+function cloneReplaySegmentFlushForDebug(segmentFlush) {
+  if (!segmentFlush) {
+    return segmentFlush
+  }
+
+  return {
+    creationReason: segmentFlush.creationReason,
+    flushReason: segmentFlush.flushReason,
+    recordsCount: segmentFlush.recordsCount,
+    recordCountsByType: assign({}, segmentFlush.recordCountsByType),
+    start: segmentFlush.start,
+    end: segmentFlush.end,
+    indexInView: segmentFlush.indexInView,
+    rawBytesCount: segmentFlush.rawBytesCount
   }
 }

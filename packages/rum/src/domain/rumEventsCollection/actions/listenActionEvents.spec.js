@@ -74,4 +74,23 @@ describe('listenActionEvents', () => {
 
     listeners.stop()
   })
+
+  it('should ignore pointerup events when no click context was created', () => {
+    const onPointerDown = jasmine
+      .createSpy('onPointerDown')
+      .and.returnValue(undefined)
+    const onPointerUp = jasmine.createSpy('onPointerUp')
+    const listeners = listenActionEvents({
+      onPointerDown,
+      onPointerUp
+    })
+
+    dispatchPointerEvent('pointerdown')
+    dispatchPointerEvent('pointerup')
+
+    expect(onPointerDown).toHaveBeenCalled()
+    expect(onPointerUp).not.toHaveBeenCalled()
+
+    listeners.stop()
+  })
 })

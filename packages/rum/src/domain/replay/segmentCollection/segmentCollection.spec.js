@@ -5,6 +5,7 @@ import {
   SEGMENT_DURATION_LIMIT,
   setSegmentBytesLimit
 } from './segmentCollection'
+import { IncrementalSource, RecordType } from '../../../types'
 
 describe('segmentCollection', () => {
   let originalSegmentBytesLimit
@@ -191,5 +192,104 @@ describe('segmentCollection', () => {
     lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
 
     expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('should flush immediately for canvas mutation records when configured', () => {
+    const lifeCycle = new LifeCycle()
+    const send = jasmine.createSpy('send')
+    const encoder = createEncoder()
+
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit: jasmine.createSpy('sendOnExit') },
+      encoder,
+      false,
+      { flushCanvasImmediately: true }
+    )
+
+    segmentCollection.addRecord({
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 10,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 1,
+        commands: []
+      }
+    })
+
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('should not flush immediately for canvas mutation records when not configured', () => {
+    const lifeCycle = new LifeCycle()
+    const send = jasmine.createSpy('send')
+    const encoder = createEncoder()
+
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit: jasmine.createSpy('sendOnExit') },
+      encoder,
+      false,
+      { flushCanvasImmediately: false }
+    )
+
+    segmentCollection.addRecord({
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 10,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 1,
+        commands: []
+      }
+    })
+
+    expect(send).not.toHaveBeenCalled()
+
+    jasmine.clock().tick(SEGMENT_DURATION_LIMIT)
+
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('should expose segment flush debug data when a segment is flushed', () => {
+    const lifeCycle = new LifeCycle()
+    const send = jasmine.createSpy('send')
+    const onSegmentFlushed = jasmine.createSpy('onSegmentFlushed')
+    const encoder = createEncoder()
+
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit: jasmine.createSpy('sendOnExit') },
+      encoder,
+      false,
+      { flushCanvasImmediately: false, onSegmentFlushed }
+    )
+
+    segmentCollection.addRecord({ type: 2, timestamp: 10 })
+    jasmine.clock().tick(SEGMENT_DURATION_LIMIT)
+
+    expect(onSegmentFlushed).toHaveBeenCalledWith({
+      creationReason: 'init',
+      flushReason: 'segment_duration_limit',
+      recordsCount: 1,
+      recordCountsByType: {
+        full_snapshot: 1
+      },
+      start: 10,
+      end: 10,
+      indexInView: jasmine.any(Number),
+      rawBytesCount: 100
+    })
   })
 })

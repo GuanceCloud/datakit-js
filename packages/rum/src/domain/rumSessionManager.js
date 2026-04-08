@@ -115,6 +115,7 @@ export function startRumSessionManager(configuration, lifeCycle) {
       }
     },
     expire: sessionManager.expire,
+    keepSessionAlive: sessionManager.expandOrRenewSession,
     expireObservable: sessionManager.expireObservable,
     sessionStateUpdateObservable: sessionManager.sessionStateUpdateObservable,
     setErrorForSession: () =>
@@ -146,6 +147,7 @@ export function startRumSessionManagerStub() {
       return session
     },
     expire: noop,
+    keepSessionAlive: noop,
     expireObservable: new Observable(),
     setErrorForSession: function () {
       session.sessionErrorTimestamp = timeStampNow()

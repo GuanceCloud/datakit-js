@@ -26,8 +26,8 @@ export var IncrementalSource = {
   Input: 5,
   TouchMove: 6,
   MediaInteraction: 7,
-  StyleSheetRule: 8
-  // CanvasMutation : 9,
+  StyleSheetRule: 8,
+  CanvasMutation: 9
   // Font : 10,
 }
 

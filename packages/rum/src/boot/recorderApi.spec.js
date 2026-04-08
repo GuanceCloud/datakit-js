@@ -52,11 +52,34 @@ describe('recorderApi', () => {
     const takeSubsequentFullSnapshot = jasmine.createSpy(
       'takeSubsequentFullSnapshot'
     )
+    const snapshotCanvas = jasmine.createSpy('snapshotCanvas')
+    const getSerializedNodeIdForDebug = jasmine
+      .createSpy('getSerializedNodeIdForDebug')
+      .and.returnValue(42)
+    const getLastAutoCanvasSnapshotResultForDebug = jasmine
+      .createSpy('getLastAutoCanvasSnapshotResultForDebug')
+      .and.returnValue({
+        status: 'completed',
+        selectedCanvasCount: 1
+      })
+    const getLastReplaySegmentFlushForDebug = jasmine
+      .createSpy('getLastReplaySegmentFlushForDebug')
+      .and.returnValue({
+        creationReason: 'init',
+        flushReason: 'segment_duration_limit',
+        recordCountsByType: {
+          canvas_mutation: 3
+        }
+      })
     const startRecordingImpl = jasmine
       .createSpy('startRecordingImpl')
       .and.returnValue({
         stop: stopRecording,
-        takeSubsequentFullSnapshot
+        takeSubsequentFullSnapshot,
+        snapshotCanvas,
+        getSerializedNodeIdForDebug,
+        getLastAutoCanvasSnapshotResultForDebug,
+        getLastReplaySegmentFlushForDebug
       })
 
     const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
@@ -91,6 +114,26 @@ describe('recorderApi', () => {
     recorderApi.takeSubsequentFullSnapshot()
     expect(takeSubsequentFullSnapshot).toHaveBeenCalled()
 
+    const canvas = document.createElement('canvas')
+    const snapshotResult = recorderApi.snapshotCanvas(canvas)
+    expect(snapshotCanvas).toHaveBeenCalledWith(canvas, undefined)
+    expect(snapshotResult).toBe(snapshotCanvas.calls.mostRecent().returnValue)
+    expect(recorderApi.getSerializedNodeIdForDebug(canvas)).toBe(42)
+    expect(getSerializedNodeIdForDebug).toHaveBeenCalledWith(canvas)
+    expect(recorderApi.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      status: 'completed',
+      selectedCanvasCount: 1
+    })
+    expect(getLastAutoCanvasSnapshotResultForDebug).toHaveBeenCalled()
+    expect(recorderApi.getLastReplaySegmentFlushForDebug()).toEqual({
+      creationReason: 'init',
+      flushReason: 'segment_duration_limit',
+      recordCountsByType: {
+        canvas_mutation: 3
+      }
+    })
+    expect(getLastReplaySegmentFlushForDebug).toHaveBeenCalled()
+
     lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
       reason: PageExitReason.UNLOADING
     })
@@ -103,7 +146,14 @@ describe('recorderApi', () => {
       .createSpy('startRecordingImpl')
       .and.returnValue({
         stop: jasmine.createSpy('stop'),
-        takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
+        takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot'),
+        snapshotCanvas: jasmine.createSpy('snapshotCanvas'),
+        getSerializedNodeIdForDebug: jasmine
+          .createSpy('getSerializedNodeIdForDebug'),
+        getLastAutoCanvasSnapshotResultForDebug: jasmine
+          .createSpy('getLastAutoCanvasSnapshotResultForDebug'),
+        getLastReplaySegmentFlushForDebug: jasmine
+          .createSpy('getLastReplaySegmentFlushForDebug')
       })
 
     const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
@@ -128,5 +178,21 @@ describe('recorderApi', () => {
     lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
 
     expect(startRecordingImpl.calls.count()).toBe(2)
+  })
+
+  it('should keep snapshotCanvas as a no-op before the recorder starts', () => {
+    const recorderApi = makeRecorderApi(jasmine.createSpy('startRecordingImpl'))
+
+    expect(recorderApi.snapshotCanvas(document.createElement('canvas'))).toEqual(
+      {
+        ok: false,
+        reason: 'not_recording'
+      }
+    )
+    expect(
+      recorderApi.getSerializedNodeIdForDebug(document.createElement('canvas'))
+    ).toBeUndefined()
+    expect(recorderApi.getLastAutoCanvasSnapshotResultForDebug()).toBeUndefined()
+    expect(recorderApi.getLastReplaySegmentFlushForDebug()).toBeUndefined()
   })
 })

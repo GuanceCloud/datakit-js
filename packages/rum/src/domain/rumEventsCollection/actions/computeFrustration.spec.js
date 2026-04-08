@@ -100,4 +100,79 @@ describe('computeFrustration', () => {
 
     input.remove()
   })
+
+  it('should not mark dead clicks when selection changes on a non-rage chain', () => {
+    const click = createClick({
+      event: {
+        timeStamp: 0,
+        target: document.createElement('div')
+      },
+      getUserActivity: () => ({
+        selection: true,
+        scroll: false,
+        input: false
+      })
+    })
+
+    expect(computeFrustration([click], {})).toEqual({ isRage: false })
+    expect(click.frustrations).toEqual([])
+  })
+
+  it('should not consider a chain as rage when selection or scroll activity happened', () => {
+    const clicks = [100, 200, 300].map((timeStamp) =>
+      createClick({
+        event: {
+          timeStamp,
+          target: document.createElement('div')
+        },
+        getUserActivity: () => ({
+          selection: timeStamp === 100,
+          scroll: false,
+          input: false
+        })
+      })
+    )
+
+    expect(isRage(clicks)).toBeFalse()
+
+    const scrollingClicks = [100, 200, 300].map((timeStamp) =>
+      createClick({
+        event: {
+          timeStamp,
+          target: document.createElement('div')
+        },
+        getUserActivity: () => ({
+          selection: false,
+          scroll: timeStamp === 200,
+          input: false
+        })
+      })
+    )
+
+    expect(isRage(scrollingClicks)).toBeFalse()
+  })
+
+  it('should not consider clicks as dead when page activity or input activity happened', () => {
+    const activeClick = createClick({
+      event: {
+        timeStamp: 0,
+        target: document.createElement('div')
+      },
+      hasPageActivity: () => true
+    })
+    const inputClick = createClick({
+      event: {
+        timeStamp: 0,
+        target: document.createElement('div')
+      },
+      getUserActivity: () => ({
+        selection: false,
+        scroll: false,
+        input: true
+      })
+    })
+
+    expect(isDead(activeClick)).toBeFalse()
+    expect(isDead(inputClick)).toBeFalse()
+  })
 })

@@ -35,6 +35,68 @@
         display: block;
         width: 100%;
       }
+      .canvas-demo {
+        margin: 16px 0 24px;
+        border: 1px solid #d0d7de;
+        padding: 16px;
+        background: #eef7ff;
+      }
+      .canvas-demo__title {
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      .canvas-demo__desc {
+        margin-bottom: 12px;
+        color: #334155;
+      }
+      .canvas-demo__board {
+        display: block;
+        border: 1px solid #94a3b8;
+        background: #ffffff;
+        margin-bottom: 12px;
+      }
+      .canvas-demo__toolbar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .canvas-demo__log {
+        min-height: 20px;
+        font-size: 12px;
+        color: #475569;
+      }
+      .canvas-demo__export {
+        margin-top: 12px;
+        padding: 12px;
+        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        font-size: 12px;
+        color: #0f172a;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 260px;
+        overflow: auto;
+      }
+      .canvas-demo__status {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+        gap: 8px 12px;
+        margin-bottom: 12px;
+        padding: 12px;
+        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        font-size: 12px;
+        color: #334155;
+      }
+      .canvas-demo__status-label {
+        font-weight: 600;
+        color: #0f172a;
+      }
+      .canvas-demo__status-value {
+        font-family: Menlo, Monaco, Consolas, monospace;
+        word-break: break-word;
+      }
     </style>
     <script>
       window.DATAFLUX_LOGS &&
@@ -248,6 +310,8 @@
         n.parentNode.insertBefore(d, n)
       })(window, document, 'script', './dataflux-rum.js', 'DATAFLUX_RUM')
       window.DATAFLUX_RUM.onReady(() => {
+        const replayCanvasMode =
+          window.localStorage.getItem('demoReplayCanvasMode') || 'manual'
         window.DATAFLUX_RUM.init({
           applicationId: 'test_sourcemap',
           site: 'https://cn3-rum-openway.guance.com',
@@ -267,6 +331,9 @@
           telemetryEnabled: true,
           enableLongAnimationFrame: true,
           retryMaxSize: 10,
+          replayCanvasEnabled: true,
+          replayCanvasMode: replayCanvasMode,
+          replayCanvasQuality: 'medium',
           remoteConfiguration: true,
 
           beforeSend: function (event, context) {
@@ -584,6 +651,52 @@
       <div>CLS demo: 点击按钮后延迟 700ms 再插入大内容，避免被标记为 hadRecentInput。</div>
       <div id="cls-demo-slot"></div>
     </div>
+    <div class="canvas-demo">
+      <div class="canvas-demo__title">Canvas Replay Demo</div>
+      <div class="canvas-demo__desc">
+        先点击画布按钮产生 2D canvas 变化，再点击 snapshot 按钮手动触发一次 canvas replay 采样。
+      </div>
+      <div class="canvas-demo__status">
+        <div class="canvas-demo__status-label">isRecording</div>
+        <div id="canvas-status-recording" class="canvas-demo__status-value">unknown</div>
+        <div class="canvas-demo__status-label">mode</div>
+        <div id="canvas-status-mode" class="canvas-demo__status-value">manual</div>
+        <div class="canvas-demo__status-label">auto policy</div>
+        <div id="canvas-status-policy" class="canvas-demo__status-value">1000/3000/5000</div>
+        <div class="canvas-demo__status-label">auto draw</div>
+        <div id="canvas-status-auto-draw" class="canvas-demo__status-value">off</div>
+        <div class="canvas-demo__status-label">last trigger</div>
+        <div id="canvas-status-trigger" class="canvas-demo__status-value">none</div>
+        <div class="canvas-demo__status-label">last snapshot</div>
+        <div id="canvas-status-snapshot" class="canvas-demo__status-value">none</div>
+        <div class="canvas-demo__status-label">last reason</div>
+        <div id="canvas-status-reason" class="canvas-demo__status-value">none</div>
+        <div class="canvas-demo__status-label">auto result</div>
+        <div id="canvas-status-auto-result" class="canvas-demo__status-value">idle</div>
+        <div class="canvas-demo__status-label">auto keepalive</div>
+        <div id="canvas-status-auto-keepalive" class="canvas-demo__status-value">none</div>
+        <div class="canvas-demo__status-label">last event</div>
+        <div id="canvas-status-event" class="canvas-demo__status-value">none</div>
+      </div>
+      <canvas
+        id="replay-canvas"
+        class="canvas-demo__board"
+        width="480"
+        height="220"
+      ></canvas>
+      <div class="canvas-demo__toolbar">
+        <button delay="canvasModeManual">mode: manual</button>
+        <button delay="canvasModeAuto">mode: auto</button>
+        <button delay="canvasDraw">canvas draw</button>
+        <button delay="canvasAutoDrawToggle">toggle auto draw</button>
+        <button delay="canvasSnapshot">canvas snapshot</button>
+        <button delay="canvasAnimateAndSnapshot">canvas animate + snapshot</button>
+        <button delay="canvasClear">canvas clear</button>
+        <button delay="canvasExportEvent">export last canvas event</button>
+      </div>
+      <div id="canvas-demo-log" class="canvas-demo__log"></div>
+      <pre id="canvas-demo-export" class="canvas-demo__export">No canvas replay event exported yet.</pre>
+    </div>
     <div style="background-color: red; width: 100px; height: 100px" id="test">
       test
     </div>
@@ -683,6 +796,354 @@
           )
         }, 700)
       }
+      const replayCanvas = document.getElementById('replay-canvas')
+      const replayCanvasLog = document.getElementById('canvas-demo-log')
+      const replayCanvasRecordingStatus = document.getElementById('canvas-status-recording')
+      const replayCanvasModeStatus = document.getElementById('canvas-status-mode')
+      const replayCanvasPolicyStatus = document.getElementById('canvas-status-policy')
+      const replayCanvasAutoDrawStatus = document.getElementById('canvas-status-auto-draw')
+      const replayCanvasTriggerStatus = document.getElementById('canvas-status-trigger')
+      const replayCanvasSnapshotStatus = document.getElementById('canvas-status-snapshot')
+      const replayCanvasReasonStatus = document.getElementById('canvas-status-reason')
+      const replayCanvasAutoResultStatus = document.getElementById('canvas-status-auto-result')
+      const replayCanvasAutoKeepaliveStatus = document.getElementById(
+        'canvas-status-auto-keepalive'
+      )
+      const replayCanvasEventStatus = document.getElementById('canvas-status-event')
+      const replayCanvasExport = document.getElementById('canvas-demo-export')
+      const demoReplayCanvasMode =
+        window.localStorage.getItem('demoReplayCanvasMode') || 'manual'
+      let canvasStep = 0
+      let canvasAnimationFrameId = null
+      let canvasAutoDrawIntervalId = null
+      let lastCanvasSnapshotResult = null
+      let lastCanvasReplayEvent = null
+      let lastCanvasSnapshotTrigger = 'none'
+      let lastCanvasAutoResult = 'idle'
+
+      function setCanvasStatus(element, value) {
+        if (element) {
+          element.textContent = String(value)
+        }
+      }
+
+      function refreshCanvasStatusPanel() {
+        const rum = window.DATAFLUX_RUM
+        const isRecording =
+          rum && typeof rum.isRecording === 'function' ? rum.isRecording() : 'unavailable'
+        const autoDebugResult =
+          rum &&
+          typeof rum.getLastAutoCanvasSnapshotResultForDebug === 'function' &&
+          rum.getLastAutoCanvasSnapshotResultForDebug()
+        setCanvasStatus(replayCanvasRecordingStatus, isRecording)
+        setCanvasStatus(replayCanvasModeStatus, demoReplayCanvasMode)
+        setCanvasStatus(replayCanvasPolicyStatus, 'quality=medium')
+        setCanvasStatus(
+          replayCanvasAutoDrawStatus,
+          canvasAutoDrawIntervalId ? 'on' : 'off'
+        )
+        setCanvasStatus(replayCanvasTriggerStatus, lastCanvasSnapshotTrigger)
+        setCanvasStatus(
+          replayCanvasSnapshotStatus,
+          lastCanvasSnapshotResult ? (lastCanvasSnapshotResult.ok ? 'ok' : 'failed') : 'none'
+        )
+        setCanvasStatus(
+          replayCanvasReasonStatus,
+          lastCanvasSnapshotResult && lastCanvasSnapshotResult.reason
+            ? lastCanvasSnapshotResult.reason
+            : 'none'
+        )
+        setCanvasStatus(
+          replayCanvasAutoResultStatus,
+          autoDebugResult
+            ? formatAutoDebugResult(autoDebugResult)
+            : lastCanvasAutoResult
+        )
+        setCanvasStatus(
+          replayCanvasAutoKeepaliveStatus,
+          autoDebugResult
+            ? autoDebugResult.keepSessionAliveTriggered
+              ? 'on'
+              : 'off'
+            : 'none'
+        )
+        setCanvasStatus(replayCanvasEventStatus, 'step=' + canvasStep)
+      }
+
+      function formatAutoDebugResult(result) {
+        if (!result) {
+          return 'idle'
+        }
+        if (result.status !== 'completed') {
+          return result.status
+        }
+        return (
+          'completed selected=' +
+          result.selectedCanvasCount +
+          ' budget=' +
+          result.skippedBudgetCount
+        )
+      }
+
+      function setCanvasLog(message) {
+        if (replayCanvasLog) {
+          replayCanvasLog.textContent = message
+        }
+        refreshCanvasStatusPanel()
+      }
+
+      function switchReplayCanvasMode(mode) {
+        window.localStorage.setItem('demoReplayCanvasMode', mode)
+        setCanvasLog('Switching canvas mode to ' + mode + ' and reloading demo')
+        window.location.reload()
+      }
+
+      function estimateEncodedBytesFromDataUrl(dataUrl) {
+        const parts = String(dataUrl || '').split(',')
+        const base64 = parts.length > 1 ? parts[1] : ''
+        return Math.ceil((base64.length * 3) / 4)
+      }
+
+      function buildSerializedCanvasImage(dataUrl, mimeType) {
+        const parts = String(dataUrl || '').split(',')
+        const base64 = parts.length > 1 ? parts[1] : ''
+        return {
+          rr_type: 'ImageBitmap',
+          args: [
+            {
+              rr_type: 'Blob',
+              data: [
+                {
+                  rr_type: 'ArrayBuffer',
+                  base64: base64
+                }
+              ],
+              type: mimeType
+            }
+          ]
+        }
+      }
+
+      function buildCanvasReplayEventFromCanvas(canvas) {
+        const serializedNodeId =
+          window.DATAFLUX_RUM &&
+          window.DATAFLUX_RUM.getSerializedNodeIdForDebug &&
+          window.DATAFLUX_RUM.getSerializedNodeIdForDebug(canvas)
+        const dataUrl = canvas.toDataURL('image/webp', 0.8)
+        return {
+          type: 3,
+          timestamp: Date.now(),
+          data: {
+            source: 9,
+            id: serializedNodeId || 26,
+            type: '2D',
+            commands: [
+              {
+                property: 'clearRect',
+                args: [0, 0, canvas.width, canvas.height]
+              },
+              {
+                property: 'drawImage',
+                args: [
+                  buildSerializedCanvasImage(dataUrl, 'image/webp'),
+                  0,
+                  0,
+                  canvas.width,
+                  canvas.height
+                ]
+              }
+            ],
+            encodedBytesCount: estimateEncodedBytesFromDataUrl(dataUrl)
+          }
+        }
+      }
+
+      function renderLastCanvasReplayEvent() {
+        if (!replayCanvasExport) return
+        replayCanvasExport.textContent = lastCanvasReplayEvent
+          ? JSON.stringify(lastCanvasReplayEvent, null, 2)
+          : 'No canvas replay event exported yet.'
+      }
+
+      async function exportLastCanvasReplayEvent() {
+        if (!lastCanvasReplayEvent) {
+          setCanvasLog('No successful canvas snapshot yet, nothing to export')
+          renderLastCanvasReplayEvent()
+          return
+        }
+        renderLastCanvasReplayEvent()
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          try {
+            await navigator.clipboard.writeText(
+              JSON.stringify(lastCanvasReplayEvent, null, 2)
+            )
+            setCanvasLog('Exported last canvas replay event and copied it to clipboard')
+            return
+          } catch (_) {}
+        }
+        setCanvasLog('Exported last canvas replay event')
+      }
+
+      function getReplayCanvasContext() {
+        if (!replayCanvas) return
+        return replayCanvas.getContext('2d')
+      }
+
+      function drawCanvasScene(label) {
+        const context = getReplayCanvasContext()
+        if (!context) return
+        canvasStep += 1
+        const hue = (canvasStep * 47) % 360
+        context.clearRect(0, 0, replayCanvas.width, replayCanvas.height)
+        context.fillStyle = '#f8fafc'
+        context.fillRect(0, 0, replayCanvas.width, replayCanvas.height)
+        context.fillStyle = `hsl(${hue} 70% 55%)`
+        context.fillRect(24, 28, 120, 72)
+        context.fillStyle = '#0f172a'
+        context.font = '20px sans-serif'
+        context.fillText(label + ' #' + canvasStep, 168, 72)
+        context.beginPath()
+        context.arc(94 + canvasStep * 3, 150, 26, 0, Math.PI * 2)
+        context.fillStyle = `hsl(${(hue + 120) % 360} 70% 45%)`
+        context.fill()
+        context.strokeStyle = '#1e293b'
+        context.lineWidth = 4
+        context.beginPath()
+        context.moveTo(180, 140)
+        context.lineTo(280 + (canvasStep % 3) * 18, 180)
+        context.lineTo(360, 126)
+        context.stroke()
+        setCanvasStatus(
+          replayCanvasEventStatus,
+          'draw:' + label + ' step=' + canvasStep
+        )
+        setCanvasLog(
+          'Canvas updated at ' + new Date().toLocaleTimeString() + ' with label: ' + label
+        )
+      }
+
+      function clearCanvasScene() {
+        const context = getReplayCanvasContext()
+        if (!context) return
+        if (canvasAnimationFrameId) {
+          cancelAnimationFrame(canvasAnimationFrameId)
+          canvasAnimationFrameId = null
+        }
+        stopAutoDraw()
+        context.clearRect(0, 0, replayCanvas.width, replayCanvas.height)
+        setCanvasStatus(replayCanvasEventStatus, 'clear')
+        setCanvasLog('Canvas cleared')
+      }
+
+      function describeAutoResult(result, trigger, time) {
+        if (trigger !== 'auto-timer') {
+          return 'manual'
+        }
+        if (result && result.ok) {
+          return 'success:' + time
+        }
+        if (result && result.reason === 'unchanged') {
+          return 'unchanged->3000ms'
+        }
+        if (
+          result &&
+          (result.reason === 'encode_failed' ||
+            result.reason === 'encode_too_large' ||
+            result.reason === 'detached' ||
+            result.reason === 'not_serialized')
+        ) {
+          return 'failure->5000ms'
+        }
+        return 'cooldown->1000ms'
+      }
+
+      async function snapshotCanvasScene(trigger) {
+        if (!trigger) {
+          trigger = 'manual-button'
+        }
+        lastCanvasSnapshotTrigger = trigger
+        if (!window.DATAFLUX_RUM || !window.DATAFLUX_RUM.snapshotCanvas) {
+          lastCanvasSnapshotResult = {
+            ok: false,
+            reason: 'api_unavailable'
+          }
+          lastCanvasAutoResult = describeAutoResult(
+            lastCanvasSnapshotResult,
+            trigger,
+            new Date().toLocaleTimeString()
+          )
+          setCanvasLog('snapshotCanvas API is not available on DATAFLUX_RUM')
+          return
+        }
+        const result = await window.DATAFLUX_RUM.snapshotCanvas(replayCanvas)
+        lastCanvasSnapshotResult = result || {
+          ok: false,
+          reason: 'empty_result'
+        }
+        const time = new Date().toLocaleTimeString()
+        lastCanvasAutoResult = describeAutoResult(lastCanvasSnapshotResult, trigger, time)
+        if (result && result.ok) {
+          lastCanvasReplayEvent = buildCanvasReplayEventFromCanvas(replayCanvas)
+          setCanvasStatus(replayCanvasEventStatus, 'snapshot:' + time)
+          renderLastCanvasReplayEvent()
+          setCanvasLog('snapshotCanvas succeeded at ' + time)
+          return
+        }
+        if (result && result.reason === 'unchanged') {
+          setCanvasStatus(replayCanvasEventStatus, 'auto unchanged:' + time)
+        }
+        setCanvasLog(
+          'snapshotCanvas failed at ' +
+            time +
+            (result && result.reason ? ' with reason: ' + result.reason : '')
+        )
+      }
+
+      function animateCanvasAndSnapshot() {
+        if (canvasAnimationFrameId) {
+          cancelAnimationFrame(canvasAnimationFrameId)
+        }
+        let frame = 0
+        const tick = () => {
+          frame += 1
+          drawCanvasScene('frame')
+          if (frame === 12) {
+            snapshotCanvasScene('animation-end')
+            canvasAnimationFrameId = null
+            return
+          }
+          canvasAnimationFrameId = requestAnimationFrame(tick)
+        }
+        canvasAnimationFrameId = requestAnimationFrame(tick)
+      }
+
+      function startAutoDraw() {
+        if (canvasAutoDrawIntervalId) return
+        canvasAutoDrawIntervalId = window.setInterval(() => {
+          drawCanvasScene('auto')
+        }, 400)
+        setCanvasLog('Auto draw started')
+      }
+
+      function stopAutoDraw() {
+        if (!canvasAutoDrawIntervalId) return
+        window.clearInterval(canvasAutoDrawIntervalId)
+        canvasAutoDrawIntervalId = null
+        refreshCanvasStatusPanel()
+      }
+
+      function toggleAutoDraw() {
+        if (canvasAutoDrawIntervalId) {
+          stopAutoDraw()
+          setCanvasLog('Auto draw stopped')
+          return
+        }
+        startAutoDraw()
+      }
+
+      drawCanvasScene('initial')
+      refreshCanvasStatusPanel()
+      window.setInterval(refreshCanvasStatusPanel, 1000)
       let right = 10
       function buttonsClickHandle(event) {
         const target = event.target
@@ -775,6 +1236,22 @@
           console.log('long task done')
         } else if (delay === 'triggerCls') {
           triggerCls()
+        } else if (delay === 'canvasModeManual') {
+          switchReplayCanvasMode('manual')
+        } else if (delay === 'canvasModeAuto') {
+          switchReplayCanvasMode('auto')
+        } else if (delay === 'canvasDraw') {
+          drawCanvasScene('manual')
+        } else if (delay === 'canvasAutoDrawToggle') {
+          toggleAutoDraw()
+        } else if (delay === 'canvasSnapshot') {
+          snapshotCanvasScene()
+        } else if (delay === 'canvasAnimateAndSnapshot') {
+          animateCanvasAndSnapshot()
+        } else if (delay === 'canvasClear') {
+          clearCanvasScene()
+        } else if (delay === 'canvasExportEvent') {
+          exportLastCanvasReplayEvent()
         } else {
           sleep(Number(delay) - 5)
           switchColor()
@@ -815,12 +1292,19 @@
       }
       function init() {
         const operation = document.querySelector('#operation')
-        operation.addEventListener('click', buttonsClickHandle, false)
+        if (operation) {
+          operation.addEventListener('click', buttonsClickHandle, false)
+        }
+        const canvasToolbar = document.querySelector('.canvas-demo__toolbar')
+        if (canvasToolbar) {
+          canvasToolbar.addEventListener('click', buttonsClickHandle, false)
+        }
         document
           .getElementById('test')
           .addEventListener('click', switchColor, false)
       }
       init()
+      renderLastCanvasReplayEvent()
     </script>
     <script src="./build/runtime.js"></script>
     <script src="./build/main.js"></script>

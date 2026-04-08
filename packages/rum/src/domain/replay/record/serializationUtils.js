@@ -8,6 +8,9 @@ import { CENSORED_STRING_MARK } from '../../../constants'
 import { shouldMaskNode } from './privacy'
 
 var serializedNodeIds = new WeakMap()
+var serializedCanvasNodes = new Set()
+var anchorElementByDocument = new WeakMap()
+var hrefByDocument = new WeakMap()
 
 export function hasSerializedNode(node) {
   return serializedNodeIds.has(node)
@@ -30,6 +33,40 @@ export function getSerializedNodeId(node) {
 
 export function setSerializedNodeId(node, serializeNodeId) {
   serializedNodeIds.set(node, serializeNodeId)
+  if (node instanceof HTMLCanvasElement) {
+    serializedCanvasNodes.add(node)
+  }
+}
+
+function isSerializedCanvasConnectedToDocument(node) {
+  if (document.documentElement && document.documentElement.contains) {
+    return document.documentElement.contains(node)
+  }
+
+  var current = node
+
+  while (current) {
+    if (current === document) {
+      return true
+    }
+    current = getParentNode(current)
+  }
+
+  return false
+}
+
+export function getSerializedCanvasNodes() {
+  var connectedSerializedCanvasNodes = []
+
+  serializedCanvasNodes.forEach(function (node) {
+    if (hasSerializedNode(node) && isSerializedCanvasConnectedToDocument(node)) {
+      connectedSerializedCanvasNodes.push(node)
+      return
+    }
+    serializedCanvasNodes.delete(node)
+  })
+
+  return connectedSerializedCanvasNodes
 }
 
 /**
@@ -112,9 +149,7 @@ export function fixBrowserCompatibilityIssuesInCSS(cssText) {
   return cssText
 }
 export function getHref() {
-  var a = document.createElement('a')
-  a.href = ''
-  return a.href
+  return getDocumentHref(document)
 }
 export function switchToAbsoluteUrl(cssText, cssHref) {
   return cssText.replace(
@@ -227,9 +262,29 @@ export function absoluteToDoc(doc, attributeValue) {
   if (!attributeValue || attributeValue.trim() === '') {
     return attributeValue
   }
-  var a = doc.createElement('a')
+  var a = getAnchorElement(doc)
   a.href = attributeValue
   return a.href
+}
+
+function getAnchorElement(doc) {
+  var anchor = anchorElementByDocument.get(doc)
+  if (!anchor) {
+    anchor = doc.createElement('a')
+    anchorElementByDocument.set(doc, anchor)
+  }
+  return anchor
+}
+
+function getDocumentHref(doc) {
+  var href = hrefByDocument.get(doc)
+  if (!href) {
+    var anchor = getAnchorElement(doc)
+    anchor.href = ''
+    href = anchor.href
+    hrefByDocument.set(doc, href)
+  }
+  return href
 }
 
 var SRCSET_NOT_SPACES = /^[^ \t\n\r\u000c]+/

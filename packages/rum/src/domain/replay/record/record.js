@@ -9,6 +9,12 @@ import { getVisualViewport } from './viewports'
 import { assembleIncrementalSnapshot } from './utils'
 import { createElementsScrollPositions } from './elementsScrollPositions'
 import { initShadowRootsController } from './shadowRootsController'
+import { createCanvasObserver } from './canvasObserver'
+import {
+  getSerializedCanvasNodes,
+  getSerializedNodeId
+} from './serializationUtils'
+import { startAutoCanvasSnapshotLoop } from './canvasAutoSnapshot'
 
 export function record(options) {
   var emit = options.emit
@@ -29,6 +35,42 @@ export function record(options) {
   var shadowRootsController = initShadowRootsController(options.configuration, {
     mutationCb,
     inputCb
+  })
+  var lastAutoCanvasSnapshotResult
+  var canvasObserver = createCanvasObserver({
+    configuration: options.configuration,
+    emit: emit
+  })
+  var stopAutoCanvasSnapshots = (
+    options.startAutoCanvasSnapshotLoop || startAutoCanvasSnapshotLoop
+  )({
+    configuration: options.configuration,
+    getCanvases: function () {
+      return getSerializedCanvasNodes()
+    },
+    getSerializedNodeId: function (canvas) {
+      return getSerializedNodeId(canvas)
+    },
+    onDebug: function (result) {
+      var keepSessionAliveTriggered = false
+      if (
+        result &&
+        result.status === 'completed' &&
+        result.selectedCanvasCount > 0 &&
+        options.sessionManager &&
+        options.sessionManager.keepSessionAlive
+      ) {
+        options.sessionManager.keepSessionAlive()
+        keepSessionAliveTriggered = true
+      }
+      lastAutoCanvasSnapshotResult = cloneAutoCanvasSnapshotDebugResult(
+        result,
+        keepSessionAliveTriggered
+      )
+    },
+    snapshotCanvas: function (canvas) {
+      return canvasObserver.snapshot(canvas)
+    }
   })
 
   var takeFullSnapshot = function (timestamp, serializationContext) {
@@ -142,7 +184,18 @@ export function record(options) {
   return {
     stop: function () {
       shadowRootsController.stop()
+      canvasObserver.stop()
+      stopAutoCanvasSnapshots()
       stopObservers()
+    },
+    snapshotCanvas: function (canvas, snapshotOptions) {
+      return canvasObserver.snapshot(canvas, snapshotOptions)
+    },
+    getSerializedNodeIdForDebug: function (node) {
+      return getSerializedNodeId(node)
+    },
+    getLastAutoCanvasSnapshotResultForDebug: function () {
+      return cloneAutoCanvasSnapshotDebugResult(lastAutoCanvasSnapshotResult)
     },
     takeSubsequentFullSnapshot: function (timestamp) {
       flushMutations()
@@ -154,5 +207,35 @@ export function record(options) {
     },
     flushMutations: flushMutations,
     shadowRootsController: shadowRootsController
+  }
+}
+
+function cloneAutoCanvasSnapshotDebugResult(
+  result,
+  keepSessionAliveTriggered
+) {
+  if (!result) {
+    return result
+  }
+
+  if (typeof keepSessionAliveTriggered === 'undefined') {
+    keepSessionAliveTriggered = result.keepSessionAliveTriggered
+  }
+
+  return {
+    status: result.status,
+    timestamp: result.timestamp,
+    eligibleCanvasCount: result.eligibleCanvasCount,
+    selectedCanvasCount: result.selectedCanvasCount,
+    skippedBudgetCount: result.skippedBudgetCount,
+    keepSessionAliveTriggered: !!keepSessionAliveTriggered,
+    results: (result.results || []).map(function (entry) {
+      return {
+        canvasId: entry.canvasId,
+        ok: entry.ok,
+        reason: entry.reason,
+        priority: entry.priority
+      }
+    })
   }
 }

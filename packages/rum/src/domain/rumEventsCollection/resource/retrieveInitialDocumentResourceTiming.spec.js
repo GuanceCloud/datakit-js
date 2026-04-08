@@ -55,6 +55,89 @@ describe('retrieveInitialDocumentResourceTiming', () => {
     expect(callback).toHaveBeenCalledTimes(1)
     expect(entry.entryType).toBe('resource')
     expect(entry.initiatorType).toBe(FAKE_INITIAL_DOCUMENT)
-    expect(entry.toJSON().toJSON).toBeUndefined()
+    expect(entry.toJSON()).toEqual(
+      jasmine.objectContaining({
+        name: 'https://example.com/',
+        startTime: 0,
+        responseEnd: 42,
+        entryType: 'resource',
+        initiatorType: FAKE_INITIAL_DOCUMENT,
+        toJSON: undefined
+      })
+    )
+  })
+
+  it('should wait for DOMContentLoaded when the document is still loading', () => {
+    Object.defineProperty(document, 'readyState', {
+      configurable: true,
+      value: 'loading'
+    })
+    performance.getEntriesByType = jasmine
+      .createSpy('getEntriesByType')
+      .and.returnValue([
+        {
+          name: 'https://example.com/loading',
+          startTime: 1,
+          responseEnd: 10,
+          toJSON() {
+            return {
+              name: this.name,
+              startTime: this.startTime,
+              responseEnd: this.responseEnd
+            }
+          }
+        }
+      ])
+    const callback = jasmine.createSpy('callback')
+
+    retrieveInitialDocumentResourceTiming({}, callback)
+
+    expect(callback).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new Event('DOMContentLoaded'))
+
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        entryType: 'resource',
+        initiatorType: FAKE_INITIAL_DOCUMENT,
+        name: 'https://example.com/loading'
+      })
+    )
+  })
+
+  it('should emit immediately when the document is already interactive', () => {
+    Object.defineProperty(document, 'readyState', {
+      configurable: true,
+      value: 'interactive'
+    })
+    performance.getEntriesByType = jasmine
+      .createSpy('getEntriesByType')
+      .and.returnValue([
+        {
+          name: 'https://example.com/interactive',
+          startTime: 2,
+          responseEnd: 12,
+          toJSON() {
+            return {
+              name: this.name,
+              startTime: this.startTime,
+              responseEnd: this.responseEnd
+            }
+          }
+        }
+      ])
+    const callback = jasmine.createSpy('callback')
+
+    retrieveInitialDocumentResourceTiming({}, callback)
+
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        entryType: 'resource',
+        initiatorType: FAKE_INITIAL_DOCUMENT,
+        name: 'https://example.com/interactive'
+      })
+    )
   })
 })

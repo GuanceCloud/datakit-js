@@ -153,4 +153,67 @@ describe('viewCollection', () => {
 
     collection.stop()
   })
+
+  it('should omit custom timings when empty and mark inactive sessions explicitly', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    const collection = startViewCollection(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask',
+        trackViewsManually: true,
+        excludedActivityUrls: []
+      },
+      {
+        href: 'https://example.com/checkout'
+      },
+      new Observable(),
+      new Observable(),
+      {
+        findAll: () => []
+      },
+      {
+        getReplayStats: () => undefined
+      }
+    )
+
+    lifeCycle.notify(LifeCycleEventType.VIEW_UPDATED, {
+      id: 'view-2',
+      name: 'Checkout',
+      loadingType: 'route_change',
+      isActive: false,
+      sessionIsActive: false,
+      documentVersion: 1,
+      duration: 50,
+      location: { href: 'https://example.com/checkout' },
+      startClocks: {
+        relative: 15,
+        timeStamp: 30
+      },
+      eventCounts: {
+        actionCount: 0,
+        frustrationCount: 0,
+        errorCount: 0,
+        longTaskCount: 0,
+        resourceCount: 0
+      },
+      commonViewMetrics: {
+        loadingTime: 10
+      },
+      initialViewMetrics: {
+        navigationTimings: {}
+      },
+      customTimings: {}
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+
+    expect(event.rawRumEvent.view.custom_timings).toBeUndefined()
+    expect(event.rawRumEvent.session.is_active).toBeFalse()
+    expect(event.rawRumEvent.session.has_replay).toBeUndefined()
+
+    collection.stop()
+  })
 })

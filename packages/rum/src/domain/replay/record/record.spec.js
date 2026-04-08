@@ -94,4 +94,172 @@ describe('replay/record/record', () => {
     expect(() => recorder.flushMutations()).not.toThrow()
     expect(() => recorder.stop()).not.toThrow()
   })
+
+  it('should emit a canvas mutation for serialized canvases when snapshotCanvas is called', async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 20
+    canvas.height = 10
+    container.appendChild(canvas)
+
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasQuality: 0.4,
+        replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxEncodedBytes: 40000,
+        replayCanvasMaxConcurrentEncodes: 1
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      }
+    })
+
+    const result = await recorder.snapshotCanvas(canvas)
+
+    expect(result).toEqual({ ok: true })
+
+    expect(
+      emittedRecords.some(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.CanvasMutation
+      )
+    ).toBeTrue()
+  })
+
+  it('should start and stop the auto canvas snapshot loop when auto mode is enabled', () => {
+    const stopAutoCanvasSnapshots = jasmine.createSpy('stopAutoCanvasSnapshots')
+    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
+    const startAutoCanvasSnapshotLoop = jasmine
+      .createSpy('startAutoCanvasSnapshotLoop')
+      .and.callFake(function (options) {
+        options.onDebug({
+          status: 'completed',
+          timestamp: 1234,
+          eligibleCanvasCount: 2,
+          selectedCanvasCount: 1,
+          skippedBudgetCount: 1,
+          results: [
+            {
+              canvasId: 26,
+              ok: true,
+              priority: 10
+            }
+          ]
+        })
+        return stopAutoCanvasSnapshots
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasAutoInterval: 1000
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      },
+      sessionManager: {
+        keepSessionAlive: keepSessionAlive
+      },
+      startAutoCanvasSnapshotLoop: startAutoCanvasSnapshotLoop
+    })
+
+    expect(startAutoCanvasSnapshotLoop).toHaveBeenCalledWith(
+      jasmine.objectContaining({
+        configuration: jasmine.objectContaining({
+          replayCanvasMode: 'auto',
+          replayCanvasAutoInterval: 1000
+        }),
+        getSerializedNodeId: jasmine.any(Function),
+        onDebug: jasmine.any(Function),
+        snapshotCanvas: jasmine.any(Function)
+      })
+    )
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      status: 'completed',
+      timestamp: 1234,
+      eligibleCanvasCount: 2,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 1,
+      keepSessionAliveTriggered: true,
+      results: [
+        {
+          canvasId: 26,
+          ok: true,
+          reason: undefined,
+          priority: 10
+        }
+      ]
+    })
+    expect(keepSessionAlive).toHaveBeenCalledTimes(1)
+
+    recorder.stop()
+    expect(stopAutoCanvasSnapshots).toHaveBeenCalled()
+  })
+
+  it('should not keep the session alive when auto canvas runs are skipped', () => {
+    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
+    const startAutoCanvasSnapshotLoop = jasmine
+      .createSpy('startAutoCanvasSnapshotLoop')
+      .and.callFake(function (options) {
+        options.onDebug({
+          status: 'skipped_hidden',
+          timestamp: 1234,
+          eligibleCanvasCount: 0,
+          selectedCanvasCount: 0,
+          skippedBudgetCount: 0,
+          results: []
+        })
+        return jasmine.createSpy('stopAutoCanvasSnapshots')
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto'
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      },
+      sessionManager: {
+        keepSessionAlive: keepSessionAlive
+      },
+      startAutoCanvasSnapshotLoop: startAutoCanvasSnapshotLoop
+    })
+
+    expect(keepSessionAlive).not.toHaveBeenCalled()
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      status: 'skipped_hidden',
+      timestamp: 1234,
+      eligibleCanvasCount: 0,
+      selectedCanvasCount: 0,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: false,
+      results: []
+    })
+
+    recorder.stop()
+  })
 })

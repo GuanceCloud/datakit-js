@@ -431,9 +431,11 @@ function getAttributesForPrivacyLevel(element, nodePrivacyLevel, options) {
 
   // remote css
   if (tagName === 'link') {
-    var stylesheet = Array.from(doc.styleSheets).find(function (s) {
-      return s.href === element.href
-    })
+    var stylesheet = getStyleSheetByHref(
+      options.serializationContext,
+      doc,
+      element.href
+    )
     var cssText = getCssRulesString(stylesheet)
     if (cssText && stylesheet) {
       safeAttrs._cssText = cssText
@@ -511,4 +513,24 @@ function getAttributesForPrivacyLevel(element, nodePrivacyLevel, options) {
   }
 
   return safeAttrs
+}
+
+function getStyleSheetByHref(serializationContext, doc, href) {
+  if (!href) {
+    return undefined
+  }
+
+  var styleSheetByHref = serializationContext.styleSheetByHref
+  if (!styleSheetByHref) {
+    styleSheetByHref = new Map()
+    for (var i = 0; i < doc.styleSheets.length; i += 1) {
+      var styleSheet = doc.styleSheets[i]
+      if (styleSheet.href) {
+        styleSheetByHref.set(styleSheet.href, styleSheet)
+      }
+    }
+    serializationContext.styleSheetByHref = styleSheetByHref
+  }
+
+  return styleSheetByHref.get(href)
 }

@@ -83,6 +83,7 @@ export function startSessionManager(
     findSession: function (startTime, options) {
       return sessionContextHistory.find(startTime, options)
     },
+    expandOrRenewSession: sessionStore.expandOrRenewSession,
     renewObservable,
     expireObservable,
     sessionStateUpdateObservable: sessionStore.sessionStateUpdateObservable,

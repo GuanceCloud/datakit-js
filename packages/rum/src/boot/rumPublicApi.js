@@ -289,7 +289,19 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
       })
     }),
     stopSessionReplayRecording: monitor(recorderApi.stop),
-    takeSubsequentFullSnapshot: monitor(recorderApi.takeSubsequentFullSnapshot)
+    takeSubsequentFullSnapshot: monitor(recorderApi.takeSubsequentFullSnapshot),
+    snapshotCanvas: monitor(function (canvas, options) {
+      return recorderApi.snapshotCanvas(canvas, options)
+    }),
+    getSerializedNodeIdForDebug: monitor(function (node) {
+      return recorderApi.getSerializedNodeIdForDebug(node)
+    }),
+    getLastAutoCanvasSnapshotResultForDebug: monitor(function () {
+      return recorderApi.getLastAutoCanvasSnapshotResultForDebug()
+    }),
+    getLastReplaySegmentFlushForDebug: monitor(function () {
+      return recorderApi.getLastReplaySegmentFlushForDebug()
+    })
   })
   return rumPublicApi
 }

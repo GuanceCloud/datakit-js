@@ -83,7 +83,7 @@ function areEventsSimilar(first, second) {
   return (
     first.target === second.target &&
     mouseEventDistance(first, second) <= MAX_DISTANCE_BETWEEN_CLICKS &&
-    first.timeStamp - second.timeStamp <= MAX_DURATION_BETWEEN_CLICKS
+    second.timeStamp - first.timeStamp <= MAX_DURATION_BETWEEN_CLICKS
   )
 }
 

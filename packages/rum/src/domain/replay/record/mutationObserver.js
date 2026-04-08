@@ -75,68 +75,94 @@ function processMutations(
   shadowRootsController
 ) {
   var nodePrivacyLevelCache = new Map()
-  mutations
-    .filter(function (mutation) {
-      return mutation.type === 'childList'
-    })
-    .forEach(function (mutation) {
+  var childListMutations = []
+  var characterDataMutations = []
+  var attributeMutations = []
+
+  for (var _i = 0, mutations_1 = mutations; _i < mutations_1.length; _i++) {
+    var mutation = mutations_1[_i]
+    if (mutation.type === 'childList') {
       mutation.removedNodes.forEach(function (removedNode) {
         traverseRemovedShadowDom(
           removedNode,
           shadowRootsController.removeShadowRoot
         )
       })
-    })
+    }
 
-  // Discard any mutation with a 'target' node that:
-  // * isn't injected in the current document or isn't known/serialized yet: those nodes are likely
-  // part of a mutation occurring in a parent Node
-  // * should be hidden or ignored
-  var filteredMutations = mutations.filter(function (mutation) {
-    return (
-      mutation.target.isConnected &&
-      nodeAndAncestorsHaveSerializedNode(mutation.target) &&
+    var target = mutation.target
+    if (
+      !target.isConnected ||
+      !nodeAndAncestorsHaveSerializedNode(target) ||
       getNodePrivacyLevel(
-        mutation.target,
+        target,
         configuration.defaultPrivacyLevel,
         nodePrivacyLevelCache
-      ) !== NodePrivacyLevel.HIDDEN
-    )
-  })
+      ) === NodePrivacyLevel.HIDDEN
+    ) {
+      continue
+    }
+
+    switch (mutation.type) {
+      case 'childList':
+        childListMutations.push(mutation)
+        break
+      case 'characterData':
+        characterDataMutations.push(mutation)
+        break
+      case 'attributes':
+        attributeMutations.push(mutation)
+        break
+    }
+  }
+
   var _processChildListMutations = processChildListMutations(
-    filteredMutations.filter(function (mutation) {
-      return mutation.type === 'childList'
-    }),
+    childListMutations,
     configuration,
     shadowRootsController,
     nodePrivacyLevelCache
   )
   var adds = _processChildListMutations.adds
   var removes = _processChildListMutations.removes
-  //   var hasBeenSerialized = _processChildListMutations.hasBeenSerialized
   var serializedNodeIds = _processChildListMutations.serializedNodeIds
+
   function hasBeenSerialized(node) {
     return (
       hasSerializedNode(node) &&
       serializedNodeIds.has(getSerializedNodeId(node))
     )
   }
+
+  var pendingCharacterDataMutations = []
+  for (
+    var _a = 0, characterDataMutations_1 = characterDataMutations;
+    _a < characterDataMutations_1.length;
+    _a++
+  ) {
+    var characterDataMutation = characterDataMutations_1[_a]
+    if (!hasBeenSerialized(characterDataMutation.target)) {
+      pendingCharacterDataMutations.push(characterDataMutation)
+    }
+  }
   var texts = processCharacterDataMutations(
-    filteredMutations.filter(function (mutation) {
-      return (
-        mutation.type === 'characterData' && !hasBeenSerialized(mutation.target)
-      )
-    }),
+    pendingCharacterDataMutations,
     configuration,
     nodePrivacyLevelCache
   )
 
+  var pendingAttributeMutations = []
+  for (
+    var _b = 0, attributeMutations_1 = attributeMutations;
+    _b < attributeMutations_1.length;
+    _b++
+  ) {
+    var attributeMutation = attributeMutations_1[_b]
+    if (!hasBeenSerialized(attributeMutation.target)) {
+      pendingAttributeMutations.push(attributeMutation)
+    }
+  }
   var attributes = processAttributesMutations(
-    filteredMutations.filter(function (mutation) {
-      return (
-        mutation.type === 'attributes' && !hasBeenSerialized(mutation.target)
-      )
-    }),
+    pendingAttributeMutations,
     configuration,
     nodePrivacyLevelCache
   )

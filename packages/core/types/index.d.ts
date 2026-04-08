@@ -241,6 +241,67 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    * @returns true means mask the node, false means do not mask and continue privacyLevel logic
    */
   shouldMaskNode?: (node: Node, privacyLevel: NodePrivacyLevel) => boolean
+  /**
+   * Whether to enable canvas recording for session replay.
+   */
+  replayCanvasEnabled?: boolean | undefined
+  /**
+   * Canvas replay recording mode. `manual` records only when `snapshotCanvas()` is called.
+   * `auto` performs low-frequency automatic snapshots.
+   */
+  replayCanvasMode?: 'manual' | 'auto' | undefined
+  /**
+   * Encoded image mime type used for canvas snapshots.
+   */
+  replayCanvasMimeType?: string | undefined
+  /**
+   * Encoded image quality for canvas snapshots. Supports `low`, `medium`, `high`,
+   * or a number from 0 to 1 for advanced overrides.
+   */
+  replayCanvasQuality?: 'low' | 'medium' | 'high' | number | undefined
+  /**
+   * Maximum canvas edge size before downscaling for encoding.
+   */
+  replayCanvasMaxCanvasSize?: number | undefined
+  /**
+   * Maximum encoded bytes allowed for a single canvas snapshot.
+   */
+  replayCanvasMaxEncodedBytes?: number | undefined
+  /**
+   * Maximum number of concurrent canvas encoding tasks.
+   */
+  replayCanvasMaxConcurrentEncodes?: number | undefined
+  /**
+   * Whether canvas mutations should be flushed into a replay segment immediately.
+   */
+  replayCanvasFlushImmediately?: boolean | undefined
+  /**
+   * Auto snapshot interval in milliseconds when `replayCanvasMode` is `auto`.
+   */
+  replayCanvasAutoInterval?: number | undefined
+  /**
+   * Minimum cooldown in milliseconds after a successful auto snapshot.
+   */
+  replayCanvasAutoCooldown?: number | undefined
+  /**
+   * Backoff in milliseconds after an auto snapshot is skipped as unchanged.
+   */
+  replayCanvasAutoUnchangedBackoff?: number | undefined
+  /**
+   * Backoff in milliseconds after an auto snapshot fails.
+   */
+  replayCanvasAutoFailureBackoff?: number | undefined
+  /**
+   * Maximum number of canvases processed in a single auto snapshot run.
+   */
+  replayCanvasAutoMaxPerRun?: number | undefined
+  /**
+   * Controls whether a canvas should be recorded. Returning `false` skips the canvas.
+   * Returning a number assigns auto mode priority, where higher values are processed first.
+   */
+  shouldRecordCanvas?:
+    | ((canvas: HTMLCanvasElement) => boolean | number | undefined)
+    | undefined
 }
 export type RumInitConfiguration = RumBaseInitConfiguration &
   DatakitInitConfiguration

@@ -27,6 +27,40 @@ export interface InternalContext {
     ids: string[]
   }
 }
+
+export interface CanvasSnapshotResult {
+  ok: boolean
+  reason?: string
+}
+
+export interface AutoCanvasSnapshotDebugEntry {
+  canvasId?: number
+  ok: boolean
+  reason?: string
+  priority?: number | null
+}
+
+export interface AutoCanvasSnapshotDebugResult {
+  status: 'completed' | 'skipped_hidden' | 'skipped_no_candidates'
+  timestamp: number
+  eligibleCanvasCount: number
+  selectedCanvasCount: number
+  skippedBudgetCount: number
+  keepSessionAliveTriggered: boolean
+  results: AutoCanvasSnapshotDebugEntry[]
+}
+
+export interface ReplaySegmentFlushDebugResult {
+  creationReason: string
+  flushReason: string
+  recordsCount: number
+  recordCountsByType: Record<string, number>
+  start: number
+  end: number
+  indexInView: number
+  rawBytesCount: number
+}
+
 export declare const datafluxRum: {
   init: (
     initConfiguration: RumInitConfiguration | RumSiteInitConfiguration
@@ -68,9 +102,20 @@ export declare const datafluxRum: {
   clearUser: () => void
   stopSession: () => void
   setForcedSession: () => void
-  startSessionReplayRecording: () => void
+  startSessionReplayRecording: (options?: { force?: boolean }) => void
   stopSessionReplayRecording: () => void
   takeSubsequentFullSnapshot: () => void
+  snapshotCanvas: (
+    canvas: HTMLCanvasElement,
+    options?: object
+  ) => Promise<CanvasSnapshotResult>
+  getSerializedNodeIdForDebug: (node: Node) => number | undefined
+  getLastAutoCanvasSnapshotResultForDebug: () =>
+    | AutoCanvasSnapshotDebugResult
+    | undefined
+  getLastReplaySegmentFlushForDebug: () =>
+    | ReplaySegmentFlushDebugResult
+    | undefined
 } & {
   onReady(callback: () => void): void
 }

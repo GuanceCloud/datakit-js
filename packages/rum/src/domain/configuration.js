@@ -12,10 +12,44 @@ import {
   isMatchOption,
   catchUserErrors,
   getOrigin,
-  each
+  each,
+  isNumber
 } from '@cloudcare/browser-core'
 import { buildEnv } from '../boot/buildEnv'
 import { isTracingOption } from '../domain/tracing/tracer'
+
+var REPLAY_CANVAS_QUALITY_PRESETS = {
+  low: {
+    quality: 0.25,
+    autoInterval: 1500,
+    autoCooldown: 3000,
+    autoUnchangedBackoff: 5000,
+    autoFailureBackoff: 7000,
+    autoMaxPerRun: 1
+  },
+  medium: {
+    quality: 0.4,
+    autoInterval: 1000,
+    autoCooldown: 2000,
+    autoUnchangedBackoff: 3000,
+    autoFailureBackoff: 5000,
+    autoMaxPerRun: 2
+  },
+  high: {
+    quality: 0.5,
+    autoInterval: 700,
+    autoCooldown: 1400,
+    autoUnchangedBackoff: 2000,
+    autoFailureBackoff: 4000,
+    autoMaxPerRun: 4
+  }
+}
+
+function getReplayCanvasQualityPreset(value) {
+  return typeof value === 'string'
+    ? REPLAY_CANVAS_QUALITY_PRESETS[value]
+    : undefined
+}
 
 export function validateAndBuildRumConfiguration(initConfiguration) {
   if (!initConfiguration.applicationId) {
@@ -84,6 +118,100 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
     display.error('Excluded Activity Urls should be an array')
     return
   }
+  if (
+    initConfiguration.replayCanvasMode !== undefined &&
+    initConfiguration.replayCanvasMode !== 'manual' &&
+    initConfiguration.replayCanvasMode !== 'auto'
+  ) {
+    display.error("Replay Canvas Mode should be 'manual' or 'auto'")
+    return
+  }
+  if (
+    initConfiguration.replayCanvasQuality !== undefined &&
+    !(
+      getReplayCanvasQualityPreset(initConfiguration.replayCanvasQuality) ||
+      (typeof initConfiguration.replayCanvasQuality === 'number' &&
+        initConfiguration.replayCanvasQuality >= 0 &&
+        initConfiguration.replayCanvasQuality <= 1)
+    )
+  ) {
+    display.error(
+      "Replay Canvas Quality should be 'low', 'medium', 'high', or a number between 0 and 1"
+    )
+    return
+  }
+  if (
+    initConfiguration.replayCanvasMaxCanvasSize !== undefined &&
+    (!isNumber(initConfiguration.replayCanvasMaxCanvasSize) ||
+      initConfiguration.replayCanvasMaxCanvasSize <= 0)
+  ) {
+    display.error('Replay Canvas Max Canvas Size should be a positive number')
+    return
+  }
+  if (
+    initConfiguration.replayCanvasMaxEncodedBytes !== undefined &&
+    (!isNumber(initConfiguration.replayCanvasMaxEncodedBytes) ||
+      initConfiguration.replayCanvasMaxEncodedBytes <= 0)
+  ) {
+    display.error(
+      'Replay Canvas Max Encoded Bytes should be a positive number'
+    )
+    return
+  }
+  if (
+    initConfiguration.replayCanvasMaxConcurrentEncodes !== undefined &&
+    (!isNumber(initConfiguration.replayCanvasMaxConcurrentEncodes) ||
+      initConfiguration.replayCanvasMaxConcurrentEncodes <= 0)
+  ) {
+    display.error(
+      'Replay Canvas Max Concurrent Encodes should be a positive number'
+    )
+    return
+  }
+  if (
+    initConfiguration.replayCanvasAutoInterval !== undefined &&
+    (!isNumber(initConfiguration.replayCanvasAutoInterval) ||
+      initConfiguration.replayCanvasAutoInterval <= 0)
+  ) {
+    display.error('Replay Canvas Auto Interval should be a positive number')
+    return
+  }
+  if (
+    initConfiguration.replayCanvasAutoCooldown !== undefined &&
+    (!isNumber(initConfiguration.replayCanvasAutoCooldown) ||
+      initConfiguration.replayCanvasAutoCooldown <= 0)
+  ) {
+    display.error('Replay Canvas Auto Cooldown should be a positive number')
+    return
+  }
+  if (
+    initConfiguration.replayCanvasAutoUnchangedBackoff !== undefined &&
+    (!isNumber(initConfiguration.replayCanvasAutoUnchangedBackoff) ||
+      initConfiguration.replayCanvasAutoUnchangedBackoff <= 0)
+  ) {
+    display.error(
+      'Replay Canvas Auto Unchanged Backoff should be a positive number'
+    )
+    return
+  }
+  if (
+    initConfiguration.replayCanvasAutoFailureBackoff !== undefined &&
+    (!isNumber(initConfiguration.replayCanvasAutoFailureBackoff) ||
+      initConfiguration.replayCanvasAutoFailureBackoff <= 0)
+  ) {
+    display.error(
+      'Replay Canvas Auto Failure Backoff should be a positive number'
+    )
+    return
+  }
+  if (
+    initConfiguration.replayCanvasAutoMaxPerRun !== undefined &&
+    (!isNumber(initConfiguration.replayCanvasAutoMaxPerRun) ||
+      initConfiguration.replayCanvasAutoMaxPerRun <= 0)
+  ) {
+    display.error('Replay Canvas Auto Max Per Run should be a positive number')
+    return
+  }
 
   var baseConfiguration = validateAndBuildConfiguration(initConfiguration)
   if (!baseConfiguration) {
@@ -92,6 +220,13 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
   var trackUserInteractions = !!isNullUndefinedDefaultValue(
     initConfiguration.trackUserInteractions,
     initConfiguration.trackInteractions
+  )
+  var replayCanvasMode = isNullUndefinedDefaultValue(
+    initConfiguration.replayCanvasMode,
+    'manual'
+  )
+  var replayCanvasQualityPreset = getReplayCanvasQualityPreset(
+    initConfiguration.replayCanvasQuality
   )
   return assign(
     {
@@ -135,6 +270,69 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
       trackUserInteractions: trackUserInteractions,
       enableLongAnimationFrame: !!initConfiguration.enableLongAnimationFrame,
       trackViewsManually: !!initConfiguration.trackViewsManually,
+      replayCanvasEnabled: !!initConfiguration.replayCanvasEnabled,
+      replayCanvasMode: replayCanvasMode,
+      replayCanvasQuality: isNullUndefinedDefaultValue(
+        replayCanvasQualityPreset
+          ? replayCanvasQualityPreset.quality
+          : initConfiguration.replayCanvasQuality,
+        0.4
+      ),
+      replayCanvasMimeType: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasMimeType,
+        'image/webp'
+      ),
+      replayCanvasMaxCanvasSize: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasMaxCanvasSize,
+        1280
+      ),
+      replayCanvasMaxEncodedBytes: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasMaxEncodedBytes,
+        40000
+      ),
+      replayCanvasMaxConcurrentEncodes: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasMaxConcurrentEncodes,
+        1
+      ),
+      replayCanvasAutoInterval: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasAutoInterval,
+        replayCanvasQualityPreset
+          ? replayCanvasQualityPreset.autoInterval
+          : undefined,
+        1000
+      ),
+      replayCanvasAutoCooldown: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasAutoCooldown,
+        replayCanvasQualityPreset
+          ? replayCanvasQualityPreset.autoCooldown
+          : undefined,
+        1000
+      ),
+      replayCanvasAutoUnchangedBackoff: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasAutoUnchangedBackoff,
+        replayCanvasQualityPreset
+          ? replayCanvasQualityPreset.autoUnchangedBackoff
+          : undefined,
+        3000
+      ),
+      replayCanvasAutoFailureBackoff: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasAutoFailureBackoff,
+        replayCanvasQualityPreset
+          ? replayCanvasQualityPreset.autoFailureBackoff
+          : undefined,
+        5000
+      ),
+      replayCanvasAutoMaxPerRun: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasAutoMaxPerRun,
+        replayCanvasQualityPreset
+          ? replayCanvasQualityPreset.autoMaxPerRun
+          : undefined,
+        2
+      ),
+      replayCanvasFlushImmediately: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasFlushImmediately,
+        replayCanvasMode === 'manual'
+      ),
       traceType: isNullUndefinedDefaultValue(
         initConfiguration.traceType,
         TraceType.DDTRACE
@@ -151,6 +349,12 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         catchUserErrors(
           initConfiguration.shouldMaskNode,
           'shouldMaskNode threw an error:'
+        ),
+      shouldRecordCanvas:
+        initConfiguration.shouldRecordCanvas &&
+        catchUserErrors(
+          initConfiguration.shouldRecordCanvas,
+          'shouldRecordCanvas threw an error:'
         )
     },
     baseConfiguration,

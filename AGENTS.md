@@ -104,6 +104,7 @@ npm run build --workspace @cloudcare/browser-worker
 - Prefer minimal, source-level changes in `packages/*/src`.
 - Keep module format consistent with surrounding code. The repo uses plain JavaScript and existing style conventions rather than TypeScript source.
 - Preserve public entry points and exported names unless the task explicitly requires an API change.
+- If a change affects any public API, init configuration, or externally observable return shape, you MUST update the published type declarations under `packages/*/types/*.d.ts` in the same change. Do not leave runtime behavior and `.d.ts` out of sync.
 - Check package boundaries before moving shared logic; `core` is the shared dependency layer.
 - If touching bundling or build-time env behavior, inspect `webpack.base.js`, `scripts/build-env.js`, and `scripts/replace-build-env.js` together.
 - Do not commit or expose registry tokens from `.npmrc` or other local config.

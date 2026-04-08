@@ -99,4 +99,83 @@ describe('actionCollection', () => {
     expect(event.rawRumEvent.action.loadingTime).toBe(42)
     expect(event.domainContext).toEqual({})
   })
+
+  it('should default custom action loading time to 0 when no duration is provided', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const collection = startActionCollection(
+      lifeCycle,
+      {},
+      {
+        trackUserInteractions: false
+      },
+      {
+        wasInPageStateAt: () => false
+      }
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    collection.addAction(
+      {
+        type: 'custom',
+        name: 'Open Panel',
+        startClocks: {
+          relative: 5,
+          timeStamp: 15
+        }
+      },
+      { view: { id: 'view-1' } }
+    )
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.customerContext).toBeUndefined()
+    expect(event.rawRumEvent.action.loadingTime).toBe(0)
+    expect(event.rawRumEvent.action.type).toBe('custom')
+  })
+
+  it('should discard negative auto action durations', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    startActionCollection(
+      lifeCycle,
+      {},
+      {
+        trackUserInteractions: false
+      },
+      {
+        wasInPageStateAt: () => true
+      }
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    lifeCycle.notify(LifeCycleEventType.AUTO_ACTION_COMPLETED, {
+      id: 'click-id',
+      type: ActionType.CLICK,
+      name: 'Checkout',
+      duration: -1,
+      counts: {
+        errorCount: 0,
+        longTaskCount: 0,
+        resourceCount: 0
+      },
+      frustrationTypes: [],
+      target: {
+        selector: 'button.checkout'
+      },
+      position: {
+        x: 4,
+        y: 8
+      },
+      event: { type: 'click' },
+      events: [{ type: 'click' }],
+      startClocks: {
+        relative: 10,
+        timeStamp: 20
+      }
+    })
+
+    const event = collected.calls.mostRecent().args[0]
+    expect(event.rawRumEvent.action.loadingTime).toBeUndefined()
+    expect(event.rawRumEvent.action.frustration.type).toEqual([])
+  })
 })

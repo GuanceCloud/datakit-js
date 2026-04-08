@@ -37,6 +37,21 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       start: noop,
       stop: noop,
       takeSubsequentFullSnapshot: noop,
+      snapshotCanvas: function () {
+        return {
+          ok: false,
+          reason: 'not_recording'
+        }
+      },
+      getSerializedNodeIdForDebug: function () {
+        return undefined
+      },
+      getLastAutoCanvasSnapshotResultForDebug: function () {
+        return undefined
+      },
+      getLastReplaySegmentFlushForDebug: function () {
+        return undefined
+      },
       getReplayStats: function () {
         return undefined
       },
@@ -58,6 +73,21 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     state = { status: RecorderStatus.Stopped }
   }
   var takeSubsequentFullSnapshot = function () {}
+  var snapshotCanvas = function () {
+    return {
+      ok: false,
+      reason: 'not_recording'
+    }
+  }
+  var getSerializedNodeIdForDebug = function () {
+    return undefined
+  }
+  var getLastAutoCanvasSnapshotResultForDebug = function () {
+    return undefined
+  }
+  var getLastReplaySegmentFlushForDebug = function () {
+    return undefined
+  }
   return {
     start: function (options) {
       startStrategy(options)
@@ -154,7 +184,14 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
           state = {
             status: RecorderStatus.Started,
             stopRecording: recordingImpl.stop,
-            takeSubsequentFullSnapshot: recordingImpl.takeSubsequentFullSnapshot
+            takeSubsequentFullSnapshot: recordingImpl.takeSubsequentFullSnapshot,
+            snapshotCanvas: recordingImpl.snapshotCanvas || noop,
+            getSerializedNodeIdForDebug:
+              recordingImpl.getSerializedNodeIdForDebug || noop,
+            getLastAutoCanvasSnapshotResultForDebug:
+              recordingImpl.getLastAutoCanvasSnapshotResultForDebug || noop,
+            getLastReplaySegmentFlushForDebug:
+              recordingImpl.getLastReplaySegmentFlushForDebug || noop
           }
         })
       }
@@ -175,12 +212,51 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       takeSubsequentFullSnapshot = function () {
         state.takeSubsequentFullSnapshot()
       }
+      snapshotCanvas = function (canvas, options) {
+        if (state.status === RecorderStatus.Started) {
+          return state.snapshotCanvas(canvas, options)
+        }
+        return {
+          ok: false,
+          reason: 'not_recording'
+        }
+      }
+      getSerializedNodeIdForDebug = function (node) {
+        if (state.status === RecorderStatus.Started) {
+          return state.getSerializedNodeIdForDebug(node)
+        }
+        return undefined
+      }
+      getLastAutoCanvasSnapshotResultForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getLastAutoCanvasSnapshotResultForDebug()
+        }
+        return undefined
+      }
+      getLastReplaySegmentFlushForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getLastReplaySegmentFlushForDebug()
+        }
+        return undefined
+      }
       if (state.status === RecorderStatus.IntentToStart) {
         startStrategy()
       }
     },
     takeSubsequentFullSnapshot() {
       takeSubsequentFullSnapshot()
+    },
+    snapshotCanvas: function (canvas, options) {
+      return snapshotCanvas(canvas, options)
+    },
+    getSerializedNodeIdForDebug: function (node) {
+      return getSerializedNodeIdForDebug(node)
+    },
+    getLastReplaySegmentFlushForDebug: function () {
+      return getLastReplaySegmentFlushForDebug()
+    },
+    getLastAutoCanvasSnapshotResultForDebug: function () {
+      return getLastAutoCanvasSnapshotResultForDebug()
     },
     isRecording: function () {
       return (
