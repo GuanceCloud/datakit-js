@@ -37,11 +37,13 @@ export function record(options) {
     inputCb
   })
   var lastAutoCanvasSnapshotResult
-  var canvasObserver = createCanvasObserver({
+  var canvasObserver = (
+    options.createCanvasObserver || createCanvasObserver
+  )({
     configuration: options.configuration,
     emit: emit
   })
-  var stopAutoCanvasSnapshots = (
+  var autoCanvasSnapshotLoop = (
     options.startAutoCanvasSnapshotLoop || startAutoCanvasSnapshotLoop
   )({
     configuration: options.configuration,
@@ -54,9 +56,7 @@ export function record(options) {
     onDebug: function (result) {
       var keepSessionAliveTriggered = false
       if (
-        result &&
-        result.status === 'completed' &&
-        result.selectedCanvasCount > 0 &&
+        shouldKeepSessionAliveAfterAutoCanvasSnapshot(result) &&
         options.sessionManager &&
         options.sessionManager.keepSessionAlive
       ) {
@@ -185,7 +185,7 @@ export function record(options) {
     stop: function () {
       shadowRootsController.stop()
       canvasObserver.stop()
-      stopAutoCanvasSnapshots()
+      stopAutoCanvasSnapshots(autoCanvasSnapshotLoop)
       stopObservers()
     },
     snapshotCanvas: function (canvas, snapshotOptions) {
@@ -199,6 +199,10 @@ export function record(options) {
     },
     takeSubsequentFullSnapshot: function (timestamp) {
       flushMutations()
+      if (canvasObserver.reset) {
+        canvasObserver.reset()
+      }
+      resetAutoCanvasSnapshots(autoCanvasSnapshotLoop)
       takeFullSnapshot(timestamp, {
         shadowRootsController: shadowRootsController,
         status: SerializationContextStatus.SUBSEQUENT_FULL_SNAPSHOT,
@@ -208,6 +212,42 @@ export function record(options) {
     flushMutations: flushMutations,
     shadowRootsController: shadowRootsController
   }
+}
+
+function stopAutoCanvasSnapshots(autoCanvasSnapshotLoop) {
+  if (typeof autoCanvasSnapshotLoop === 'function') {
+    autoCanvasSnapshotLoop()
+    return
+  }
+  if (autoCanvasSnapshotLoop && autoCanvasSnapshotLoop.stop) {
+    autoCanvasSnapshotLoop.stop()
+  }
+}
+
+function resetAutoCanvasSnapshots(autoCanvasSnapshotLoop) {
+  if (autoCanvasSnapshotLoop && autoCanvasSnapshotLoop.reset) {
+    autoCanvasSnapshotLoop.reset()
+  }
+}
+
+function shouldKeepSessionAliveAfterAutoCanvasSnapshot(result) {
+  return !!(
+    result &&
+    result.status === 'completed' &&
+    result.selectedCanvasCount > 0 &&
+    (result.results || []).some(function (entry) {
+      return isKeepAliveWorthyAutoCanvasResult(entry)
+    })
+  )
+}
+
+function isKeepAliveWorthyAutoCanvasResult(entry) {
+  return !!(
+    entry &&
+    (entry.ok ||
+      entry.reason === 'unchanged' ||
+      entry.reason === 'below_threshold')
+  )
 }
 
 function cloneAutoCanvasSnapshotDebugResult(

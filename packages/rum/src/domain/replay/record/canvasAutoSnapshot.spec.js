@@ -60,7 +60,7 @@ describe('replay/record/canvasAutoSnapshot', () => {
     var snapshotCanvas = jasmine
       .createSpy('snapshotCanvas')
       .and.returnValue(Promise.resolve({ ok: true }))
-    var stop = startAutoCanvasSnapshotLoop({
+    var loop = startAutoCanvasSnapshotLoop({
       configuration: {
         replayCanvasEnabled: true,
         replayCanvasMode: 'auto',
@@ -84,7 +84,7 @@ describe('replay/record/canvasAutoSnapshot', () => {
 
     expect(snapshotCanvas).toHaveBeenCalledTimes(2)
 
-    stop()
+    loop.stop()
     expect(clearTimeoutImpl).toHaveBeenCalledWith(123)
   })
 
@@ -367,7 +367,7 @@ describe('replay/record/canvasAutoSnapshot', () => {
       .createSpy('snapshotCanvas')
       .and.returnValue(Promise.resolve({ ok: true }))
 
-    var stop = startAutoCanvasSnapshotLoop({
+    var loop = startAutoCanvasSnapshotLoop({
       configuration: {
         replayCanvasEnabled: true,
         replayCanvasMode: 'auto',
@@ -395,7 +395,7 @@ describe('replay/record/canvasAutoSnapshot', () => {
     expect(snapshotCanvas).toHaveBeenCalledTimes(1)
     expect(setTimeoutImpl).toHaveBeenCalledWith(jasmine.any(Function), 1000)
 
-    stop()
+    loop.stop()
     expect(visibilityStop).toHaveBeenCalled()
   })
 
@@ -477,7 +477,7 @@ describe('replay/record/canvasAutoSnapshot', () => {
 
   it('should skip starting the loop when auto mode is disabled', () => {
     var setTimeoutImpl = jasmine.createSpy('setTimeout')
-    var stop = startAutoCanvasSnapshotLoop({
+    var loop = startAutoCanvasSnapshotLoop({
       configuration: {
         replayCanvasEnabled: true,
         replayCanvasMode: 'manual',
@@ -489,7 +489,12 @@ describe('replay/record/canvasAutoSnapshot', () => {
     })
 
     expect(setTimeoutImpl).not.toHaveBeenCalled()
-    expect(stop).toEqual(jasmine.any(Function))
+    expect(loop).toEqual(
+      jasmine.objectContaining({
+        stop: jasmine.any(Function),
+        reset: jasmine.any(Function)
+      })
+    )
   })
 
   it('should back off unchanged, below-threshold and failed canvases independently', () => {
@@ -606,5 +611,102 @@ describe('replay/record/canvasAutoSnapshot', () => {
     await flushAutoSnapshotLoop()
 
     expect(snapshotCanvas).toHaveBeenCalledTimes(2)
+  })
+
+  it('should reset auto scheduling state and trigger an immediate rerun', async () => {
+    var recordedCallback
+    var recordedDelay
+    var canvas = document.createElement('canvas')
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(Promise.resolve({ ok: true }))
+
+    var loop = startAutoCanvasSnapshotLoop({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasAutoInterval: 1000,
+        replayCanvasAutoCooldown: 3000,
+        replayCanvasAutoUnchangedBackoff: 3000,
+        replayCanvasAutoFailureBackoff: 5000
+      },
+      getCanvases: function () {
+        return [canvas]
+      },
+      snapshotCanvas: snapshotCanvas,
+      setTimeoutImpl: jasmine
+        .createSpy('setTimeout')
+        .and.callFake(function (callback, delay) {
+          recordedCallback = callback
+          recordedDelay = delay
+          return 123
+        }),
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
+    })
+
+    await flushAutoSnapshotLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+    expect(recordedDelay).toBe(3000)
+
+    loop.reset()
+    expect(recordedDelay).toBe(0)
+
+    recordedCallback()
+    await flushAutoSnapshotLoop()
+
+    expect(snapshotCanvas).toHaveBeenCalledTimes(2)
+    loop.stop()
+  })
+
+  it('should wait for the in-flight run to finish before rerunning after reset', async () => {
+    var recordedCallback
+    var releaseSnapshot
+    var snapshotDone = new Promise(function (resolve) {
+      releaseSnapshot = resolve
+    })
+    var canvas = document.createElement('canvas')
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValues(snapshotDone, Promise.resolve({ ok: true }))
+
+    var loop = startAutoCanvasSnapshotLoop({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasAutoInterval: 1000,
+        replayCanvasAutoCooldown: 3000,
+        replayCanvasAutoUnchangedBackoff: 3000,
+        replayCanvasAutoFailureBackoff: 5000
+      },
+      getCanvases: function () {
+        return [canvas]
+      },
+      snapshotCanvas: snapshotCanvas,
+      setTimeoutImpl: jasmine
+        .createSpy('setTimeout')
+        .and.callFake(function (callback) {
+          recordedCallback = callback
+          return 123
+        }),
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
+    })
+
+    await flushAutoSnapshotLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+
+    loop.reset()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+
+    releaseSnapshot({ ok: true })
+    await snapshotDone
+    await flushAutoSnapshotLoop()
+
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+
+    recordedCallback()
+    await flushAutoSnapshotLoop()
+
+    expect(snapshotCanvas).toHaveBeenCalledTimes(2)
+    loop.stop()
   })
 })

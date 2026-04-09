@@ -73,6 +73,10 @@ export function createAutoCanvasSnapshotController(configuration, now) {
   var lastSuccessfulSnapshotAtByCanvas = new WeakMap()
 
   return {
+    reset: function () {
+      nextEligibleAtByCanvas = new WeakMap()
+      lastSuccessfulSnapshotAtByCanvas = new WeakMap()
+    },
     shouldSnapshot: function (canvas) {
       return (nextEligibleAtByCanvas.get(canvas) || 0) <= getNow()
     },
@@ -237,25 +241,52 @@ export function startAutoCanvasSnapshotLoop(options) {
   var setTimeoutImpl = options.setTimeoutImpl || setTimeout
   var clearTimeoutImpl = options.clearTimeoutImpl || clearTimeout
   var controller = createAutoCanvasSnapshotController(configuration, now)
-
-  if (!isAutoCanvasRecordingEnabled(configuration)) {
-    return function () {}
-  }
-
   var stopped = false
   var snapshotInProgress = false
   var scheduledTimeoutId
   var nextCanvasIndexByPriority = {}
-
-  function notifyDebug(summary) {
-    onDebug(summary)
-  }
+  var generation = 0
+  var visibilityChangeListener
+  var pendingImmediateRunAfterReset = false
 
   function clearScheduledRun() {
     if (scheduledTimeoutId !== undefined) {
       clearTimeoutImpl(scheduledTimeoutId)
       scheduledTimeoutId = undefined
     }
+  }
+
+  function stop() {
+    stopped = true
+    if (visibilityChangeListener) {
+      visibilityChangeListener.stop()
+    }
+    clearScheduledRun()
+  }
+
+  function reset() {
+    if (!isAutoCanvasRecordingEnabled(configuration)) {
+      return
+    }
+    generation += 1
+    controller.reset()
+    nextCanvasIndexByPriority = {}
+    clearScheduledRun()
+    pendingImmediateRunAfterReset = !stopped && getVisibilityState() !== 'hidden'
+    if (pendingImmediateRunAfterReset && !snapshotInProgress) {
+      scheduleNextRun(0)
+    }
+  }
+
+  if (!isAutoCanvasRecordingEnabled(configuration)) {
+    return {
+      stop: stop,
+      reset: reset
+    }
+  }
+
+  function notifyDebug(summary) {
+    onDebug(summary)
   }
 
   function scheduleNextRun(delay) {
@@ -336,6 +367,7 @@ export function startAutoCanvasSnapshotLoop(options) {
       skippedBudgetCount: Math.max(eligibleCanvases.length - canvases.length, 0),
       results: []
     }
+    var runGeneration = generation
     snapshotInProgress = true
     takeAutoCanvasSnapshots(
       function () {
@@ -347,6 +379,9 @@ export function startAutoCanvasSnapshotLoop(options) {
           : undefined
         return Promise.resolve(snapshotCanvas(canvas))
           .then(function (result) {
+            if (runGeneration !== generation) {
+              return result
+            }
             controller.updateAfterSnapshot(canvas, result)
             summary.results.push({
               canvasId: serializedNodeId,
@@ -361,6 +396,9 @@ export function startAutoCanvasSnapshotLoop(options) {
               ok: false,
               reason: 'encode_failed'
             }
+            if (runGeneration !== generation) {
+              return result
+            }
             controller.updateAfterSnapshot(canvas, result)
             summary.results.push({
               canvasId: serializedNodeId,
@@ -373,12 +411,30 @@ export function startAutoCanvasSnapshotLoop(options) {
       }
     ).then(
       function () {
+        if (runGeneration !== generation) {
+          snapshotInProgress = false
+          if (pendingImmediateRunAfterReset) {
+            pendingImmediateRunAfterReset = false
+            scheduleNextRun(0)
+          }
+          return
+        }
         snapshotInProgress = false
+        pendingImmediateRunAfterReset = false
         scheduleNextRunForCurrentState()
         notifyDebug(summary)
       },
       function () {
+        if (runGeneration !== generation) {
+          snapshotInProgress = false
+          if (pendingImmediateRunAfterReset) {
+            pendingImmediateRunAfterReset = false
+            scheduleNextRun(0)
+          }
+          return
+        }
         snapshotInProgress = false
+        pendingImmediateRunAfterReset = false
         scheduleNextRunForCurrentState()
         notifyDebug(summary)
       }
@@ -387,7 +443,7 @@ export function startAutoCanvasSnapshotLoop(options) {
 
   runSnapshots()
 
-  var visibilityChangeListener = addEventListenerImpl(
+  visibilityChangeListener = addEventListenerImpl(
     window,
     DOM_EVENT.VISIBILITY_CHANGE,
     function () {
@@ -400,9 +456,8 @@ export function startAutoCanvasSnapshotLoop(options) {
     { capture: true }
   )
 
-  return function () {
-    stopped = true
-    visibilityChangeListener.stop()
-    clearScheduledRun()
+  return {
+    stop: stop,
+    reset: reset
   }
 }

@@ -274,11 +274,17 @@ describe('replay/record/canvasObserver', () => {
   })
 
   it('should skip below-threshold frames before encoding in auto mode', async () => {
+    let nowTime = 1000
     const encode = jasmine
       .createSpy('encode')
-      .and.returnValue(
+      .and.returnValues(
         Promise.resolve({
           dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        }),
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,REVG',
           width: 20,
           height: 10
         })
@@ -288,12 +294,14 @@ describe('replay/record/canvasObserver', () => {
         replayCanvasEnabled: true,
         replayCanvasMode: 'auto',
         replayCanvasMimeType: 'image/webp',
-        replayCanvasMaxEncodedBytes: 1000
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
       },
+      now: () => nowTime,
       emit,
       frameSignatureExtractor: jasmine
         .createSpy('frameSignatureExtractor')
-        .and.returnValues([0, 0, 0], [2, 2, 2]),
+        .and.returnValues([0, 0, 0], [2, 2, 2], [2, 2, 2]),
       encodeBridge: {
         encode: encode,
         stop: jasmine.createSpy('stop')
@@ -305,8 +313,10 @@ describe('replay/record/canvasObserver', () => {
       ok: false,
       reason: 'below_threshold'
     })
-    expect(encode.calls.count()).toBe(1)
-    expect(emit.calls.count()).toBe(1)
+    nowTime = 5000
+    expect(await observer.snapshot(canvas)).toEqual({ ok: true })
+    expect(encode.calls.count()).toBe(2)
+    expect(emit.calls.count()).toBe(2)
   })
 
   it('should keep allowing duplicate manual snapshots', async () => {
@@ -340,6 +350,94 @@ describe('replay/record/canvasObserver', () => {
     expect(await observer.snapshot(canvas)).toEqual({ ok: true })
     expect(await observer.snapshot(canvas)).toEqual({ ok: true })
     expect(emit.calls.count()).toBe(2)
+  })
+
+  it('should emit again after reset even when the auto frame stays unchanged', async () => {
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      emit,
+      encodeBridge: {
+        encode: jasmine
+          .createSpy('encode')
+          .and.returnValues(
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            }),
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            })
+          ),
+        stop: jasmine.createSpy('stop')
+      },
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValues([0, 0, 0], [0, 0, 0])
+    })
+
+    expect(await observer.snapshot(canvas)).toEqual({ ok: true })
+
+    observer.reset()
+
+    expect(await observer.snapshot(canvas)).toEqual({ ok: true })
+    expect(emit.calls.count()).toBe(2)
+  })
+
+  it('should ignore stale async snapshots that resolve after reset', async () => {
+    let releaseFirstEncode
+    const firstEncode = new Promise((resolve) => {
+      releaseFirstEncode = resolve
+    })
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      emit,
+      encodeBridge: {
+        encode: jasmine
+          .createSpy('encode')
+          .and.returnValues(
+            firstEncode,
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            })
+          ),
+        stop: jasmine.createSpy('stop')
+      },
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValues([0, 0, 0], [255, 255, 255])
+    })
+
+    const firstSnapshotPromise = observer.snapshot(canvas)
+    observer.reset()
+    releaseFirstEncode({
+      dataUrl: 'data:image/webp;base64,QUJD',
+      width: 20,
+      height: 10
+    })
+
+    expect(await firstSnapshotPromise).toEqual({
+      ok: false,
+      reason: 'reset_during_snapshot'
+    })
+    expect(await observer.snapshot(canvas)).toEqual({ ok: true })
+    expect(emit.calls.count()).toBe(1)
   })
 
   it('should return encode_failed when the encode bridge rejects', async () => {

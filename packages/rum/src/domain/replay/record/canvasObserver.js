@@ -29,13 +29,23 @@ function isSupportedReplayCanvasMode(mode) {
 export function createCanvasObserver(options) {
   var configuration = options.configuration
   var emit = options.emit
+  var now = options.now || Date.now
   var encodeBridge =
     options.encodeBridge || createCanvasEncodeBridge(configuration)
   var frameSignatureExtractor =
     options.frameSignatureExtractor || createCanvasFrameSignatureExtractor()
   var stopped = false
+  var generation = 0
   var lastEncodedDataUrlByCanvas = new WeakMap()
   var lastAutoFrameSignatureByCanvas = new WeakMap()
+  var lastAutoSuccessfulSnapshotAtByCanvas = new WeakMap()
+
+  function reset() {
+    generation += 1
+    lastEncodedDataUrlByCanvas = new WeakMap()
+    lastAutoFrameSignatureByCanvas = new WeakMap()
+    lastAutoSuccessfulSnapshotAtByCanvas = new WeakMap()
+  }
 
   return {
     snapshot: function (canvas) {
@@ -67,11 +77,14 @@ export function createCanvasObserver(options) {
         )
       }
 
+      var snapshotGeneration = generation
       var autoFrameSignatureResult = getAutoFrameSignatureResult(
         canvas,
         configuration,
+        now,
         frameSignatureExtractor,
-        lastAutoFrameSignatureByCanvas
+        lastAutoFrameSignatureByCanvas,
+        lastAutoSuccessfulSnapshotAtByCanvas
       )
       if (autoFrameSignatureResult) {
         return Promise.resolve(autoFrameSignatureResult)
@@ -82,6 +95,9 @@ export function createCanvasObserver(options) {
         .then(function (encodedCanvas) {
           if (stopped) {
             return createSnapshotFailureResult('observer_stopped')
+          }
+          if (snapshotGeneration !== generation) {
+            return createSnapshotFailureResult('reset_during_snapshot')
           }
 
           if (
@@ -101,6 +117,9 @@ export function createCanvasObserver(options) {
           }
 
           lastEncodedDataUrlByCanvas.set(canvas, encodedCanvas.dataUrl)
+          if (configuration.replayCanvasMode === 'auto') {
+            lastAutoSuccessfulSnapshotAtByCanvas.set(canvas, now())
+          }
 
           emit({
             type: RecordType.IncrementalSnapshot,
@@ -143,6 +162,9 @@ export function createCanvasObserver(options) {
     stop: function () {
       stopped = true
       encodeBridge.stop()
+    },
+    reset: function () {
+      reset()
     }
   }
 }
@@ -150,8 +172,10 @@ export function createCanvasObserver(options) {
 function getAutoFrameSignatureResult(
   canvas,
   configuration,
+  now,
   frameSignatureExtractor,
-  lastAutoFrameSignatureByCanvas
+  lastAutoFrameSignatureByCanvas,
+  lastAutoSuccessfulSnapshotAtByCanvas
 ) {
   if (configuration.replayCanvasMode !== 'auto') {
     return undefined
@@ -159,8 +183,15 @@ function getAutoFrameSignatureResult(
 
   var nextFrameSignature = frameSignatureExtractor(canvas)
   var previousFrameSignature = lastAutoFrameSignatureByCanvas.get(canvas)
+  var lastAutoSuccessfulSnapshotAt =
+    lastAutoSuccessfulSnapshotAtByCanvas.get(canvas)
+  var canSkipBelowThreshold =
+    typeof lastAutoSuccessfulSnapshotAt === 'number' &&
+    now() - lastAutoSuccessfulSnapshotAt <
+      configuration.replayCanvasAutoUnchangedBackoff
 
   if (
+    canSkipBelowThreshold &&
     previousFrameSignature &&
     nextFrameSignature &&
     isCanvasFrameBelowThreshold(previousFrameSignature, nextFrameSignature)
