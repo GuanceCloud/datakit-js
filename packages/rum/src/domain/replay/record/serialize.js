@@ -25,6 +25,7 @@ import {
   getSerializedNodeId,
   setSerializedNodeId,
   getElementInputValue,
+  getHiddenElementPlaceholderSize,
   switchToAbsoluteUrl,
   serializeStyleSheets,
   absoluteToDoc,
@@ -271,18 +272,21 @@ function describeElementNode(element, options) {
   )
 
   if (nodePrivacyLevel === NodePrivacyLevel.HIDDEN) {
-    var _boundingClientRect = element.getBoundingClientRect()
-    var width = _boundingClientRect.width
-    var height = _boundingClientRect.height
+    var placeholderSize = getHiddenElementPlaceholderSize(element)
+    var attributes = {
+      [PRIVACY_ATTR_NAME]: PRIVACY_ATTR_VALUE_HIDDEN
+    }
+    if (placeholderSize.width) {
+      attributes.rr_width = placeholderSize.width
+    }
+    if (placeholderSize.height) {
+      attributes.rr_height = placeholderSize.height
+    }
     return {
       serializedNode: {
         type: NodeType.Element,
         tagName: tagName,
-        attributes: {
-          rr_width: width + 'px',
-          rr_height: height + 'px',
-          [PRIVACY_ATTR_NAME]: PRIVACY_ATTR_VALUE_HIDDEN
-        },
+        attributes: attributes,
         childNodes: [],
         isSVG: isSVG
       },

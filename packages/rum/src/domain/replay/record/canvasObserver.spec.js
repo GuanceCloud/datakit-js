@@ -234,6 +234,88 @@ describe('replay/record/canvasObserver', () => {
     expect(emit).toHaveBeenCalled()
   })
 
+  it('should keep allowing duplicate manual snapshots when auto mode is enabled', async () => {
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      emit,
+      encodeBridge: {
+        encode: jasmine
+          .createSpy('encode')
+          .and.returnValues(
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            }),
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            })
+          ),
+        stop: jasmine.createSpy('stop')
+      },
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValues([0, 0, 0], [0, 0, 0])
+    })
+
+    expect(await observer.snapshot(canvas, { trigger: 'manual' })).toEqual({
+      ok: true
+    })
+    expect(await observer.snapshot(canvas, { trigger: 'manual' })).toEqual({
+      ok: true
+    })
+    expect(emit.calls.count()).toBe(2)
+  })
+
+  it('should reuse the manual success baseline for the next auto snapshot in auto mode', async () => {
+    let nowTime = 1000
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValue(
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      now: () => nowTime,
+      emit,
+      encodeBridge: {
+        encode: encode,
+        stop: jasmine.createSpy('stop')
+      },
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValues([1, 1, 1], [1, 1, 1])
+    })
+
+    expect(await observer.snapshot(canvas, { trigger: 'manual' })).toEqual({
+      ok: true
+    })
+    nowTime = 1200
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: false,
+      reason: 'below_threshold'
+    })
+    expect(encode.calls.count()).toBe(1)
+  })
+
   it('should skip unchanged frames in auto mode', async () => {
     const observer = createCanvasObserver({
       configuration: {
@@ -265,8 +347,10 @@ describe('replay/record/canvasObserver', () => {
         .and.returnValues([0, 0, 0], [255, 255, 255])
     })
 
-    expect(await observer.snapshot(canvas)).toEqual({ ok: true })
-    expect(await observer.snapshot(canvas)).toEqual({
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
       ok: false,
       reason: 'unchanged'
     })
@@ -308,14 +392,68 @@ describe('replay/record/canvasObserver', () => {
       }
     })
 
-    expect(await observer.snapshot(canvas)).toEqual({ ok: true })
-    expect(await observer.snapshot(canvas)).toEqual({
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
       ok: false,
       reason: 'below_threshold'
     })
     nowTime = 5000
-    expect(await observer.snapshot(canvas)).toEqual({ ok: true })
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
     expect(encode.calls.count()).toBe(2)
+    expect(emit.calls.count()).toBe(2)
+  })
+
+  it('should not advance the auto signature baseline when encoding fails', async () => {
+    let nowTime = 1000
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      now: () => nowTime,
+      emit,
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValues([0, 0, 0], [50, 50, 50], [50, 50, 50]),
+      encodeBridge: {
+        encode: jasmine
+          .createSpy('encode')
+          .and.returnValues(
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            }),
+            Promise.reject(new Error('encode failed')),
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,REVG',
+              width: 20,
+              height: 10
+            })
+          ),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    nowTime = 5000
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: false,
+      reason: 'encode_failed'
+    })
+    nowTime = 6000
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
     expect(emit.calls.count()).toBe(2)
   })
 

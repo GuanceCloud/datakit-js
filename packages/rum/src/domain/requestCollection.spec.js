@@ -206,4 +206,70 @@ describe('requestCollection', () => {
       done()
     })
   })
+
+  it('should read tracked request headers from a Request input object', (done) => {
+    const lifeCycle = new LifeCycle()
+    const tracer = {
+      traceFetch: jasmine.createSpy('traceFetch'),
+      clearTracingIfNeeded: jasmine.createSpy('clearTracingIfNeeded')
+    }
+    const completed = jasmine.createSpy('completed')
+    let resolveFetch
+    const response = {
+      status: 200,
+      type: 'basic',
+      clone: jasmine.createSpy('clone').and.returnValue({
+        body: {
+          getReader() {
+            return {
+              read: jasmine.createSpy('read').and.returnValue(
+                Promise.resolve({ done: true })
+              ),
+              cancel: jasmine.createSpy('cancel').and.returnValue(Promise.resolve())
+            }
+          }
+        }
+      })
+    }
+
+    window.fetch = jasmine.createSpy('fetch').and.returnValue(
+      new Promise((resolve) => {
+        resolveFetch = resolve
+      })
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.REQUEST_COMPLETED, completed)
+
+    const tracking = trackFetch(lifeCycle, configuration, tracer)
+    const request = new Request('/api/request-object', {
+      method: 'GET',
+      headers: {
+        'x-rum-resource-id': 'tracker-from-request'
+      }
+    })
+
+    window.fetch(request)
+    resolveFetch(response)
+
+    Promise.resolve()
+      .then(() => Promise.resolve())
+      .then(() => {
+        setTimeout(() => {
+          expect(completed.calls.mostRecent().args[0]).toEqual(
+            jasmine.objectContaining({
+              type: 'fetch',
+              status: 200,
+              requestHeaderContexts: jasmine.any(Headers)
+            })
+          )
+          expect(
+            completed.calls.mostRecent().args[0].requestHeaderContexts.get(
+              'x-rum-resource-id'
+            )
+          ).toBe('tracker-from-request')
+          tracking.stop()
+          done()
+        }, 0)
+      })
+  })
 })

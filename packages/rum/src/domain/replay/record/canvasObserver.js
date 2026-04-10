@@ -48,7 +48,10 @@ export function createCanvasObserver(options) {
   }
 
   return {
-    snapshot: function (canvas) {
+    snapshot: function (canvas, snapshotOptions) {
+      var isAutoSnapshot = snapshotOptions && snapshotOptions.trigger === 'auto'
+      var shouldTrackAutoBaseline =
+        configuration.replayCanvasMode === 'auto'
       if (stopped) {
         return Promise.resolve(createSnapshotFailureResult('observer_stopped'))
       }
@@ -78,16 +81,19 @@ export function createCanvasObserver(options) {
       }
 
       var snapshotGeneration = generation
-      var autoFrameSignatureResult = getAutoFrameSignatureResult(
-        canvas,
-        configuration,
-        now,
-        frameSignatureExtractor,
-        lastAutoFrameSignatureByCanvas,
-        lastAutoSuccessfulSnapshotAtByCanvas
-      )
-      if (autoFrameSignatureResult) {
-        return Promise.resolve(autoFrameSignatureResult)
+      var autoFrameSignatureResult = getAutoFrameSignatureResult({
+        canvas: canvas,
+        configuration: configuration,
+        now: now,
+        frameSignatureExtractor: frameSignatureExtractor,
+        lastAutoFrameSignatureByCanvas: lastAutoFrameSignatureByCanvas,
+        lastAutoSuccessfulSnapshotAtByCanvas:
+          lastAutoSuccessfulSnapshotAtByCanvas,
+        isAutoSnapshot: isAutoSnapshot,
+        shouldTrackAutoBaseline: shouldTrackAutoBaseline
+      })
+      if (autoFrameSignatureResult && autoFrameSignatureResult.result) {
+        return Promise.resolve(autoFrameSignatureResult.result)
       }
 
       return encodeBridge
@@ -101,7 +107,7 @@ export function createCanvasObserver(options) {
           }
 
           if (
-            configuration.replayCanvasMode === 'auto' &&
+            isAutoSnapshot &&
             lastEncodedDataUrlByCanvas.get(canvas) === encodedCanvas.dataUrl
           ) {
             return createSnapshotFailureResult('unchanged')
@@ -117,7 +123,13 @@ export function createCanvasObserver(options) {
           }
 
           lastEncodedDataUrlByCanvas.set(canvas, encodedCanvas.dataUrl)
-          if (configuration.replayCanvasMode === 'auto') {
+          if (shouldTrackAutoBaseline) {
+            if (autoFrameSignatureResult && autoFrameSignatureResult.nextFrameSignature) {
+              lastAutoFrameSignatureByCanvas.set(
+                canvas,
+                autoFrameSignatureResult.nextFrameSignature
+              )
+            }
             lastAutoSuccessfulSnapshotAtByCanvas.set(canvas, now())
           }
 
@@ -169,39 +181,39 @@ export function createCanvasObserver(options) {
   }
 }
 
-function getAutoFrameSignatureResult(
-  canvas,
-  configuration,
-  now,
-  frameSignatureExtractor,
-  lastAutoFrameSignatureByCanvas,
-  lastAutoSuccessfulSnapshotAtByCanvas
-) {
-  if (configuration.replayCanvasMode !== 'auto') {
+function getAutoFrameSignatureResult(options) {
+  if (
+    !options.shouldTrackAutoBaseline ||
+    options.configuration.replayCanvasMode !== 'auto'
+  ) {
     return undefined
   }
 
-  var nextFrameSignature = frameSignatureExtractor(canvas)
-  var previousFrameSignature = lastAutoFrameSignatureByCanvas.get(canvas)
+  var nextFrameSignature = options.frameSignatureExtractor(options.canvas)
+  var previousFrameSignature = options.lastAutoFrameSignatureByCanvas.get(
+    options.canvas
+  )
   var lastAutoSuccessfulSnapshotAt =
-    lastAutoSuccessfulSnapshotAtByCanvas.get(canvas)
+    options.lastAutoSuccessfulSnapshotAtByCanvas.get(options.canvas)
   var canSkipBelowThreshold =
     typeof lastAutoSuccessfulSnapshotAt === 'number' &&
-    now() - lastAutoSuccessfulSnapshotAt <
-      configuration.replayCanvasAutoUnchangedBackoff
+    options.now() - lastAutoSuccessfulSnapshotAt <
+      options.configuration.replayCanvasAutoUnchangedBackoff
 
   if (
+    options.isAutoSnapshot &&
     canSkipBelowThreshold &&
     previousFrameSignature &&
     nextFrameSignature &&
     isCanvasFrameBelowThreshold(previousFrameSignature, nextFrameSignature)
   ) {
-    return createSnapshotFailureResult('below_threshold')
+    return {
+      result: createSnapshotFailureResult('below_threshold'),
+      nextFrameSignature: nextFrameSignature
+    }
   }
 
-  if (nextFrameSignature) {
-    lastAutoFrameSignatureByCanvas.set(canvas, nextFrameSignature)
+  return {
+    nextFrameSignature: nextFrameSignature
   }
-
-  return undefined
 }

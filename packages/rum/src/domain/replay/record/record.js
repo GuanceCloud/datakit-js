@@ -65,7 +65,7 @@ export function record(options) {
       flushPendingMutations()
     }, MUTATION_EMIT_DELAY_MS)
   }
-  function flushPendingMutations() {
+function flushPendingMutations() {
     if (pendingMutationTimeout) {
       clearTimeout(pendingMutationTimeout)
       pendingMutationTimeout = undefined
@@ -73,9 +73,10 @@ export function record(options) {
     if (!pendingMutationPayload) {
       return
     }
-    var mutation = materializeMutationPayload(pendingMutationPayload)
+    var mutationPayloads = splitPendingMutationPayloadForEmit(
+      pendingMutationPayload
+    )
     pendingMutationPayload = undefined
-    var mutationPayloads = splitMutationPayloadForEmit(mutation)
     updateReplayPerformanceStats(
       mutationPayloads.reduce(
         function (stats, mutationPayload) {
@@ -146,7 +147,7 @@ export function record(options) {
       )
     },
     snapshotCanvas: function (canvas) {
-      return canvasObserver.snapshot(canvas)
+      return canvasObserver.snapshot(canvas, { trigger: 'auto' })
     }
   })
 
@@ -270,7 +271,10 @@ export function record(options) {
       stopObservers()
     },
     snapshotCanvas: function (canvas, snapshotOptions) {
-      return canvasObserver.snapshot(canvas, snapshotOptions)
+      return canvasObserver.snapshot(
+        canvas,
+        assign({ trigger: 'manual' }, snapshotOptions)
+      )
     },
     getSerializedNodeIdForDebug: function (node) {
       return getSerializedNodeId(node)
@@ -315,20 +319,41 @@ function createEmptyMutationPayload() {
     texts: [],
     attributes: [],
     approxBytes: 0,
+    addsApproxBytes: 0,
+    removesApproxBytes: 0,
+    textsApproxBytes: 0,
+    attributesApproxBytes: 0,
+    addApproxBytes: [],
     removesByKey: new Map(),
+    removeApproxBytesByKey: new Map(),
     textsById: new Map(),
-    attributesById: new Map()
+    textApproxBytesById: new Map(),
+    attributesById: new Map(),
+    attributeApproxBytesById: new Map()
   }
 }
 
 function mergeMutationPayloads(target, source) {
   var merged = target || createEmptyMutationPayload()
-  merged.adds = merged.adds.concat(source.adds)
+  mergeAddMutations(merged, source.adds)
   mergeRemoveMutations(merged, source.removes)
   mergeTextMutations(merged, source.texts)
   mergeAttributeMutations(merged, source.attributes)
-  merged.approxBytes += estimateMutationPayloadBytes(source)
+  updateMutationPayloadApproxBytes(merged)
   return merged
+}
+
+function mergeAddMutations(merged, sourceAdds) {
+  if (!sourceAdds.length) {
+    return
+  }
+
+  sourceAdds.forEach(function (add) {
+    var addApproxBytes = estimateMutationEntryBytes(add)
+    merged.adds.push(add)
+    merged.addApproxBytes.push(addApproxBytes)
+    merged.addsApproxBytes += addApproxBytes
+  })
 }
 
 function mergeRemoveMutations(merged, sourceRemoves) {
@@ -339,6 +364,9 @@ function mergeRemoveMutations(merged, sourceRemoves) {
     var key = getRemoveMutationKey(remove)
     if (!merged.removesByKey.has(key)) {
       merged.removes.push(remove)
+      var removeApproxBytes = estimateMutationEntryBytes(remove)
+      merged.removeApproxBytesByKey.set(key, removeApproxBytes)
+      merged.removesApproxBytes += removeApproxBytes
     }
     merged.removesByKey.set(key, remove)
   })
@@ -351,11 +379,19 @@ function mergeTextMutations(merged, sourceTexts) {
   sourceTexts.forEach(function (textMutation) {
     var existingTextMutation = merged.textsById.get(textMutation.id)
     if (existingTextMutation) {
+      merged.textsApproxBytes -=
+        merged.textApproxBytesById.get(textMutation.id) || 0
       existingTextMutation.value = textMutation.value
+      var nextTextApproxBytes = estimateMutationEntryBytes(existingTextMutation)
+      merged.textApproxBytesById.set(textMutation.id, nextTextApproxBytes)
+      merged.textsApproxBytes += nextTextApproxBytes
       return
     }
     merged.texts.push(textMutation)
     merged.textsById.set(textMutation.id, textMutation)
+    var textApproxBytes = estimateMutationEntryBytes(textMutation)
+    merged.textApproxBytesById.set(textMutation.id, textApproxBytes)
+    merged.textsApproxBytes += textApproxBytes
   })
 }
 
@@ -373,12 +409,28 @@ function mergeAttributeMutations(merged, sourceAttributes) {
       }
       merged.attributes.push(nextAttributeMutation)
       merged.attributesById.set(attributeMutation.id, nextAttributeMutation)
+      var attributeApproxBytes = estimateMutationEntryBytes(nextAttributeMutation)
+      merged.attributeApproxBytesById.set(
+        attributeMutation.id,
+        attributeApproxBytes
+      )
+      merged.attributesApproxBytes += attributeApproxBytes
       return
     }
+    merged.attributesApproxBytes -=
+      merged.attributeApproxBytesById.get(attributeMutation.id) || 0
     existingAttributeMutation.attributes = assign(
       existingAttributeMutation.attributes,
       attributeMutation.attributes
     )
+    var nextAttributeApproxBytes = estimateMutationEntryBytes(
+      existingAttributeMutation
+    )
+    merged.attributeApproxBytesById.set(
+      attributeMutation.id,
+      nextAttributeApproxBytes
+    )
+    merged.attributesApproxBytes += nextAttributeApproxBytes
   })
 }
 
@@ -393,20 +445,21 @@ function shouldFlushPendingMutationPayloadBeforeMerge(target, source) {
   )
 }
 
-function splitMutationPayloadForEmit(mutation) {
+function splitPendingMutationPayloadForEmit(pendingMutationPayload) {
+  var mutation = materializeMutationPayload(pendingMutationPayload)
   if (
     !mutation.adds.length ||
-    estimateMutationPayloadBytes(mutation) <= MAX_MUTATION_EMIT_APPROX_BYTES
+    pendingMutationPayload.approxBytes <= MAX_MUTATION_EMIT_APPROX_BYTES
   ) {
     return [mutation]
   }
 
   var addOnlyPayloads = []
   var currentAdds = []
-  var currentAddsBytes = estimateMutationPayloadBytes(createEmptyMutation())
+  var currentAddsBytes = BASE_MUTATION_PAYLOAD_APPROX_BYTES
 
-  mutation.adds.forEach(function (add) {
-    var addBytes = estimateMutationEntriesBytes([add])
+  mutation.adds.forEach(function (add, index) {
+    var addBytes = pendingMutationPayload.addApproxBytes[index]
     if (
       currentAdds.length &&
       currentAddsBytes + addBytes > MAX_MUTATION_EMIT_APPROX_BYTES
@@ -418,7 +471,7 @@ function splitMutationPayloadForEmit(mutation) {
         attributes: []
       })
       currentAdds = []
-      currentAddsBytes = estimateMutationPayloadBytes(createEmptyMutation())
+      currentAddsBytes = BASE_MUTATION_PAYLOAD_APPROX_BYTES
     }
     currentAdds.push(add)
     currentAddsBytes += addBytes
@@ -458,9 +511,10 @@ function createEmptyMutation() {
   }
 }
 
+var BASE_MUTATION_PAYLOAD_APPROX_BYTES = 64
 function estimateMutationPayloadBytes(mutation) {
   return (
-    64 +
+    BASE_MUTATION_PAYLOAD_APPROX_BYTES +
     estimateMutationEntriesBytes(mutation.adds) +
     estimateMutationEntriesBytes(mutation.removes) +
     estimateMutationEntriesBytes(mutation.texts) +
@@ -468,12 +522,25 @@ function estimateMutationPayloadBytes(mutation) {
   )
 }
 
+function estimateMutationEntryBytes(entry) {
+  return JSON.stringify(entry).length
+}
+
 function estimateMutationEntriesBytes(entries) {
   var total = 0
   for (var i = 0; i < entries.length; i += 1) {
-    total += JSON.stringify(entries[i]).length
+    total += estimateMutationEntryBytes(entries[i])
   }
   return total
+}
+
+function updateMutationPayloadApproxBytes(mutationPayload) {
+  mutationPayload.approxBytes =
+    BASE_MUTATION_PAYLOAD_APPROX_BYTES +
+    mutationPayload.addsApproxBytes +
+    mutationPayload.removesApproxBytes +
+    mutationPayload.textsApproxBytes +
+    mutationPayload.attributesApproxBytes
 }
 
 function createReplayPerformanceStats() {

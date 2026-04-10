@@ -73,6 +73,27 @@ export interface ReplayPerformanceDebugResult {
   replaySegmentFlushCount: number
 }
 
+export interface ResourceTrackerSnapshot {
+  trackerId: string
+  status:
+    | 'created'
+    | 'request_collected'
+    | 'finished'
+    | 'flushed'
+    | 'timeout_flushed'
+    | 'cleared'
+  context: Context
+  resource?:
+    | {
+        type?: string
+        url?: string
+        method?: string
+        status?: number
+      }
+    | undefined
+  rawRumEvent?: object | undefined
+}
+
 export declare const datafluxRum: {
   init: (
     initConfiguration: RumInitConfiguration | RumSiteInitConfiguration
@@ -134,6 +155,11 @@ export declare const datafluxRum: {
   getReplayPerformanceForDebug: () =>
     | ReplayPerformanceDebugResult
     | undefined
+  createResourceTrackerId: () => string
+  setResourceContext: (trackerId: string, context: Context) => void
+  appendResourceContext: (trackerId: string, context: Context) => void
+  finishResource: (trackerId: string) => void
+  getResource: (trackerId: string) => ResourceTrackerSnapshot | undefined
 } & {
   onReady(callback: () => void): void
 }

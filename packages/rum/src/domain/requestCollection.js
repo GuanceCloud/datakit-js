@@ -99,7 +99,11 @@ export function trackFetch(lifeCycle, configuration, tracer) {
             status: context.status,
             traceId: context.traceId,
             traceSampled: context.traceSampled,
-            requestHeaderContexts: context.init?.headers,
+            requestHeaderContexts:
+              context.init?.headers ||
+              (context.input instanceof Request
+                ? context.input.headers
+                : undefined),
             type: RequestType.FETCH,
             url: context.url,
             response: context.response,

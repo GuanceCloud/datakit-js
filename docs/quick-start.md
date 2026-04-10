@@ -147,6 +147,16 @@ window.DATAFLUX_RUM &&
 
 With the above code, you can add `userName`, `userAge`, and `userGender` TAGs to all RUM events.
 
+## Resource Hook
+
+If you need to attach request-level business context to auto-collected `resource` events, use Resource Hook.
+
+- Supports both `fetch` and `XMLHttpRequest`
+- Supports writing context before the request and appending more context after the response
+- Supports tracked resource requests that also carry trace ids
+
+See [Resource Hook Guide](./resource-hook.md).
+
 ## Tracking User Actions
 
 ### Control Whether to Enable Action Collection

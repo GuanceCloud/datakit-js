@@ -103,6 +103,7 @@ function processMutations(
   mutationTasksController
 ) {
   var nodePrivacyLevelCache = new Map()
+  var pendingRootTasksToRefresh = new Set()
   var childListMutations = []
   var characterDataMutations = []
   var attributeMutations = []
@@ -150,7 +151,8 @@ function processMutations(
     configuration,
     shadowRootsController,
     nodePrivacyLevelCache,
-    mutationTasksController
+    mutationTasksController,
+    pendingRootTasksToRefresh
   )
   var removes = _processChildListMutations.removes
   var serializedNodeIds = _processChildListMutations.serializedNodeIds
@@ -173,7 +175,7 @@ function processMutations(
       characterDataMutation.target
     )
     if (pendingCharacterDataRootTask) {
-      mutationTasksController.refreshPendingRootTask(pendingCharacterDataRootTask)
+      pendingRootTasksToRefresh.add(pendingCharacterDataRootTask)
       continue
     }
     if (!hasBeenSerialized(characterDataMutation.target)) {
@@ -197,7 +199,7 @@ function processMutations(
       attributeMutation.target
     )
     if (pendingAttributeRootTask) {
-      mutationTasksController.refreshPendingRootTask(pendingAttributeRootTask)
+      pendingRootTasksToRefresh.add(pendingAttributeRootTask)
       continue
     }
     if (!hasBeenSerialized(attributeMutation.target)) {
@@ -209,6 +211,9 @@ function processMutations(
     configuration,
     nodePrivacyLevelCache
   )
+  pendingRootTasksToRefresh.forEach(function (task) {
+    mutationTasksController.refreshPendingRootTask(task)
+  })
   if (!texts.length && !attributes.length && !removes.length) {
     return
   }
@@ -225,7 +230,8 @@ function processChildListMutations(
   configuration,
   shadowRootsController,
   nodePrivacyLevelCache,
-  mutationTasksController
+  mutationTasksController,
+  pendingRootTasksToRefresh
 ) {
   // First, we iterate over mutations to collect:
   //
@@ -278,7 +284,7 @@ function processChildListMutations(
     var node = sortedAddedAndMovedNodes_1[_a]
     var pendingRootTask = mutationTasksController.findPendingRootTask(node)
     if (pendingRootTask) {
-      mutationTasksController.refreshPendingRootTask(pendingRootTask)
+      pendingRootTasksToRefresh.add(pendingRootTask)
       continue
     }
 
@@ -313,6 +319,7 @@ function processChildListMutations(
   removedNodes.forEach(function (parent, node) {
     var pendingRootTask = mutationTasksController.findPendingRootTask(node)
     if (pendingRootTask) {
+      pendingRootTasksToRefresh.delete(pendingRootTask)
       mutationTasksController.handlePendingRootRemoval(pendingRootTask, node)
       return
     }

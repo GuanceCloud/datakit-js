@@ -23,6 +23,7 @@ import {
 } from '@cloudcare/browser-core'
 import { buildCommonContext } from '../domain/contexts/commonContext'
 import { createPreStartStrategy } from './perStartRum'
+import { createResourceTrackerManager } from '../domain/rumEventsCollection/resource/resourceTrackerManager'
 var RUM_STORAGE_KEY = 'rum'
 export function makeRumPublicApi(startRumImpl, recorderApi, options) {
   if (options === undefined) {
@@ -31,6 +32,7 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
   const customerDataTrackerManager = createCustomerDataTrackerManager(
     CustomerDataCompressionStatus.Unknown
   )
+  const resourceTrackerManager = createResourceTrackerManager()
   const globalContextManager = createContextManager('global', {
     customerDataTracker: customerDataTrackerManager.getOrCreateTracker(
       CustomerDataType.GlobalContext
@@ -54,7 +56,9 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     )
   }
   let strategy = createPreStartStrategy(
-    options,
+    assign({}, options, {
+      resourceTrackerManager: resourceTrackerManager
+    }),
     getCommonContext,
     function (configuration, deflateWorker, initialViewOptions) {
       if (configuration.storeContextsToLocal) {
@@ -86,7 +90,8 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
           ? function (streamId) {
               return options.createDeflateEncoder(deflateWorker, streamId)
             }
-          : createIdentityEncoder
+          : createIdentityEncoder,
+        resourceTrackerManager
       )
       recorderApi.onRumStart(
         startRumResult.lifeCycle,
@@ -307,6 +312,27 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     }),
     getReplayPerformanceForDebug: monitor(function () {
       return recorderApi.getReplayPerformanceForDebug()
+    }),
+    createResourceTrackerId: monitor(function () {
+      return resourceTrackerManager.createTrackerId()
+    }),
+    setResourceContext: monitor(function (trackerId, context) {
+      return resourceTrackerManager.setResourceContext(
+        trackerId,
+        sanitize(context)
+      )
+    }),
+    appendResourceContext: monitor(function (trackerId, context) {
+      return resourceTrackerManager.appendResourceContext(
+        trackerId,
+        sanitize(context)
+      )
+    }),
+    finishResource: monitor(function (trackerId) {
+      return resourceTrackerManager.finishResource(trackerId)
+    }),
+    getResource: monitor(function (trackerId) {
+      return resourceTrackerManager.getResource(trackerId)
     })
   })
   return rumPublicApi

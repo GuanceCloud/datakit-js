@@ -34,6 +34,7 @@ export function createPreStartStrategy(
   var cachedInitConfiguration
   var cachedConfiguration
   var cachedRemoteConfiguration
+  var resourceTrackerManager = rumPublicApiOptions.resourceTrackerManager
   function tryStartRum() {
     if (!cachedInitConfiguration || !cachedConfiguration) {
       return
@@ -235,6 +236,21 @@ export function createPreStartStrategy(
       bufferApiCalls.add(function (startRumResult) {
         startRumResult.addError(providedError, commonContext)
       })
+    },
+    createResourceTrackerId: function () {
+      return resourceTrackerManager.createTrackerId()
+    },
+    setResourceContext: function (trackerId, context) {
+      resourceTrackerManager.setResourceContext(trackerId, context)
+    },
+    appendResourceContext: function (trackerId, context) {
+      resourceTrackerManager.appendResourceContext(trackerId, context)
+    },
+    finishResource: function (trackerId) {
+      resourceTrackerManager.finishResource(trackerId)
+    },
+    getResource: function (trackerId) {
+      return resourceTrackerManager.getResource(trackerId)
     }
   }
 }

@@ -12,6 +12,22 @@ var serializedCanvasNodes = new Set()
 var anchorElementByDocument = new WeakMap()
 var hrefByDocument = new WeakMap()
 
+export function getHiddenElementPlaceholderSize(element) {
+  var width =
+    element.getAttribute('width') ||
+    (element.style && element.style.width) ||
+    undefined
+  var height =
+    element.getAttribute('height') ||
+    (element.style && element.style.height) ||
+    undefined
+
+  return {
+    width: width,
+    height: height
+  }
+}
+
 export function hasSerializedNode(node) {
   return serializedNodeIds.has(node)
 }

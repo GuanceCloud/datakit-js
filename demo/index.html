@@ -3,12 +3,233 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Document</title>
+    <title>Browser SDK Demo Workbench</title>
     <!-- <script src="./dataflux-rum.js"></script> -->
     <link rel="stylesheet" href="/index.css" type="text/css" />
     <script src="./dataflux-logs.js"></script>
 
     <style>
+      :root {
+        --demo-bg: #f4f7fb;
+        --demo-card: #ffffff;
+        --demo-border: #d7e0ea;
+        --demo-border-strong: #b8c7d8;
+        --demo-text: #142033;
+        --demo-muted: #58677a;
+        --demo-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+        --demo-radius: 18px;
+        --demo-gap: 18px;
+        --demo-accent-blue: #eaf4ff;
+        --demo-accent-lime: #f2fae8;
+        --demo-accent-slate: #f6f8fb;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background:
+          radial-gradient(circle at top left, rgba(146, 214, 255, 0.2), transparent 32%),
+          linear-gradient(180deg, #f8fbff 0%, var(--demo-bg) 100%);
+        color: var(--demo-text);
+      }
+      .demo-shell {
+        max-width: 1440px;
+        margin: 0 auto 32px;
+      }
+      .demo-shell__header {
+        margin-bottom: 20px;
+      }
+      .demo-shell__eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border: 1px solid var(--demo-border);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+        color: #38516f;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .demo-shell__title {
+        margin: 14px 0 8px;
+        font-size: 34px;
+        line-height: 1.05;
+      }
+      .demo-shell__desc {
+        max-width: 760px;
+        margin: 0;
+        color: var(--demo-muted);
+        line-height: 1.6;
+      }
+      .demo-workbench {
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: var(--demo-gap);
+        align-items: start;
+      }
+      .demo-section {
+        grid-column: span 12;
+        border: 1px solid var(--demo-border);
+        border-radius: var(--demo-radius);
+        background: var(--demo-card);
+        box-shadow: var(--demo-shadow);
+        overflow: hidden;
+      }
+      .demo-section--canvas {
+        background: linear-gradient(180deg, var(--demo-accent-blue) 0%, #ffffff 46%);
+      }
+      .demo-section--resource {
+        background: linear-gradient(180deg, var(--demo-accent-lime) 0%, #ffffff 46%);
+      }
+      .demo-section--dom {
+        background: linear-gradient(180deg, var(--demo-accent-slate) 0%, #ffffff 46%);
+      }
+      .demo-section__head {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        padding: 22px 22px 12px;
+      }
+      .demo-section__title {
+        margin: 0 0 6px;
+        font-size: 24px;
+        line-height: 1.15;
+      }
+      .demo-section__desc {
+        margin: 0;
+        max-width: 840px;
+        color: var(--demo-muted);
+        line-height: 1.6;
+      }
+      .demo-section__pill {
+        flex-shrink: 0;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--demo-border);
+        background: rgba(255, 255, 255, 0.85);
+        color: #38516f;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .demo-section__body {
+        display: grid;
+        grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+        gap: 16px;
+        padding: 0 22px 22px;
+      }
+      .demo-side,
+      .demo-main {
+        display: grid;
+        gap: 14px;
+        align-content: start;
+      }
+      .demo-card {
+        border: 1px solid var(--demo-border);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.92);
+        padding: 14px;
+      }
+      .demo-card__title {
+        margin: 0 0 10px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #4f647c;
+      }
+      .demo-flow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .demo-flow__step {
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--demo-border);
+        background: rgba(255, 255, 255, 0.8);
+        color: #42566f;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .demo-status-grid {
+        display: grid;
+        grid-template-columns: minmax(96px, 120px) minmax(0, 1fr);
+        gap: 10px 12px;
+        font-size: 12px;
+      }
+      .demo-status-grid > div:nth-child(odd) {
+        font-weight: 700;
+        color: #112033;
+      }
+      .demo-status-grid > div:nth-child(even) {
+        min-width: 0;
+        color: #334155;
+        word-break: break-word;
+        font-family: Menlo, Monaco, Consolas, monospace;
+      }
+      .demo-toolbar {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .demo-toolbar-group {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid var(--demo-border);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.84);
+      }
+      .demo-toolbar-group__title {
+        margin: 0;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #5e738d;
+      }
+      .demo-toolbar-group__actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .demo-toolbar button,
+      #operation button {
+        min-height: 40px;
+        padding: 0 14px;
+        border: 1px solid var(--demo-border-strong);
+        border-radius: 12px;
+        background: linear-gradient(180deg, #ffffff 0%, #eef3f9 100%);
+        color: var(--demo-text);
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          transform 140ms ease,
+          box-shadow 140ms ease,
+          border-color 140ms ease;
+      }
+      .demo-toolbar button:hover,
+      #operation button:hover {
+        transform: translateY(-1px);
+        border-color: #89a6c4;
+        box-shadow: 0 10px 22px rgba(84, 110, 144, 0.16);
+      }
+      .demo-output {
+        margin: 0;
+        padding: 14px;
+        border: 1px solid var(--demo-border);
+        border-radius: 16px;
+        background: #fff;
+        font-size: 12px;
+        color: #102034;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 280px;
+        overflow: auto;
+      }
       .open-window {
         background-color: aqua;
         width: 100px;
@@ -36,66 +257,243 @@
         width: 100%;
       }
       .canvas-demo {
-        margin: 16px 0 24px;
-        border: 1px solid #d0d7de;
-        padding: 16px;
-        background: #eef7ff;
+        margin: 0;
+        border: 0;
+        padding: 0;
+        background: transparent;
       }
       .canvas-demo__title {
         font-weight: 600;
-        margin-bottom: 8px;
+        margin: 0;
       }
       .canvas-demo__desc {
-        margin-bottom: 12px;
-        color: #334155;
+        margin: 0;
+        color: var(--demo-muted);
       }
       .canvas-demo__board {
         display: block;
-        border: 1px solid #94a3b8;
+        width: 100%;
+        max-width: 100%;
+        border: 1px solid var(--demo-border-strong);
+        border-radius: 16px;
         background: #ffffff;
-        margin-bottom: 12px;
+        margin: 0;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+      }
+      .canvas-demo__dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .canvas-demo__dashboard-tile {
+        display: grid;
+        gap: 8px;
+      }
+      .canvas-demo__dashboard-label {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #5e738d;
+      }
+      .canvas-demo__dashboard-tile .canvas-demo__board {
+        border-radius: 14px;
       }
       .canvas-demo__toolbar {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-bottom: 8px;
+        margin: 0;
       }
       .canvas-demo__log {
         min-height: 20px;
         font-size: 12px;
-        color: #475569;
+        color: var(--demo-muted);
       }
       .canvas-demo__export {
-        margin-top: 12px;
-        padding: 12px;
-        border: 1px solid #cbd5e1;
-        background: #ffffff;
-        font-size: 12px;
-        color: #0f172a;
-        white-space: pre-wrap;
-        word-break: break-word;
-        max-height: 260px;
-        overflow: auto;
+        margin-top: 0;
       }
       .canvas-demo__status {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(180px, 1fr));
-        gap: 8px 12px;
-        margin-bottom: 12px;
-        padding: 12px;
-        border: 1px solid #cbd5e1;
-        background: #ffffff;
-        font-size: 12px;
-        color: #334155;
+        margin: 0;
       }
       .canvas-demo__status-label {
-        font-weight: 600;
         color: #0f172a;
       }
       .canvas-demo__status-value {
-        font-family: Menlo, Monaco, Consolas, monospace;
         word-break: break-word;
+      }
+      .resource-hook-demo {
+        margin: 0;
+        border: 0;
+        padding: 0;
+        background: transparent;
+      }
+      .resource-hook-demo__title {
+        font-weight: 600;
+        margin: 0;
+      }
+      .resource-hook-demo__desc {
+        margin: 0;
+        color: var(--demo-muted);
+      }
+      .resource-hook-demo__status {
+        margin: 0;
+      }
+      .resource-hook-demo__toolbar {
+        margin: 0;
+      }
+      .resource-hook-demo__snapshot {
+        margin: 0;
+      }
+      .large-dom-demo {
+        margin: 0;
+        border: 0;
+        padding: 0;
+        background: transparent;
+      }
+      .large-dom-demo__status,
+      .large-dom-demo__toolbar {
+        margin: 0;
+      }
+      .large-dom-demo__host {
+        min-height: 160px;
+        border: 1px solid var(--demo-border);
+        border-radius: 16px;
+        background: #fff;
+        padding: 12px;
+        overflow: auto;
+      }
+      .demo-lab {
+        margin-top: 24px;
+        border: 1px solid var(--demo-border);
+        border-radius: var(--demo-radius);
+        background: rgba(255, 255, 255, 0.8);
+        box-shadow: var(--demo-shadow);
+        overflow: hidden;
+      }
+      .demo-lab__head {
+        padding: 20px 20px 10px;
+      }
+      .demo-lab__title {
+        margin: 0 0 6px;
+        font-size: 22px;
+      }
+      .demo-lab__desc {
+        margin: 0;
+        color: var(--demo-muted);
+        line-height: 1.6;
+      }
+      .demo-lab__body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 16px;
+        padding: 0 20px 20px;
+      }
+      .demo-lab__actions {
+        display: grid;
+        gap: 14px;
+      }
+      #operation {
+        margin-top: 0;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 18px;
+        border: 1px dashed var(--demo-border-strong);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+      .demo-sandbox {
+        display: grid;
+        gap: 12px;
+        align-content: start;
+      }
+      .demo-sandbox__grid {
+        display: grid;
+        gap: 12px;
+      }
+      .demo-sandbox__sample {
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+        border: 1px solid var(--demo-border);
+        border-radius: 18px;
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      }
+      .demo-sandbox__sample-title {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #4f647c;
+      }
+      .demo-sandbox__tile {
+        width: 100px;
+        height: 100px;
+        border-radius: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+      }
+      .demo-sandbox__media {
+        max-width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--demo-border);
+        background: #fff;
+      }
+      .demo-sandbox__input {
+        min-height: 42px;
+        padding: 0 12px;
+        border: 1px solid var(--demo-border-strong);
+        border-radius: 12px;
+        background: #fff;
+      }
+      .demo-utility-grid {
+        margin-top: 18px;
+        display: grid;
+        gap: 16px;
+      }
+      .demo-inline-form {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .demo-inline-form input {
+        min-height: 40px;
+        min-width: 220px;
+        padding: 0 12px;
+        border: 1px solid var(--demo-border-strong);
+        border-radius: 12px;
+        background: #fff;
+      }
+      .demo-copy-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      @media (max-width: 980px) {
+        body {
+          padding: 16px;
+        }
+        .demo-section__body {
+          grid-template-columns: 1fr;
+        }
+        .demo-lab__body {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 640px) {
+        .demo-shell__title {
+          font-size: 28px;
+        }
+        .demo-section__head,
+        .demo-section__body {
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+        .demo-status-grid {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
     <script>
@@ -312,6 +710,11 @@
       window.DATAFLUX_RUM.onReady(() => {
         const replayCanvasMode =
           window.localStorage.getItem('demoReplayCanvasMode') || 'manual'
+        const allowedTracingOrigins = [
+          window.location.origin,
+          'https://console-api.guance.com',
+          'http://testing-ft2x-api.dataflux.cn'
+        ]
         window.DATAFLUX_RUM.init({
           applicationId: 'test_sourcemap',
           site: 'https://cn3-rum-openway.guance.com',
@@ -343,10 +746,7 @@
             }
             return true // 这里代表需要上报数据
           },
-          allowedDDTracingOrigins: [
-            'https://console-api.guance.com',
-            'http://testing-ft2x-api.dataflux.cn'
-          ]
+          allowedDDTracingOrigins: allowedTracingOrigins
         })
         window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
         window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
@@ -647,156 +1047,421 @@
   </head>
 
   <body>
-    <div class="cls-demo">
+    <div class="demo-shell">
+      <div class="demo-shell__header">
+        <div class="demo-shell__eyebrow">Browser SDK Demo Lab</div>
+        <h1 class="demo-shell__title">Guance Browser SDK Debug Workbench</h1>
+        <p class="demo-shell__desc">
+          这个页面把回放录制、资源追踪和大 DOM 压测整合成一套调试面板。
+          每个区块都按“状态、动作、输出”组织，方便快速定位当前实验状态。
+        </p>
+      </div>
+      <div class="cls-demo">
       <div>CLS demo: 点击按钮后延迟 700ms 再插入大内容，避免被标记为 hadRecentInput。</div>
       <div id="cls-demo-slot"></div>
-    </div>
-    <div class="canvas-demo">
-      <div class="canvas-demo__title">Canvas Replay Demo</div>
-      <div class="canvas-demo__desc">
-        先点击画布按钮产生 2D canvas 变化，再点击 snapshot 按钮手动触发一次 canvas replay 采样。
       </div>
-      <div class="canvas-demo__status">
-        <div class="canvas-demo__status-label">isRecording</div>
-        <div id="canvas-status-recording" class="canvas-demo__status-value">unknown</div>
-        <div class="canvas-demo__status-label">mode</div>
-        <div id="canvas-status-mode" class="canvas-demo__status-value">manual</div>
-        <div class="canvas-demo__status-label">auto policy</div>
-        <div id="canvas-status-policy" class="canvas-demo__status-value">1000/3000/5000</div>
-        <div class="canvas-demo__status-label">auto draw</div>
-        <div id="canvas-status-auto-draw" class="canvas-demo__status-value">off</div>
-        <div class="canvas-demo__status-label">last trigger</div>
-        <div id="canvas-status-trigger" class="canvas-demo__status-value">none</div>
-        <div class="canvas-demo__status-label">last snapshot</div>
-        <div id="canvas-status-snapshot" class="canvas-demo__status-value">none</div>
-        <div class="canvas-demo__status-label">last reason</div>
-        <div id="canvas-status-reason" class="canvas-demo__status-value">none</div>
-        <div class="canvas-demo__status-label">auto result</div>
-        <div id="canvas-status-auto-result" class="canvas-demo__status-value">idle</div>
-        <div class="canvas-demo__status-label">auto keepalive</div>
-        <div id="canvas-status-auto-keepalive" class="canvas-demo__status-value">none</div>
-        <div class="canvas-demo__status-label">last event</div>
-        <div id="canvas-status-event" class="canvas-demo__status-value">none</div>
+      <div class="demo-workbench">
+        <div class="demo-section demo-section--canvas canvas-demo">
+          <div class="demo-section__head">
+            <div>
+              <div class="canvas-demo__title demo-section__title">Canvas Replay Inspector</div>
+              <div class="canvas-demo__desc demo-section__desc">
+                用来验证 2D canvas 的手动采样、自动采样和导出事件。先看状态，再操作画布，最后检查导出的 replay event。
+              </div>
+              <div class="demo-flow">
+                <div class="demo-flow__step">1. choose mode</div>
+                <div class="demo-flow__step">2. draw or auto draw</div>
+                <div class="demo-flow__step">3. snapshot</div>
+                <div class="demo-flow__step">4. inspect export</div>
+              </div>
+            </div>
+            <div class="demo-section__pill">Replay Canvas</div>
+          </div>
+          <div class="demo-section__body">
+            <div class="demo-side">
+              <div class="demo-card">
+                <div class="demo-card__title">Live Status</div>
+                <div class="canvas-demo__status demo-status-grid">
+                  <div class="canvas-demo__status-label">isRecording</div>
+                  <div id="canvas-status-recording" class="canvas-demo__status-value">unknown</div>
+                  <div class="canvas-demo__status-label">mode</div>
+                  <div id="canvas-status-mode" class="canvas-demo__status-value">manual</div>
+                  <div class="canvas-demo__status-label">auto policy</div>
+                  <div id="canvas-status-policy" class="canvas-demo__status-value">1000/3000/5000</div>
+                  <div class="canvas-demo__status-label">auto draw</div>
+                  <div id="canvas-status-auto-draw" class="canvas-demo__status-value">off</div>
+                  <div class="canvas-demo__status-label">scene</div>
+                  <div id="canvas-status-scene" class="canvas-demo__status-value">initial</div>
+                  <div class="canvas-demo__status-label">last trigger</div>
+                  <div id="canvas-status-trigger" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">last snapshot</div>
+                  <div id="canvas-status-snapshot" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">last reason</div>
+                  <div id="canvas-status-reason" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">auto result</div>
+                  <div id="canvas-status-auto-result" class="canvas-demo__status-value">idle</div>
+                  <div class="canvas-demo__status-label">auto keepalive</div>
+                  <div id="canvas-status-auto-keepalive" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">last event</div>
+                  <div id="canvas-status-event" class="canvas-demo__status-value">none</div>
+                </div>
+              </div>
+              <div class="demo-card">
+                <div class="demo-card__title">Activity</div>
+                <div id="canvas-demo-log" class="canvas-demo__log"></div>
+              </div>
+            </div>
+            <div class="demo-main">
+              <canvas
+                id="replay-canvas"
+                class="canvas-demo__board"
+                width="480"
+                height="220"
+              ></canvas>
+              <div class="canvas-demo__toolbar demo-toolbar">
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Mode</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="canvasModeManual">mode: manual</button>
+                    <button delay="canvasModeAuto">mode: auto</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Drawing</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="canvasDraw">canvas draw</button>
+                    <button delay="canvasDrawLineChart">line chart</button>
+                    <button delay="canvasDrawBarChart">bar chart</button>
+                    <button delay="canvasDrawDashboard">dashboard chart</button>
+                    <button delay="canvasAnimateCharts">animate charts</button>
+                    <button delay="canvasAutoDrawToggle">toggle auto draw</button>
+                    <button delay="canvasClear">canvas clear</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Capture</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="canvasSnapshot">canvas snapshot</button>
+                    <button delay="canvasAnimateAndSnapshot">canvas animate + snapshot</button>
+                    <button delay="canvasExportEvent">export last canvas event</button>
+                  </div>
+                </div>
+              </div>
+              <pre id="canvas-demo-export" class="canvas-demo__export demo-output">No canvas replay event exported yet.</pre>
+            </div>
+          </div>
+        </div>
+        <div class="demo-section demo-section--canvas canvas-demo">
+          <div class="demo-section__head">
+            <div>
+              <div class="canvas-demo__title demo-section__title">Canvas Dashboard Bench</div>
+              <div class="canvas-demo__desc demo-section__desc">
+                单独用来模拟 dashboard 场景下的 canvas 图表采集，固定展示 KPI 卡片、折线图和柱状图的复合面板。
+              </div>
+              <div class="demo-flow">
+                <div class="demo-flow__step">1. draw dashboard</div>
+                <div class="demo-flow__step">2. animate dashboard</div>
+                <div class="demo-flow__step">3. snapshot</div>
+                <div class="demo-flow__step">4. inspect export</div>
+              </div>
+            </div>
+            <div class="demo-section__pill">Dashboard Canvas</div>
+          </div>
+          <div class="demo-section__body">
+            <div class="demo-side">
+              <div class="demo-card">
+                <div class="demo-card__title">Dashboard Status</div>
+                <div class="canvas-demo__status demo-status-grid">
+                  <div class="canvas-demo__status-label">isRecording</div>
+                  <div id="dashboard-canvas-status-recording" class="canvas-demo__status-value">unknown</div>
+                  <div class="canvas-demo__status-label">scene</div>
+                  <div id="dashboard-canvas-status-scene" class="canvas-demo__status-value">idle</div>
+                  <div class="canvas-demo__status-label">last trigger</div>
+                  <div id="dashboard-canvas-status-trigger" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">last snapshot</div>
+                  <div id="dashboard-canvas-status-snapshot" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">last reason</div>
+                  <div id="dashboard-canvas-status-reason" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">last event</div>
+                  <div id="dashboard-canvas-status-event" class="canvas-demo__status-value">none</div>
+                </div>
+              </div>
+              <div class="demo-card">
+                <div class="demo-card__title">Activity</div>
+                <div id="dashboard-canvas-log" class="canvas-demo__log"></div>
+              </div>
+            </div>
+            <div class="demo-main">
+              <div id="replay-dashboard-canvas-grid" class="canvas-demo__dashboard-grid"></div>
+              <div class="canvas-demo__toolbar demo-toolbar">
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Dashboard</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="dashboardCanvasDraw">draw dashboard</button>
+                    <button delay="dashboardCanvasAnimate">animate dashboard</button>
+                    <button delay="dashboardCanvasClear">clear dashboard</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Capture</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="dashboardCanvasSnapshot">dashboard snapshot</button>
+                    <button delay="dashboardCanvasExportEvent">export dashboard event</button>
+                  </div>
+                </div>
+              </div>
+              <pre id="dashboard-canvas-export" class="canvas-demo__export demo-output">No dashboard canvas replay event exported yet.</pre>
+            </div>
+          </div>
+        </div>
+        <div class="demo-section demo-section--resource resource-hook-demo">
+          <div class="demo-section__head">
+            <div>
+              <div class="resource-hook-demo__title demo-section__title">Resource Hook Inspector</div>
+              <div class="resource-hook-demo__desc demo-section__desc">
+                用来验证带 <code>x-rum-resource-id</code> 的 fetch / xhr 追踪时序，以及 trace 信息和最终 tracker 快照。
+              </div>
+              <div class="demo-flow">
+                <div class="demo-flow__step">1. create tracker</div>
+                <div class="demo-flow__step">2. send request</div>
+                <div class="demo-flow__step">3. finish resource</div>
+                <div class="demo-flow__step">4. refresh snapshot</div>
+              </div>
+            </div>
+            <div class="demo-section__pill">Tracked Resource</div>
+          </div>
+          <div class="demo-section__body">
+            <div class="demo-side">
+              <div class="demo-card">
+                <div class="demo-card__title">Tracker Status</div>
+                <div class="resource-hook-demo__status demo-status-grid">
+                  <div>tracker id</div>
+                  <div id="resource-hook-status-id">none</div>
+                  <div>status</div>
+                  <div id="resource-hook-status-state">idle</div>
+                  <div>request</div>
+                  <div id="resource-hook-status-request">none</div>
+                  <div>context</div>
+                  <div id="resource-hook-status-context">none</div>
+                  <div>trace</div>
+                  <div id="resource-hook-status-trace">none</div>
+                </div>
+              </div>
+            </div>
+            <div class="demo-main">
+              <div class="resource-hook-demo__toolbar demo-toolbar">
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Tracker</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="resourceHookCreate">create tracker</button>
+                    <button delay="resourceHookFinish">finish resource</button>
+                    <button delay="resourceHookReset">reset demo</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Requests</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="resourceHookFetch">tracked fetch</button>
+                    <button delay="resourceHookFetchWithTrace">tracked fetch + trace</button>
+                    <button delay="resourceHookXhr">tracked xhr</button>
+                    <button delay="resourceHookXhrWithTrace">tracked xhr + trace</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Inspect</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="resourceHookRefresh">refresh snapshot</button>
+                  </div>
+                </div>
+              </div>
+              <pre id="resource-hook-snapshot" class="resource-hook-demo__snapshot demo-output">No tracker snapshot yet.</pre>
+            </div>
+          </div>
+        </div>
+        <div class="demo-section demo-section--dom large-dom-demo">
+          <div class="demo-section__head">
+            <div>
+              <div class="demo-section__title">Large DOM Stress Bench</div>
+              <div class="demo-section__desc">
+                用来对比 replay on/off 在大 DOM 生成场景下的额外成本，优先使用 dashboard 2500 和 benchmark。
+              </div>
+              <div class="demo-flow">
+                <div class="demo-flow__step">1. toggle replay</div>
+                <div class="demo-flow__step">2. generate dashboard</div>
+                <div class="demo-flow__step">3. benchmark on or off</div>
+                <div class="demo-flow__step">4. compare results</div>
+              </div>
+            </div>
+            <div class="demo-section__pill">Stress Test</div>
+          </div>
+          <div class="demo-section__body">
+            <div class="demo-side">
+              <div class="demo-card">
+                <div class="demo-card__title">Benchmark Status</div>
+                <div class="large-dom-demo__status demo-status-grid">
+                  <div>replay</div>
+                  <div id="large-dom-status-replay">unknown</div>
+                  <div>shape</div>
+                  <div id="large-dom-status-shape">none</div>
+                  <div>rows</div>
+                  <div id="large-dom-status-rows">0</div>
+                  <div>elements</div>
+                  <div id="large-dom-status-elements">0</div>
+                  <div>generate ms</div>
+                  <div id="large-dom-status-generate-ms">0</div>
+                  <div>snapshot ms</div>
+                  <div id="large-dom-status-snapshot-ms">0</div>
+                  <div>last action</div>
+                  <div id="large-dom-status-last-action">none</div>
+                  <div>host children</div>
+                  <div id="large-dom-status-host-children">0</div>
+                  <div>benchmark</div>
+                  <div id="large-dom-status-benchmark">idle</div>
+                </div>
+              </div>
+            </div>
+            <div class="demo-main">
+              <div class="large-dom-demo__toolbar demo-toolbar">
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Replay Mode</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="largeDomReplayOn">replay on</button>
+                    <button delay="largeDomReplayOff">replay off</button>
+                    <button delay="largeDomTakeFullSnapshot">take full snapshot</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Generate</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="largeDomGenerateDashboard2500">generate dashboard 2500</button>
+                    <button delay="largeDomClear">clear large dom</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Benchmark</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="largeDomBenchmarkReplayOn">benchmark on</button>
+                    <button delay="largeDomBenchmarkReplayOff">benchmark off</button>
+                  </div>
+                </div>
+              </div>
+              <div
+                id="large-dom-host"
+                class="large-dom-demo__host"
+              ></div>
+            </div>
+          </div>
+        </div>
       </div>
-      <canvas
-        id="replay-canvas"
-        class="canvas-demo__board"
-        width="480"
-        height="220"
-      ></canvas>
-      <div class="canvas-demo__toolbar">
-        <button delay="canvasModeManual">mode: manual</button>
-        <button delay="canvasModeAuto">mode: auto</button>
-        <button delay="canvasDraw">canvas draw</button>
-        <button delay="canvasAutoDrawToggle">toggle auto draw</button>
-        <button delay="canvasSnapshot">canvas snapshot</button>
-        <button delay="canvasAnimateAndSnapshot">canvas animate + snapshot</button>
-        <button delay="canvasClear">canvas clear</button>
-        <button delay="canvasExportEvent">export last canvas event</button>
+    </div>
+    <div class="demo-lab">
+      <div class="demo-lab__head">
+        <h2 class="demo-lab__title">Legacy Action Lab</h2>
+        <p class="demo-lab__desc">
+          保留原来的低层验证入口和零散样例节点，按“事件、请求、延迟、杂项”分组，避免和主工作台混在一起。
+        </p>
       </div>
-      <div id="canvas-demo-log" class="canvas-demo__log"></div>
-      <pre id="canvas-demo-export" class="canvas-demo__export">No canvas replay event exported yet.</pre>
-    </div>
-    <div
-      class="large-dom-demo"
-      style="margin: 16px 0 24px; border: 1px solid #d0d7de; padding: 16px; background: #f8fafc"
-    >
-      <div style="font-weight: 600; margin-bottom: 8px">Large DOM Replay Demo</div>
-      <div style="margin-bottom: 12px; color: #475569">
-        用于验证大 DOM 场景下 session replay 的主线程占用，优先测试 dashboard 2500。
+      <div class="demo-lab__body">
+        <div class="demo-lab__actions">
+          <div id="operation" class="demo-toolbar-group">
+            <div class="demo-toolbar-group__title">Events</div>
+            <div class="demo-toolbar-group__actions">
+              <button delay="testSourceMap">test sourcemap</button>
+              <button delay="testAddAction">test addAction</button>
+              <button delay="testLog">test add info log</button>
+              <button delay="track_action">send track_action</button>
+              <button delay="displayDate">displayDate</button>
+              <button delay="testError">test Error</button>
+              <button delay="addView">add view</button>
+            </div>
+          </div>
+          <div class="demo-toolbar-group">
+            <div class="demo-toolbar-group__title">Requests</div>
+            <div class="demo-toolbar-group__actions">
+              <button delay="sendRequest">send Request</button>
+              <button delay="sendPostRequest">send postRequest</button>
+              <button delay="sendPostFetch">send sendPostFetch</button>
+              <button delay="sendFetch">send sendFetch</button>
+              <button delay="timeoutSendFetch">send interval Fetch</button>
+            </div>
+          </div>
+          <div class="demo-toolbar-group">
+            <div class="demo-toolbar-group__title">Delays</div>
+            <div class="demo-toolbar-group__actions">
+              <button delay="10">10ms</button>
+              <button delay="30">30ms</button>
+              <button delay="50">50ms</button>
+              <button delay="100">100ms</button>
+              <button delay="200">200ms</button>
+              <button delay="300">300</button>
+              <button delay="500">500</button>
+              <button delay="1000">1</button>
+            </div>
+          </div>
+          <div class="demo-toolbar-group">
+            <div class="demo-toolbar-group__title">Misc</div>
+            <div class="demo-toolbar-group__actions">
+              <button delay="append">append window</button>
+              <button delay="open">window.open</button>
+              <button delay="dataclone">data clone</button>
+              <button delay="longtask">longtask</button>
+              <button delay="triggerCls">trigger CLS</button>
+              <button delay="remoteConfiguration">remoteConfiguration</button>
+            </div>
+          </div>
+        </div>
+        <div class="demo-sandbox">
+          <div class="demo-sandbox__sample">
+            <div class="demo-sandbox__sample-title">Sandbox Elements</div>
+            <div class="demo-sandbox__grid">
+              <div style="background-color: red" class="demo-sandbox__tile" id="test">
+                test
+              </div>
+              <img src="/test.png" alt="" class="demo-sandbox__media" />
+              <input id="demo" class="demo-sandbox__input" />
+              <custom-element>custom tag: xxxxxxxxx</custom-element>
+            </div>
+          </div>
+        </div>
       </div>
-      <div
-        class="large-dom-demo__status"
-        style="display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; margin-bottom: 12px"
-      >
-        <div>replay</div>
-        <div id="large-dom-status-replay">unknown</div>
-        <div>shape</div>
-        <div id="large-dom-status-shape">none</div>
-        <div>rows</div>
-        <div id="large-dom-status-rows">0</div>
-        <div>elements</div>
-        <div id="large-dom-status-elements">0</div>
-        <div>generate ms</div>
-        <div id="large-dom-status-generate-ms">0</div>
-        <div>snapshot ms</div>
-        <div id="large-dom-status-snapshot-ms">0</div>
-        <div>last action</div>
-        <div id="large-dom-status-last-action">none</div>
-        <div>host children</div>
-        <div id="large-dom-status-host-children">0</div>
-        <div>benchmark</div>
-        <div id="large-dom-status-benchmark">idle</div>
+    </div>
+    <div class="demo-lab demo-utility-grid">
+      <div class="demo-lab__head">
+        <h2 class="demo-lab__title">Utility Panels</h2>
+        <p class="demo-lab__desc">
+          补充保留会话回放数据读取、longtask 绑定和底部散点按钮，避免它们脱离整体工作台样式。
+        </p>
       </div>
-      <div class="large-dom-demo__toolbar" style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px">
-        <button delay="largeDomReplayOn">replay on</button>
-        <button delay="largeDomReplayOff">replay off</button>
-        <button delay="largeDomGenerateDashboard2500">generate dashboard 2500</button>
-        <button delay="largeDomBenchmarkReplayOn">benchmark on</button>
-        <button delay="largeDomBenchmarkReplayOff">benchmark off</button>
-        <button delay="largeDomTakeFullSnapshot">take full snapshot</button>
-        <button delay="largeDomClear">clear large dom</button>
-      </div>
-      <div
-        id="large-dom-host"
-        style="min-height: 120px; border: 1px solid #cbd5e1; background: #fff; padding: 12px; overflow: auto"
-      ></div>
-    </div>
-    <div style="background-color: red; width: 100px; height: 100px" id="test">
-      test
-    </div>
-    <img src="/test.png" alt="" />
-    <input id="demo" />
-    <custom-element>custom tag: xxxxxxxxx</custom-element>
-    <div id="operation">
-      <button delay="testSourceMap">test sourcemap</button>
-      <button delay="testAddAction">test addAction</button>
-      <button delay="testLog">test add info log</button>
-      <button delay="sendRequest">send Request</button>
-      <button delay="sendPostRequest">send postRequest</button>
-      <button delay="sendPostFetch">send sendPostFetch</button>
-      <button delay="sendFetch">send sendFetch</button>
-      <button delay="timeoutSendFetch">send interval Fetch</button>
-      <button delay="track_action">send track_action</button>
-      <button delay="displayDate">displayDate</button>
-      <button delay="testError">test Error</button>
-      <button delay="addView">add view</button>
-      <button delay="10">10ms</button>
-      <button delay="30">30ms</button>
-      <button delay="50">50ms</button>
-      <button delay="100">100ms</button>
-      <button delay="200">200ms</button>
-      <button delay="300">300</button>
-      <button delay="500">500</button>
-      <button delay="1000">1</button>
-      <button delay="append">append window</button>
-      <button delay="open">window.open</button>
-      <button delay="dataclone">data clone</button>
-      <button delay="longtask">longtask</button>
-      <button delay="triggerCls">trigger CLS</button>
-      <button delay="remoteConfiguration">remoteConfiguration</button>
-    </div>
-    <div class="get_session_repaly">
-      <input id="session_replay_input" />
-      <button onclick="getSessionReplyData()">getSessionReplyData</button>
-      <div id="session_replay_content"></div>
-    </div>
-    <div id="longtask">
-      <button id="longtask_button">longtask</button>
-      <button id="longtask_button_func_name">longtask_button_func_name</button>
-    </div>
-    <div
-      style="height: 500px; width: 100%; margin-top: 100px; position: relative"
-    >
-      <button>C. find /tmp/ -type f -exec ls -l {} \</button>
-      <button>500ms</button>
-      <button>500ms</button>
-      <button>500ms</button>
-      <button>500ms</button>
-      <button>500ms</button>
-      <div style="position: absolute; bottom: 10px; left: 0px">
-        <button>500ms</button><button>500ms</button>
-        <div>测试时是对方</div>
+      <div class="demo-lab__body" style="grid-template-columns: 1fr;">
+        <div class="demo-toolbar-group get_session_repaly">
+          <div class="demo-toolbar-group__title">Session Replay Data</div>
+          <div class="demo-inline-form">
+            <input id="session_replay_input" />
+            <button onclick="getSessionReplyData()">getSessionReplyData</button>
+          </div>
+          <div id="session_replay_content"></div>
+        </div>
+        <div class="demo-toolbar-group" id="longtask">
+          <div class="demo-toolbar-group__title">Longtask Hooks</div>
+          <div class="demo-toolbar-group__actions">
+            <button id="longtask_button">longtask</button>
+            <button id="longtask_button_func_name">longtask_button_func_name</button>
+          </div>
+        </div>
+        <div class="demo-toolbar-group">
+          <div class="demo-toolbar-group__title">Loose Buttons</div>
+          <div class="demo-copy-row">
+            <button>C. find /tmp/ -type f -exec ls -l {} \</button>
+            <button>500ms</button>
+            <button>500ms</button>
+            <button>500ms</button>
+            <button>500ms</button>
+            <button>500ms</button>
+            <button>500ms</button>
+            <button>500ms</button>
+          </div>
+          <div>测试时是对方</div>
+        </div>
       </div>
     </div>
     <script>
@@ -847,6 +1512,7 @@
       const replayCanvasModeStatus = document.getElementById('canvas-status-mode')
       const replayCanvasPolicyStatus = document.getElementById('canvas-status-policy')
       const replayCanvasAutoDrawStatus = document.getElementById('canvas-status-auto-draw')
+      const replayCanvasSceneStatus = document.getElementById('canvas-status-scene')
       const replayCanvasTriggerStatus = document.getElementById('canvas-status-trigger')
       const replayCanvasSnapshotStatus = document.getElementById('canvas-status-snapshot')
       const replayCanvasReasonStatus = document.getElementById('canvas-status-reason')
@@ -856,6 +1522,29 @@
       )
       const replayCanvasEventStatus = document.getElementById('canvas-status-event')
       const replayCanvasExport = document.getElementById('canvas-demo-export')
+      const replayDashboardCanvasGrid = document.getElementById('replay-dashboard-canvas-grid')
+      const replayDashboardCanvasLog = document.getElementById('dashboard-canvas-log')
+      const replayDashboardCanvasRecordingStatus = document.getElementById(
+        'dashboard-canvas-status-recording'
+      )
+      const replayDashboardCanvasSceneStatus = document.getElementById(
+        'dashboard-canvas-status-scene'
+      )
+      const replayDashboardCanvasTriggerStatus = document.getElementById(
+        'dashboard-canvas-status-trigger'
+      )
+      const replayDashboardCanvasSnapshotStatus = document.getElementById(
+        'dashboard-canvas-status-snapshot'
+      )
+      const replayDashboardCanvasReasonStatus = document.getElementById(
+        'dashboard-canvas-status-reason'
+      )
+      const replayDashboardCanvasEventStatus = document.getElementById(
+        'dashboard-canvas-status-event'
+      )
+      const replayDashboardCanvasExport = document.getElementById(
+        'dashboard-canvas-export'
+      )
       const demoReplayCanvasMode =
         window.localStorage.getItem('demoReplayCanvasMode') || 'manual'
       let canvasStep = 0
@@ -865,6 +1554,26 @@
       let lastCanvasReplayEvent = null
       let lastCanvasSnapshotTrigger = 'none'
       let lastCanvasAutoResult = 'idle'
+      let lastCanvasScene = 'initial'
+      let replayDashboardCanvases = []
+      let dashboardCanvasStep = 0
+      let dashboardCanvasAnimationFrameId = null
+      let lastDashboardCanvasSnapshotResult = null
+      let lastDashboardCanvasReplayEvent = null
+      let lastDashboardCanvasTrigger = 'none'
+      let lastDashboardCanvasScene = 'idle'
+      const dashboardCanvasPanels = [
+        { title: 'Revenue', type: 'line', accent: '#0f766e' },
+        { title: 'Orders', type: 'bar', accent: '#0284c7' },
+        { title: 'Conversion', type: 'area', accent: '#7c3aed' },
+        { title: 'Latency', type: 'line', accent: '#ea580c' },
+        { title: 'Errors', type: 'bar', accent: '#dc2626' },
+        { title: 'Engagement', type: 'area', accent: '#0891b2' },
+        { title: 'Retention', type: 'line', accent: '#4f46e5' },
+        { title: 'Regions', type: 'bar', accent: '#2563eb' },
+        { title: 'Capacity', type: 'area', accent: '#0f766e' },
+        { title: 'Forecast', type: 'line', accent: '#be185d' }
+      ]
       const largeDomHost = document.getElementById('large-dom-host')
       const largeDomReplayStatus = document.getElementById('large-dom-status-replay')
       const largeDomShapeStatus = document.getElementById('large-dom-status-shape')
@@ -875,6 +1584,24 @@
       const largeDomLastActionStatus = document.getElementById('large-dom-status-last-action')
       const largeDomHostChildrenStatus = document.getElementById('large-dom-status-host-children')
       const largeDomBenchmarkStatus = document.getElementById('large-dom-status-benchmark')
+      const resourceHookTrackerIdStatus = document.getElementById(
+        'resource-hook-status-id'
+      )
+      const resourceHookTrackerStateStatus = document.getElementById(
+        'resource-hook-status-state'
+      )
+      const resourceHookTrackerRequestStatus = document.getElementById(
+        'resource-hook-status-request'
+      )
+      const resourceHookTrackerContextStatus = document.getElementById(
+        'resource-hook-status-context'
+      )
+      const resourceHookTrackerTraceStatus = document.getElementById(
+        'resource-hook-status-trace'
+      )
+      const resourceHookSnapshot = document.getElementById(
+        'resource-hook-snapshot'
+      )
       let largeDomCurrentShape = 'none'
       let largeDomCurrentRows = 0
       let largeDomCurrentElements = 0
@@ -882,6 +1609,14 @@
       let largeDomGenerateFinishedAt = 0
       let largeDomLastSnapshotMs = 0
       let largeDomBenchmarkResult = 'idle'
+      let resourceHookTrackerId = ''
+      let resourceHookPendingFetch = false
+
+      function setResourceHookStatus(element, value) {
+        if (element) {
+          element.textContent = String(value)
+        }
+      }
 
       function setCanvasStatus(element, value) {
         if (element) {
@@ -910,6 +1645,7 @@
           replayCanvasAutoDrawStatus,
           canvasAutoDrawIntervalId ? 'on' : 'off'
         )
+        setCanvasStatus(replayCanvasSceneStatus, lastCanvasScene)
         setCanvasStatus(replayCanvasTriggerStatus, lastCanvasSnapshotTrigger)
         setCanvasStatus(
           replayCanvasSnapshotStatus,
@@ -938,6 +1674,35 @@
         setCanvasStatus(replayCanvasEventStatus, 'step=' + canvasStep)
       }
 
+      function refreshDashboardCanvasStatusPanel() {
+        const rum = window.DATAFLUX_RUM
+        const isRecording =
+          rum && typeof rum.isRecording === 'function' ? rum.isRecording() : 'unavailable'
+        setCanvasStatus(replayDashboardCanvasRecordingStatus, isRecording)
+        setCanvasStatus(replayDashboardCanvasSceneStatus, lastDashboardCanvasScene)
+        setCanvasStatus(replayDashboardCanvasTriggerStatus, lastDashboardCanvasTrigger)
+        setCanvasStatus(
+          replayDashboardCanvasSnapshotStatus,
+          lastDashboardCanvasSnapshotResult
+            ? lastDashboardCanvasSnapshotResult.ok
+              ? 'ok'
+              : 'failed'
+            : 'none'
+        )
+        setCanvasStatus(
+          replayDashboardCanvasReasonStatus,
+          lastDashboardCanvasSnapshotResult && lastDashboardCanvasSnapshotResult.reason
+            ? lastDashboardCanvasSnapshotResult.reason
+            : 'none'
+        )
+        setCanvasStatus(
+          replayDashboardCanvasEventStatus,
+          lastDashboardCanvasScene === 'idle'
+            ? 'none'
+            : 'dashboard step=' + dashboardCanvasStep
+        )
+      }
+
       function refreshLargeDomStatus() {
         const rum = window.DATAFLUX_RUM
         const isRecording =
@@ -958,6 +1723,214 @@
           largeDomHost ? largeDomHost.childElementCount : 0
         )
         setLargeDomStatus(largeDomBenchmarkStatus, largeDomBenchmarkResult)
+      }
+
+      function getResourceHookSnapshot() {
+        const rum = window.DATAFLUX_RUM
+        if (
+          !resourceHookTrackerId ||
+          !rum ||
+          typeof rum.getResource !== 'function'
+        ) {
+          return undefined
+        }
+        return rum.getResource(resourceHookTrackerId)
+      }
+
+      function renderResourceHookSnapshot() {
+        const snapshot = getResourceHookSnapshot()
+        if (!snapshot) {
+          if (resourceHookSnapshot) {
+            resourceHookSnapshot.textContent = 'No tracker snapshot yet.'
+          }
+          setResourceHookStatus(resourceHookTrackerIdStatus, resourceHookTrackerId || 'none')
+          setResourceHookStatus(
+            resourceHookTrackerStateStatus,
+            resourceHookPendingFetch ? 'requesting' : 'idle'
+          )
+          setResourceHookStatus(resourceHookTrackerRequestStatus, 'none')
+          setResourceHookStatus(resourceHookTrackerContextStatus, 'none')
+          setResourceHookStatus(resourceHookTrackerTraceStatus, 'none')
+          return
+        }
+
+        if (resourceHookSnapshot) {
+          resourceHookSnapshot.textContent = JSON.stringify(snapshot, null, 2)
+        }
+        setResourceHookStatus(resourceHookTrackerIdStatus, snapshot.trackerId || 'none')
+        setResourceHookStatus(resourceHookTrackerStateStatus, snapshot.status || 'unknown')
+        setResourceHookStatus(
+          resourceHookTrackerRequestStatus,
+          snapshot.resource
+            ? [snapshot.resource.method, snapshot.resource.status, snapshot.resource.url]
+                .filter(Boolean)
+                .join(' ')
+            : 'none'
+        )
+        setResourceHookStatus(
+          resourceHookTrackerContextStatus,
+          snapshot.context ? JSON.stringify(snapshot.context) : 'none'
+        )
+        setResourceHookStatus(
+          resourceHookTrackerTraceStatus,
+          snapshot.rawRumEvent &&
+            snapshot.rawRumEvent._gc &&
+            snapshot.rawRumEvent._gc.traceId
+            ? snapshot.rawRumEvent._gc.traceId +
+                (snapshot.rawRumEvent._gc.spanId
+                  ? ' / ' + snapshot.rawRumEvent._gc.spanId
+                  : '')
+            : 'none'
+        )
+      }
+
+      function setDashboardCanvasLog(message) {
+        if (replayDashboardCanvasLog) {
+          replayDashboardCanvasLog.textContent = message
+        }
+      }
+
+      function createResourceHookTracker() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.createResourceTrackerId !== 'function') {
+          return
+        }
+        resourceHookTrackerId = rum.createResourceTrackerId()
+        resourceHookPendingFetch = false
+        rum.setResourceContext(resourceHookTrackerId, {
+          order_id: 'demo-order-123',
+          scene: 'resource-hook-demo'
+        })
+        renderResourceHookSnapshot()
+      }
+
+      function buildTrackedResourceHookUrl(includeTraceContext) {
+        return (
+          '/index.css?resource_hook_demo=' +
+          Date.now() +
+          (includeTraceContext ? '&trace=1' : '')
+        )
+      }
+
+      async function sendTrackedResourceHookFetchRequest(includeTraceContext) {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.appendResourceContext !== 'function') {
+          return
+        }
+        if (!resourceHookTrackerId) {
+          createResourceHookTracker()
+        }
+
+        resourceHookPendingFetch = true
+        renderResourceHookSnapshot()
+
+        try {
+          const response = await window.fetch(buildTrackedResourceHookUrl(includeTraceContext), {
+            headers: {
+              'x-rum-resource-id': resourceHookTrackerId
+            }
+          })
+          await response.text()
+          rum.appendResourceContext(resourceHookTrackerId, {
+            request_type: 'fetch',
+            result: 'success',
+            response_status: response.status,
+            trace_expected: includeTraceContext ? 'true' : 'false'
+          })
+        } catch (error) {
+          rum.appendResourceContext(resourceHookTrackerId, {
+            request_type: 'fetch',
+            result: 'error',
+            error_message: error && error.message ? error.message : 'unknown',
+            trace_expected: includeTraceContext ? 'true' : 'false'
+          })
+        } finally {
+          resourceHookPendingFetch = false
+          renderResourceHookSnapshot()
+        }
+      }
+
+      function sendTrackedResourceHookFetch() {
+        return sendTrackedResourceHookFetchRequest(false)
+      }
+
+      function sendTrackedResourceHookFetchWithTrace() {
+        return sendTrackedResourceHookFetchRequest(true)
+      }
+
+      function sendTrackedResourceHookXhrRequest(includeTraceContext) {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.appendResourceContext !== 'function') {
+          return
+        }
+        if (!resourceHookTrackerId) {
+          createResourceHookTracker()
+        }
+
+        resourceHookPendingFetch = true
+        renderResourceHookSnapshot()
+
+        const xhr = new XMLHttpRequest()
+        xhr.open('GET', buildTrackedResourceHookUrl(includeTraceContext), true)
+        xhr.setRequestHeader('x-rum-resource-id', resourceHookTrackerId)
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) {
+            return
+          }
+          try {
+            rum.appendResourceContext(resourceHookTrackerId, {
+              request_type: 'xhr',
+              result:
+                xhr.status >= 200 && xhr.status < 400 ? 'success' : 'error',
+              response_status: xhr.status,
+              trace_expected: includeTraceContext ? 'true' : 'false'
+            })
+          } finally {
+            resourceHookPendingFetch = false
+            renderResourceHookSnapshot()
+          }
+        }
+        xhr.onerror = function () {
+          try {
+            rum.appendResourceContext(resourceHookTrackerId, {
+              request_type: 'xhr',
+              result: 'error',
+              error_message: 'xhr_error',
+              trace_expected: includeTraceContext ? 'true' : 'false'
+            })
+          } finally {
+            resourceHookPendingFetch = false
+            renderResourceHookSnapshot()
+          }
+        }
+        xhr.send()
+      }
+
+      function sendTrackedResourceHookXhr() {
+        sendTrackedResourceHookXhrRequest(false)
+      }
+
+      function sendTrackedResourceHookXhrWithTrace() {
+        sendTrackedResourceHookXhrRequest(true)
+      }
+
+      function finishTrackedResourceHook() {
+        const rum = window.DATAFLUX_RUM
+        if (
+          !resourceHookTrackerId ||
+          !rum ||
+          typeof rum.finishResource !== 'function'
+        ) {
+          return
+        }
+        rum.finishResource(resourceHookTrackerId)
+        renderResourceHookSnapshot()
+      }
+
+      function resetResourceHookDemo() {
+        resourceHookTrackerId = ''
+        resourceHookPendingFetch = false
+        renderResourceHookSnapshot()
       }
 
       function setLargeDomLastAction(message) {
@@ -1398,6 +2371,13 @@
           : 'No canvas replay event exported yet.'
       }
 
+      function renderLastDashboardCanvasReplayEvent() {
+        if (!replayDashboardCanvasExport) return
+        replayDashboardCanvasExport.textContent = lastDashboardCanvasReplayEvent
+          ? JSON.stringify(lastDashboardCanvasReplayEvent, null, 2)
+          : 'No dashboard canvas replay event exported yet.'
+      }
+
       async function exportLastCanvasReplayEvent() {
         if (!lastCanvasReplayEvent) {
           setCanvasLog('No successful canvas snapshot yet, nothing to export')
@@ -1417,15 +2397,65 @@
         setCanvasLog('Exported last canvas replay event')
       }
 
+      async function exportLastDashboardCanvasReplayEvent() {
+        if (!lastDashboardCanvasReplayEvent) {
+          setDashboardCanvasLog('No successful dashboard snapshot yet, nothing to export')
+          renderLastDashboardCanvasReplayEvent()
+          return
+        }
+        renderLastDashboardCanvasReplayEvent()
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          try {
+            await navigator.clipboard.writeText(
+              JSON.stringify(lastDashboardCanvasReplayEvent, null, 2)
+            )
+            setDashboardCanvasLog(
+              'Exported dashboard canvas replay event and copied it to clipboard'
+            )
+            return
+          } catch (_) {}
+        }
+        setDashboardCanvasLog('Exported dashboard canvas replay event')
+      }
+
       function getReplayCanvasContext() {
         if (!replayCanvas) return
         return replayCanvas.getContext('2d')
+      }
+
+      function getReplayDashboardCanvasContext() {
+        if (!replayDashboardCanvases.length) return
+        return replayDashboardCanvases[0].getContext('2d')
+      }
+
+      function createDashboardCanvasTiles() {
+        if (!replayDashboardCanvasGrid || replayDashboardCanvases.length) return
+        replayDashboardCanvases = dashboardCanvasPanels.map((panel, index) => {
+          const tile = document.createElement('div')
+          tile.className = 'canvas-demo__dashboard-tile'
+
+          const label = document.createElement('div')
+          label.className = 'canvas-demo__dashboard-label'
+          label.textContent = panel.title + ' chart'
+          tile.appendChild(label)
+
+          const canvas = document.createElement('canvas')
+          canvas.className = 'canvas-demo__board'
+          canvas.width = 400
+          canvas.height = 150
+          canvas.dataset.panelIndex = String(index)
+          tile.appendChild(canvas)
+
+          replayDashboardCanvasGrid.appendChild(tile)
+          return canvas
+        })
       }
 
       function drawCanvasScene(label) {
         const context = getReplayCanvasContext()
         if (!context) return
         canvasStep += 1
+        lastCanvasScene = 'scene:' + label
         const hue = (canvasStep * 47) % 360
         context.clearRect(0, 0, replayCanvas.width, replayCanvas.height)
         context.fillStyle = '#f8fafc'
@@ -1455,6 +2485,338 @@
         )
       }
 
+      function drawCanvasPanelBackdrop(context, title, accent) {
+        context.clearRect(0, 0, replayCanvas.width, replayCanvas.height)
+        context.fillStyle = '#f8fafc'
+        context.fillRect(0, 0, replayCanvas.width, replayCanvas.height)
+        context.fillStyle = '#0f172a'
+        context.font = '700 18px sans-serif'
+        context.fillText(title, 24, 32)
+        context.font = '12px sans-serif'
+        context.fillStyle = '#64748b'
+        context.fillText('canvas replay chart test', 24, 52)
+        context.strokeStyle = '#cbd5e1'
+        context.lineWidth = 1
+        context.beginPath()
+        context.moveTo(56, 170)
+        context.lineTo(436, 170)
+        context.moveTo(56, 170)
+        context.lineTo(56, 76)
+        context.stroke()
+        context.strokeStyle = accent
+      }
+
+      function drawRoundedPanel(context, x, y, width, height, radius) {
+        context.beginPath()
+        if (context.roundRect) {
+          context.roundRect(x, y, width, height, radius)
+          return
+        }
+        context.moveTo(x + radius, y)
+        context.lineTo(x + width - radius, y)
+        context.quadraticCurveTo(x + width, y, x + width, y + radius)
+        context.lineTo(x + width, y + height - radius)
+        context.quadraticCurveTo(
+          x + width,
+          y + height,
+          x + width - radius,
+          y + height
+        )
+        context.lineTo(x + radius, y + height)
+        context.quadraticCurveTo(x, y + height, x, y + height - radius)
+        context.lineTo(x, y + radius)
+        context.quadraticCurveTo(x, y, x + radius, y)
+      }
+
+      function drawDashboardChartPanelCanvas(canvas, panel, index, label, step) {
+        const context = canvas.getContext('2d')
+        const hue = (step * 29 + index * 17) % 360
+        const series = [26, 34, 28, 42, 38, 46].map((value, seriesIndex) => {
+          return value + ((step + index * 7 + seriesIndex * 3) % 16)
+        })
+
+        context.clearRect(0, 0, canvas.width, canvas.height)
+        context.fillStyle = '#ffffff'
+        context.fillRect(0, 0, canvas.width, canvas.height)
+        context.strokeStyle = '#dbe4ee'
+        context.lineWidth = 1
+        drawRoundedPanel(context, 0.5, 0.5, canvas.width - 1, canvas.height - 1, 14)
+        context.stroke()
+
+        context.fillStyle = '#0f172a'
+        context.font = '700 12px sans-serif'
+        context.fillText(panel.title, 14, 20)
+        context.fillStyle = '#64748b'
+        context.font = '10px sans-serif'
+        context.fillText(label + ' #' + step, canvas.width - 76, 20)
+
+        context.setLineDash([4, 6])
+        context.strokeStyle = '#eef2f7'
+        for (let gridY = 38; gridY <= canvas.height - 16; gridY += 18) {
+          context.beginPath()
+          context.moveTo(14, gridY)
+          context.lineTo(canvas.width - 14, gridY)
+          context.stroke()
+        }
+        context.setLineDash([])
+
+        if (panel.type === 'bar') {
+          series.slice(0, 5).forEach((value, barIndex) => {
+            const barX = 24 + barIndex * 30
+            const barHeight = Math.max(10, value)
+            const barY = canvas.height - 18 - barHeight
+            context.fillStyle =
+              barIndex % 2 === 0 ? panel.accent : `hsl(${(hue + 13) % 360} 78% 62%)`
+            context.fillRect(barX, barY, 16, barHeight)
+          })
+        } else {
+          context.strokeStyle = panel.accent
+          context.lineWidth = 2
+          context.beginPath()
+          series.forEach((value, pointIndex) => {
+            const pointX = 22 + pointIndex * 60
+            const pointY = canvas.height - 18 - value
+            if (pointIndex === 0) {
+              context.moveTo(pointX, pointY)
+            } else {
+              context.lineTo(pointX, pointY)
+            }
+          })
+          context.stroke()
+
+          if (panel.type === 'area') {
+            context.lineTo(22 + (series.length - 1) * 60, canvas.height - 18)
+            context.lineTo(22, canvas.height - 18)
+            context.closePath()
+            context.fillStyle = panel.accent + '22'
+            context.fill()
+          }
+        }
+      }
+
+      function drawCanvasLineChart(label) {
+        const context = getReplayCanvasContext()
+        if (!context) return
+        canvasStep += 1
+        lastCanvasScene = 'line-chart'
+        const accent = '#0f766e'
+        const points = [42, 66, 58, 94, 82, 118].map((value, index) => {
+          return value + ((canvasStep + index * 3) % 18)
+        })
+        drawCanvasPanelBackdrop(context, 'Revenue Trend', accent)
+        context.setLineDash([4, 6])
+        context.strokeStyle = '#dbe4ee'
+        for (let y = 90; y <= 170; y += 20) {
+          context.beginPath()
+          context.moveTo(56, y)
+          context.lineTo(436, y)
+          context.stroke()
+        }
+        context.setLineDash([])
+        context.strokeStyle = accent
+        context.lineWidth = 3
+        context.beginPath()
+        points.forEach((value, index) => {
+          const x = 76 + index * 66
+          const y = 190 - value
+          if (index === 0) {
+            context.moveTo(x, y)
+          } else {
+            context.lineTo(x, y)
+          }
+        })
+        context.stroke()
+        context.fillStyle = accent
+        points.forEach((value, index) => {
+          const x = 76 + index * 66
+          const y = 190 - value
+          context.beginPath()
+          context.arc(x, y, 5, 0, Math.PI * 2)
+          context.fill()
+          context.fillStyle = '#334155'
+          context.font = '11px sans-serif'
+          context.fillText(String(value), x - 10, y - 12)
+          context.fillStyle = accent
+        })
+        context.fillStyle = '#0f172a'
+        context.font = '13px sans-serif'
+        context.fillText(label + ' #' + canvasStep, 312, 32)
+        setCanvasStatus(replayCanvasEventStatus, 'chart:line step=' + canvasStep)
+        setCanvasLog(
+          'Line chart rendered at ' + new Date().toLocaleTimeString() + ' with label: ' + label
+        )
+      }
+
+      function drawCanvasBarChart(label) {
+        const context = getReplayCanvasContext()
+        if (!context) return
+        canvasStep += 1
+        lastCanvasScene = 'bar-chart'
+        const accent = '#7c3aed'
+        const bars = [28, 52, 74, 46, 88].map((value, index) => {
+          return value + ((canvasStep + index * 5) % 20)
+        })
+        drawCanvasPanelBackdrop(context, 'Traffic Sources', accent)
+        context.fillStyle = '#ede9fe'
+        bars.forEach((value, index) => {
+          const x = 88 + index * 64
+          const height = value
+          const y = 170 - height
+          context.fillStyle = index % 2 === 0 ? '#8b5cf6' : '#c084fc'
+          context.fillRect(x, y, 34, height)
+          context.fillStyle = '#0f172a'
+          context.font = '11px sans-serif'
+          context.fillText(String(value), x + 4, y - 8)
+          context.fillText(['Ads', 'SEO', 'Email', 'Ref', 'Direct'][index], x - 2, 190)
+        })
+        context.fillStyle = '#0f172a'
+        context.font = '13px sans-serif'
+        context.fillText(label + ' #' + canvasStep, 320, 32)
+        setCanvasStatus(replayCanvasEventStatus, 'chart:bar step=' + canvasStep)
+        setCanvasLog(
+          'Bar chart rendered at ' + new Date().toLocaleTimeString() + ' with label: ' + label
+        )
+      }
+
+      function drawCanvasDashboardChart(label) {
+        const context = getReplayCanvasContext()
+        if (!context) return
+        canvasStep += 1
+        lastCanvasScene = 'dashboard-chart'
+        const hue = (canvasStep * 31) % 360
+        const lineSeries = [48, 62, 74, 68, 92, 108].map((value, index) => {
+          return value + ((canvasStep + index * 4) % 14)
+        })
+        const barSeries = [34, 58, 44, 76].map((value, index) => {
+          return value + ((canvasStep + index * 6) % 18)
+        })
+
+        context.clearRect(0, 0, replayCanvas.width, replayCanvas.height)
+        context.fillStyle = '#f8fafc'
+        context.fillRect(0, 0, replayCanvas.width, replayCanvas.height)
+
+        context.fillStyle = '#0f172a'
+        context.font = '700 18px sans-serif'
+        context.fillText('Realtime Dashboard', 22, 30)
+        context.font = '12px sans-serif'
+        context.fillStyle = '#64748b'
+        context.fillText(label + ' #' + canvasStep, 348, 30)
+
+        const kpiCards = [
+          { title: 'GMV', value: '$' + (128 + canvasStep) + 'k', color: '#0f766e' },
+          { title: 'Orders', value: 420 + canvasStep * 3, color: '#1d4ed8' },
+          { title: 'Latency', value: 86 + (canvasStep % 12) + 'ms', color: '#7c3aed' }
+        ]
+
+        kpiCards.forEach((card, index) => {
+          const x = 22 + index * 150
+          context.fillStyle = '#ffffff'
+          context.strokeStyle = '#dbe4ee'
+          context.lineWidth = 1
+          drawRoundedPanel(context, x, 48, 132, 54, 12)
+          context.fill()
+          context.stroke()
+          context.fillStyle = '#64748b'
+          context.font = '11px sans-serif'
+          context.fillText(card.title, x + 12, 68)
+          context.fillStyle = card.color
+          context.font = '700 18px sans-serif'
+          context.fillText(String(card.value), x + 12, 90)
+        })
+
+        context.fillStyle = '#ffffff'
+        context.strokeStyle = '#dbe4ee'
+        drawRoundedPanel(context, 22, 116, 274, 90, 14)
+        context.fill()
+        context.stroke()
+        context.fillStyle = '#0f172a'
+        context.font = '12px sans-serif'
+        context.fillText('Revenue Trend', 38, 136)
+
+        context.setLineDash([4, 6])
+        context.strokeStyle = '#e2e8f0'
+        for (let y = 146; y <= 194; y += 16) {
+          context.beginPath()
+          context.moveTo(38, y)
+          context.lineTo(278, y)
+          context.stroke()
+        }
+        context.setLineDash([])
+        context.strokeStyle = `hsl(${hue} 78% 40%)`
+        context.lineWidth = 3
+        context.beginPath()
+        lineSeries.forEach((value, index) => {
+          const x = 46 + index * 44
+          const y = 214 - value
+          if (index === 0) {
+            context.moveTo(x, y)
+          } else {
+            context.lineTo(x, y)
+          }
+        })
+        context.stroke()
+        context.fillStyle = `hsl(${hue} 78% 45%)`
+        lineSeries.forEach((value, index) => {
+          const x = 46 + index * 44
+          const y = 214 - value
+          context.beginPath()
+          context.arc(x, y, 4, 0, Math.PI * 2)
+          context.fill()
+        })
+
+        context.fillStyle = '#ffffff'
+        context.strokeStyle = '#dbe4ee'
+        drawRoundedPanel(context, 312, 116, 146, 90, 14)
+        context.fill()
+        context.stroke()
+        context.fillStyle = '#0f172a'
+        context.font = '12px sans-serif'
+        context.fillText('Channel Mix', 328, 136)
+        barSeries.forEach((value, index) => {
+          const x = 330 + index * 28
+          const y = 198 - value
+          context.fillStyle = index % 2 === 0 ? '#8b5cf6' : '#c084fc'
+          context.fillRect(x, y, 18, value)
+          context.fillStyle = '#64748b'
+          context.font = '10px sans-serif'
+          context.fillText(String(value), x - 2, y - 6)
+        })
+
+        setCanvasStatus(replayCanvasEventStatus, 'chart:dashboard step=' + canvasStep)
+        setCanvasLog(
+          'Dashboard chart rendered at ' +
+            new Date().toLocaleTimeString() +
+            ' with label: ' +
+            label
+        )
+      }
+
+      function drawDashboardCanvasChart(label) {
+        if (!replayDashboardCanvases.length) return
+        dashboardCanvasStep += 1
+        lastDashboardCanvasScene = 'dashboard-chart'
+        replayDashboardCanvases.forEach((canvas, index) => {
+          drawDashboardChartPanelCanvas(
+            canvas,
+            dashboardCanvasPanels[index],
+            index,
+            label,
+            dashboardCanvasStep
+          )
+        })
+
+        setCanvasStatus(
+          replayDashboardCanvasEventStatus,
+          'dashboard x' + replayDashboardCanvases.length + ' step=' + dashboardCanvasStep
+        )
+        setDashboardCanvasLog(
+          'Dashboard canvases rendered at ' +
+            new Date().toLocaleTimeString() +
+            ' with label: ' +
+            label
+        )
+      }
+
       function clearCanvasScene() {
         const context = getReplayCanvasContext()
         if (!context) return
@@ -1464,8 +2826,24 @@
         }
         stopAutoDraw()
         context.clearRect(0, 0, replayCanvas.width, replayCanvas.height)
+        lastCanvasScene = 'clear'
         setCanvasStatus(replayCanvasEventStatus, 'clear')
         setCanvasLog('Canvas cleared')
+      }
+
+      function clearDashboardCanvasScene() {
+        if (!replayDashboardCanvases.length) return
+        if (dashboardCanvasAnimationFrameId) {
+          cancelAnimationFrame(dashboardCanvasAnimationFrameId)
+          dashboardCanvasAnimationFrameId = null
+        }
+        replayDashboardCanvases.forEach((canvas) => {
+          const context = canvas.getContext('2d')
+          context.clearRect(0, 0, canvas.width, canvas.height)
+        })
+        lastDashboardCanvasScene = 'clear'
+        setCanvasStatus(replayDashboardCanvasEventStatus, 'clear')
+        setDashboardCanvasLog('Dashboard canvases cleared')
       }
 
       function describeAutoResult(result, trigger, time) {
@@ -1532,6 +2910,68 @@
         )
       }
 
+      async function snapshotDashboardCanvasScene(trigger) {
+        if (!trigger) {
+          trigger = 'dashboard-manual-button'
+        }
+        lastDashboardCanvasTrigger = trigger
+        if (!window.DATAFLUX_RUM || !window.DATAFLUX_RUM.snapshotCanvas) {
+          lastDashboardCanvasSnapshotResult = {
+            ok: false,
+            reason: 'api_unavailable'
+          }
+          setDashboardCanvasLog('snapshotCanvas API is not available on DATAFLUX_RUM')
+          refreshDashboardCanvasStatusPanel()
+          return
+        }
+        const results = await Promise.all(
+          replayDashboardCanvases.map((canvas) => window.DATAFLUX_RUM.snapshotCanvas(canvas))
+        )
+        const okCount = results.filter((result) => result && result.ok).length
+        const firstFailure = results.find((result) => !result || !result.ok)
+        lastDashboardCanvasSnapshotResult =
+          okCount === replayDashboardCanvases.length
+            ? { ok: true, reason: 'all_canvas_snapshots_ok', count: okCount }
+            : {
+                ok: false,
+                reason: firstFailure && firstFailure.reason ? firstFailure.reason : 'partial_failure',
+                count: okCount
+              }
+        const time = new Date().toLocaleTimeString()
+        if (okCount > 0) {
+          lastDashboardCanvasReplayEvent = replayDashboardCanvases.map((canvas, index) => {
+            return {
+              panel: dashboardCanvasPanels[index].title,
+              event: buildCanvasReplayEventFromCanvas(canvas)
+            }
+          })
+          setCanvasStatus(
+            replayDashboardCanvasEventStatus,
+            'snapshot:' + time + ' ok=' + okCount + '/' + replayDashboardCanvases.length
+          )
+          renderLastDashboardCanvasReplayEvent()
+          setDashboardCanvasLog(
+            'Dashboard snapshot completed at ' +
+              time +
+              ' with ' +
+              okCount +
+              '/' +
+              replayDashboardCanvases.length +
+              ' successful canvases'
+          )
+          refreshDashboardCanvasStatusPanel()
+          return
+        }
+        setDashboardCanvasLog(
+          'Dashboard snapshot failed at ' +
+            time +
+            (firstFailure && firstFailure.reason
+              ? ' with reason: ' + firstFailure.reason
+              : '')
+        )
+        refreshDashboardCanvasStatusPanel()
+      }
+
       function animateCanvasAndSnapshot() {
         if (canvasAnimationFrameId) {
           cancelAnimationFrame(canvasAnimationFrameId)
@@ -1550,10 +2990,58 @@
         canvasAnimationFrameId = requestAnimationFrame(tick)
       }
 
+      function animateCanvasCharts() {
+        if (canvasAnimationFrameId) {
+          cancelAnimationFrame(canvasAnimationFrameId)
+        }
+        let frame = 0
+        const tick = () => {
+          frame += 1
+          if (frame % 3 === 1) {
+            drawCanvasLineChart('trend')
+          } else if (frame % 3 === 2) {
+            drawCanvasBarChart('mix')
+          } else {
+            drawCanvasDashboardChart('board')
+          }
+          if (frame === 10) {
+            snapshotCanvasScene('chart-animation-end')
+            canvasAnimationFrameId = null
+            return
+          }
+          canvasAnimationFrameId = requestAnimationFrame(tick)
+        }
+        canvasAnimationFrameId = requestAnimationFrame(tick)
+      }
+
+      function animateDashboardCanvas() {
+        if (dashboardCanvasAnimationFrameId) {
+          cancelAnimationFrame(dashboardCanvasAnimationFrameId)
+        }
+        let frame = 0
+        const tick = () => {
+          frame += 1
+          drawDashboardCanvasChart('animate-board')
+          if (frame === 8) {
+            snapshotDashboardCanvasScene('dashboard-animation-end')
+            dashboardCanvasAnimationFrameId = null
+            return
+          }
+          dashboardCanvasAnimationFrameId = requestAnimationFrame(tick)
+        }
+        dashboardCanvasAnimationFrameId = requestAnimationFrame(tick)
+      }
+
       function startAutoDraw() {
         if (canvasAutoDrawIntervalId) return
         canvasAutoDrawIntervalId = window.setInterval(() => {
-          drawCanvasScene('auto')
+          if (canvasStep % 3 === 0) {
+            drawCanvasLineChart('auto-line')
+          } else if (canvasStep % 3 === 1) {
+            drawCanvasBarChart('auto-bar')
+          } else {
+            drawCanvasDashboardChart('auto-board')
+          }
         }, 400)
         setCanvasLog('Auto draw started')
       }
@@ -1574,11 +3062,17 @@
         startAutoDraw()
       }
 
+      createDashboardCanvasTiles()
       drawCanvasScene('initial')
+      drawDashboardCanvasChart('initial-board')
       refreshCanvasStatusPanel()
+      refreshDashboardCanvasStatusPanel()
       refreshLargeDomStatus()
+      renderResourceHookSnapshot()
       window.setInterval(refreshCanvasStatusPanel, 1000)
+      window.setInterval(refreshDashboardCanvasStatusPanel, 1000)
       window.setInterval(refreshLargeDomStatus, 1000)
+      window.setInterval(renderResourceHookSnapshot, 1000)
       let right = 10
       function buttonsClickHandle(event) {
         const target = event.target
@@ -1677,6 +3171,14 @@
           switchReplayCanvasMode('auto')
         } else if (delay === 'canvasDraw') {
           drawCanvasScene('manual')
+        } else if (delay === 'canvasDrawLineChart') {
+          drawCanvasLineChart('manual-line')
+        } else if (delay === 'canvasDrawBarChart') {
+          drawCanvasBarChart('manual-bar')
+        } else if (delay === 'canvasDrawDashboard') {
+          drawCanvasDashboardChart('manual-board')
+        } else if (delay === 'canvasAnimateCharts') {
+          animateCanvasCharts()
         } else if (delay === 'canvasAutoDrawToggle') {
           toggleAutoDraw()
         } else if (delay === 'canvasSnapshot') {
@@ -1687,10 +3189,36 @@
           clearCanvasScene()
         } else if (delay === 'canvasExportEvent') {
           exportLastCanvasReplayEvent()
+        } else if (delay === 'dashboardCanvasDraw') {
+          drawDashboardCanvasChart('manual-board')
+        } else if (delay === 'dashboardCanvasAnimate') {
+          animateDashboardCanvas()
+        } else if (delay === 'dashboardCanvasClear') {
+          clearDashboardCanvasScene()
+        } else if (delay === 'dashboardCanvasSnapshot') {
+          snapshotDashboardCanvasScene()
+        } else if (delay === 'dashboardCanvasExportEvent') {
+          exportLastDashboardCanvasReplayEvent()
         } else if (delay === 'largeDomReplayOn') {
           setLargeDomReplayRecording(true)
         } else if (delay === 'largeDomReplayOff') {
           setLargeDomReplayRecording(false)
+        } else if (delay === 'resourceHookCreate') {
+          createResourceHookTracker()
+        } else if (delay === 'resourceHookFetch') {
+          sendTrackedResourceHookFetch()
+        } else if (delay === 'resourceHookFetchWithTrace') {
+          sendTrackedResourceHookFetchWithTrace()
+        } else if (delay === 'resourceHookXhr') {
+          sendTrackedResourceHookXhr()
+        } else if (delay === 'resourceHookXhrWithTrace') {
+          sendTrackedResourceHookXhrWithTrace()
+        } else if (delay === 'resourceHookFinish') {
+          finishTrackedResourceHook()
+        } else if (delay === 'resourceHookRefresh') {
+          renderResourceHookSnapshot()
+        } else if (delay === 'resourceHookReset') {
+          resetResourceHookDemo()
         } else if (delay === 'largeDomGenerateDashboard2500') {
           generateDashboardDom(2500)
         } else if (delay === 'largeDomBenchmarkReplayOn') {
@@ -1744,13 +3272,18 @@
         if (operation) {
           operation.addEventListener('click', buttonsClickHandle, false)
         }
-        const canvasToolbar = document.querySelector('.canvas-demo__toolbar')
-        if (canvasToolbar) {
-          canvasToolbar.addEventListener('click', buttonsClickHandle, false)
-        }
+        document.querySelectorAll('.canvas-demo__toolbar').forEach((toolbar) => {
+          toolbar.addEventListener('click', buttonsClickHandle, false)
+        })
         const largeDomToolbar = document.querySelector('.large-dom-demo__toolbar')
         if (largeDomToolbar) {
           largeDomToolbar.addEventListener('click', buttonsClickHandle, false)
+        }
+        const resourceHookToolbar = document.querySelector(
+          '.resource-hook-demo__toolbar'
+        )
+        if (resourceHookToolbar) {
+          resourceHookToolbar.addEventListener('click', buttonsClickHandle, false)
         }
         document
           .getElementById('test')

@@ -326,4 +326,72 @@ describe('rumPublicApi', () => {
     expect(recorderApi.getLastReplaySegmentFlushForDebug).toHaveBeenCalled()
     expect(recorderApi.snapshotCanvas).toHaveBeenCalled()
   })
+
+  it('should expose resource tracker APIs', () => {
+    const startRumImpl = jasmine.createSpy('startRumImpl').and.returnValue({
+      addAction: jasmine.createSpy('addAction'),
+      addError: jasmine.createSpy('addError'),
+      addResource: jasmine.createSpy('addResource'),
+      addTiming: jasmine.createSpy('addTiming'),
+      appendResourceContext: jasmine.createSpy('appendResourceContext'),
+      createResourceTrackerId: jasmine.createSpy('createResourceTrackerId'),
+      finishResource: jasmine.createSpy('finishResource'),
+      getInternalContext: jasmine.createSpy('getInternalContext'),
+      getResource: jasmine.createSpy('getResource'),
+      getViewContext: jasmine.createSpy('getViewContext'),
+      lifeCycle: {},
+      session: {},
+      setForcedSession: jasmine.createSpy('setForcedSession'),
+      setResourceContext: jasmine.createSpy('setResourceContext'),
+      setViewContext: jasmine.createSpy('setViewContext'),
+      setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
+      setViewName: jasmine.createSpy('setViewName'),
+      startView: jasmine.createSpy('startView'),
+      stopSession: jasmine.createSpy('stopSession'),
+      viewContexts: {}
+    })
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(undefined),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      snapshotCanvas: jasmine.createSpy('snapshotCanvas'),
+      start: jasmine.createSpy('start'),
+      stop: jasmine.createSpy('stop'),
+      takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
+    }
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi)
+
+    const trackerId = rumPublicApi.createResourceTrackerId()
+    expect(typeof trackerId).toBe('string')
+
+    rumPublicApi.setResourceContext(trackerId, {
+      order_id: '123',
+      fn: () => {}
+    })
+    rumPublicApi.appendResourceContext(trackerId, {
+      result: 'success',
+      nested: { ok: true }
+    })
+
+    expect(rumPublicApi.getResource(trackerId)).toEqual(
+      jasmine.objectContaining({
+        trackerId: trackerId,
+        status: 'created',
+        context: jasmine.objectContaining({
+          order_id: '123',
+          result: 'success',
+          nested: { ok: true }
+        })
+      })
+    )
+
+    rumPublicApi.finishResource(trackerId)
+    expect(rumPublicApi.getResource(trackerId)).toEqual(
+      jasmine.objectContaining({
+        status: 'finished'
+      })
+    )
+  })
 })

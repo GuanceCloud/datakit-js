@@ -146,10 +146,8 @@ describe('replay/record/serialize', () => {
   it('should serialize hidden elements with size placeholders', () => {
     const element = document.createElement('div')
     element.setAttribute(PRIVACY_ATTR_NAME, PRIVACY_ATTR_VALUE_HIDDEN)
-    spyOn(element, 'getBoundingClientRect').and.returnValue({
-      width: 120,
-      height: 45
-    })
+    element.style.width = '120px'
+    element.style.height = '45px'
 
     const serializedNode = serializeElementNode(element, {
       configuration: {},
@@ -174,6 +172,33 @@ describe('replay/record/serialize', () => {
       childNodes: [],
       isSVG: undefined
     })
+  })
+
+  it('should not read layout when serializing hidden elements', () => {
+    const element = document.createElement('div')
+    element.setAttribute(PRIVACY_ATTR_NAME, PRIVACY_ATTR_VALUE_HIDDEN)
+    element.style.width = '80px'
+    spyOn(element, 'getBoundingClientRect')
+
+    const serializedNode = serializeElementNode(element, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(element.getBoundingClientRect).not.toHaveBeenCalled()
+    expect(serializedNode.attributes).toEqual(
+      jasmine.objectContaining({
+        rr_width: '80px',
+        [PRIVACY_ATTR_NAME]: PRIVACY_ATTR_VALUE_HIDDEN
+      })
+    )
+    expect(serializedNode.attributes.rr_height).toBeUndefined()
   })
 
   it('should reuse node ids and track serialized ids', () => {

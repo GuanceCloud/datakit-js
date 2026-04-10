@@ -5,6 +5,7 @@ import {
   ResourceType
 } from '@cloudcare/browser-core'
 import { startResourceCollection } from './resourceCollection'
+import { createResourceTrackerManager } from './resourceTrackerManager'
 
 describe('resourceCollection', () => {
   let OriginalPerformanceObserver
@@ -31,6 +32,247 @@ describe('resourceCollection', () => {
   afterEach(() => {
     window.PerformanceObserver = OriginalPerformanceObserver
     globalThis.PerformanceObserver = OriginalPerformanceObserver
+  })
+
+  it('should delay tracked request resources until finishResource is called', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const resourceTrackerManager = createResourceTrackerManager()
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {},
+      resourceTrackerManager
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    const resourceId = resourceTrackerManager.createTrackerId()
+    resourceTrackerManager.setResourceContext(resourceId, {
+      order_id: '123'
+    })
+
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/orders?x=1',
+      method: 'POST',
+      status: 204,
+      type: RequestType.FETCH,
+      duration: 12,
+      startClocks: {
+        relative: 100,
+        timeStamp: 200
+      },
+      requestHeaderContexts: {
+        'x-rum-resource-id': resourceId
+      }
+    })
+
+    expect(collected).not.toHaveBeenCalled()
+    expect(resourceTrackerManager.getResource(resourceId)).toEqual(
+      jasmine.objectContaining({
+        trackerId: resourceId,
+        status: 'request_collected',
+        context: {
+          order_id: '123'
+        },
+        resource: jasmine.objectContaining({
+          method: 'POST',
+          status: 204
+        })
+      })
+    )
+
+    resourceTrackerManager.appendResourceContext(resourceId, {
+      result: 'success'
+    })
+    resourceTrackerManager.finishResource(resourceId)
+
+    expect(collected).toHaveBeenCalledTimes(1)
+    expect(collected.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        customerContext: {
+          order_id: '123',
+          result: 'success'
+        },
+        rawRumEvent: jasmine.objectContaining({
+          type: 'resource'
+        })
+      })
+    )
+  })
+
+  it('should timeout flush tracked resources when finishResource is not called', () => {
+    jasmine.clock().install()
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const resourceTrackerManager = createResourceTrackerManager()
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {},
+      resourceTrackerManager
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    const resourceId = resourceTrackerManager.createTrackerId()
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/orders?x=1',
+      method: 'GET',
+      status: 200,
+      type: RequestType.XHR,
+      duration: 12,
+      startClocks: {
+        relative: 100,
+        timeStamp: 200
+      },
+      requestHeaderContexts: {
+        'x-rum-resource-id': resourceId
+      }
+    })
+
+    expect(collected).not.toHaveBeenCalled()
+
+    jasmine.clock().tick(30000)
+
+    expect(collected).toHaveBeenCalledTimes(1)
+    expect(resourceTrackerManager.getResource(resourceId)).toEqual(
+      jasmine.objectContaining({
+        status: 'timeout_flushed'
+      })
+    )
+    jasmine.clock().uninstall()
+  })
+
+  it('should flush tracked resources when finishResource is called before request completion', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const resourceTrackerManager = createResourceTrackerManager()
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {},
+      resourceTrackerManager
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    const resourceId = resourceTrackerManager.createTrackerId()
+    resourceTrackerManager.setResourceContext(resourceId, {
+      order_id: 'finish-before-complete'
+    })
+    resourceTrackerManager.finishResource(resourceId)
+
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/orders?finish=before',
+      method: 'GET',
+      status: 200,
+      type: RequestType.XHR,
+      duration: 12,
+      startClocks: {
+        relative: 100,
+        timeStamp: 200
+      },
+      requestHeaderContexts: {
+        'x-rum-resource-id': resourceId
+      }
+    })
+
+    expect(collected).toHaveBeenCalledTimes(1)
+    expect(collected.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        customerContext: {
+          order_id: 'finish-before-complete'
+        }
+      })
+    )
+    expect(resourceTrackerManager.getResource(resourceId)).toEqual(
+      jasmine.objectContaining({
+        status: 'flushed'
+      })
+    )
+  })
+
+  it('should match tracked xhr requests with mixed-case resource tracker headers', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const resourceTrackerManager = createResourceTrackerManager()
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {},
+      resourceTrackerManager
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    const resourceId = resourceTrackerManager.createTrackerId()
+    resourceTrackerManager.setResourceContext(resourceId, {
+      request_type: 'xhr'
+    })
+
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/orders?xhr=1',
+      method: 'GET',
+      status: 200,
+      type: RequestType.XHR,
+      duration: 12,
+      startClocks: {
+        relative: 100,
+        timeStamp: 200
+      },
+      requestHeaderContexts: {
+        'X-RUM-RESOURCE-ID': resourceId
+      }
+    })
+
+    expect(collected).not.toHaveBeenCalled()
+    resourceTrackerManager.finishResource(resourceId)
+    expect(collected).toHaveBeenCalledTimes(1)
+    expect(resourceTrackerManager.getResource(resourceId)).toEqual(
+      jasmine.objectContaining({
+        status: 'flushed',
+        context: {
+          request_type: 'xhr'
+        }
+      })
+    )
   })
 
   it('should collect completed requests into raw resource events', () => {
@@ -76,6 +318,209 @@ describe('resourceCollection', () => {
       traceId: 'trace-id',
       spanId: 'span-id'
     })
+  })
+
+  it('should preserve trace metadata for tracked requests after finishResource', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const resourceTrackerManager = createResourceTrackerManager()
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {},
+      resourceTrackerManager
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    const resourceId = resourceTrackerManager.createTrackerId()
+    resourceTrackerManager.setResourceContext(resourceId, {
+      trace_expected: 'true'
+    })
+
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/traced',
+      method: 'POST',
+      status: 202,
+      type: RequestType.FETCH,
+      duration: 12,
+      startClocks: {
+        relative: 100,
+        timeStamp: 200
+      },
+      traceId: 'tracked-trace-id',
+      spanId: 'tracked-span-id',
+      traceSampled: true,
+      requestHeaderContexts: {
+        'x-rum-resource-id': resourceId
+      }
+    })
+
+    expect(collected).not.toHaveBeenCalled()
+    resourceTrackerManager.finishResource(resourceId)
+
+    expect(collected).toHaveBeenCalledTimes(1)
+    expect(collected.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        customerContext: {
+          trace_expected: 'true'
+        },
+        rawRumEvent: jasmine.objectContaining({
+          _gc: {
+            traceId: 'tracked-trace-id',
+            spanId: 'tracked-span-id'
+          }
+        })
+      })
+    )
+  })
+
+  it('should fall back to the normal resource path when the tracker id is missing', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const resourceTrackerManager = createResourceTrackerManager()
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {},
+      resourceTrackerManager
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/missing-tracker',
+      method: 'GET',
+      status: 200,
+      type: RequestType.XHR,
+      duration: 12,
+      startClocks: {
+        relative: 100,
+        timeStamp: 200
+      },
+      requestHeaderContexts: {
+        'x-rum-resource-id': 'unknown-tracker-id'
+      }
+    })
+
+    expect(collected).toHaveBeenCalledTimes(1)
+    expect(collected.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        rawRumEvent: jasmine.objectContaining({
+          type: 'resource',
+          resource: jasmine.objectContaining({
+            method: 'GET',
+            status: 200
+          })
+        })
+      })
+    )
+  })
+
+  it('should downgrade the second request to the normal path when the same tracker id is reused', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const resourceTrackerManager = createResourceTrackerManager()
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {},
+      resourceTrackerManager
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    const resourceId = resourceTrackerManager.createTrackerId()
+    resourceTrackerManager.setResourceContext(resourceId, {
+      order_id: 'single-use'
+    })
+
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/first',
+      method: 'GET',
+      status: 200,
+      type: RequestType.FETCH,
+      duration: 12,
+      startClocks: {
+        relative: 100,
+        timeStamp: 200
+      },
+      requestHeaderContexts: {
+        'x-rum-resource-id': resourceId
+      }
+    })
+
+    expect(collected).not.toHaveBeenCalled()
+
+    lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+      url: 'https://example.com/api/second',
+      method: 'POST',
+      status: 201,
+      type: RequestType.XHR,
+      duration: 12,
+      startClocks: {
+        relative: 120,
+        timeStamp: 220
+      },
+      requestHeaderContexts: {
+        'x-rum-resource-id': resourceId
+      }
+    })
+
+    expect(collected).toHaveBeenCalledTimes(1)
+    expect(collected.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        rawRumEvent: jasmine.objectContaining({
+          resource: jasmine.objectContaining({
+            method: 'POST',
+            status: 201
+          })
+        })
+      })
+    )
+
+    resourceTrackerManager.finishResource(resourceId)
+
+    expect(collected).toHaveBeenCalledTimes(2)
+    expect(collected.calls.argsFor(1)[0]).toEqual(
+      jasmine.objectContaining({
+        customerContext: {
+          order_id: 'single-use'
+        },
+        rawRumEvent: jasmine.objectContaining({
+          resource: jasmine.objectContaining({
+            method: 'GET',
+            status: 200
+          })
+        })
+      })
+    )
   })
 
   it('should use request clocks when no matching performance timing exists', () => {

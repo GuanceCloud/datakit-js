@@ -825,4 +825,75 @@ describe('replay/record/mutationObserver', () => {
     expect(shadowRootsController.addShadowRoot).toHaveBeenCalledWith(shadowRoot)
     expect(mutationCallback.calls.mostRecent().args[0].adds.length).toBe(1)
   })
+
+  it('should preserve the latest descendant state when multiple pending-root updates happen in one batch', () => {
+    jasmine.clock().install()
+    window.requestIdleCallback = undefined
+    window.cancelIdleCallback = undefined
+
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    markSerializedAncestors(parent, 1100)
+
+    const child = document.createElement('div')
+    const textNode = document.createTextNode('initial')
+    const nested = document.createElement('span')
+    nested.setAttribute('data-state', 'initial')
+    child.appendChild(textNode)
+    child.appendChild(nested)
+    parent.appendChild(child)
+
+    const mutationCallback = jasmine.createSpy('mutationCallback')
+    startMutationObserver(
+      mutationCallback,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      { removeShadowRoot: jasmine.createSpy('removeShadowRoot') },
+      parent
+    )
+
+    observedCallback([
+      {
+        type: 'childList',
+        target: parent,
+        addedNodes: [child],
+        removedNodes: []
+      }
+    ])
+
+    textNode.textContent = 'updated'
+    nested.setAttribute('data-state', 'updated')
+    nested.appendChild(document.createElement('em'))
+    observedCallback([
+      {
+        type: 'characterData',
+        target: textNode,
+        oldValue: 'initial'
+      },
+      {
+        type: 'attributes',
+        target: nested,
+        attributeName: 'data-state',
+        oldValue: 'initial'
+      },
+      {
+        type: 'childList',
+        target: nested,
+        addedNodes: [nested.lastChild],
+        removedNodes: []
+      }
+    ])
+
+    jasmine.clock().tick(ASYNC_MUTATION_TICK)
+
+    expect(mutationCallback.calls.count()).toBe(1)
+    const emittedRoot = mutationCallback.calls.mostRecent().args[0].adds[0].node
+    expect(emittedRoot.childNodes[0].textContent).toBe('updated')
+    expect(emittedRoot.childNodes[1].attributes).toEqual(
+      jasmine.objectContaining({
+        'data-state': 'updated'
+      })
+    )
+    expect(emittedRoot.childNodes[1].childNodes.length).toBe(1)
+    expect(emittedRoot.childNodes[1].childNodes[0].tagName).toBe('em')
+  })
 })

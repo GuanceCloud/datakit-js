@@ -37,7 +37,8 @@ export function startRum(
   customerDataTrackerManager,
   getCommonContext,
   initialViewOptions,
-  createEncoder
+  createEncoder,
+  resourceTrackerManager
 ) {
   var cleanupTasks = []
   var lifeCycle = new LifeCycle()
@@ -137,7 +138,10 @@ export function startRum(
   const _startResourceCollection = startResourceCollection(
     lifeCycle,
     configuration,
-    pageStateHistory
+    pageStateHistory,
+    undefined,
+    undefined,
+    resourceTrackerManager
   )
   var addResource = _startResourceCollection.addResource
   cleanupTasks.push(_startResourceCollection.stop)
@@ -197,6 +201,21 @@ export function startRum(
       cleanupTasks.forEach(function (task) {
         task()
       })
+    },
+    createResourceTrackerId: function () {
+      return resourceTrackerManager.createTrackerId()
+    },
+    setResourceContext: function (trackerId, context) {
+      resourceTrackerManager.setResourceContext(trackerId, context)
+    },
+    appendResourceContext: function (trackerId, context) {
+      resourceTrackerManager.appendResourceContext(trackerId, context)
+    },
+    finishResource: function (trackerId) {
+      resourceTrackerManager.finishResource(trackerId)
+    },
+    getResource: function (trackerId) {
+      return resourceTrackerManager.getResource(trackerId)
     }
   }
 }
