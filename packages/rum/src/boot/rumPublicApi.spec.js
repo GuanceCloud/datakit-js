@@ -51,6 +51,9 @@ describe('rumPublicApi', () => {
       getSerializedNodeIdForDebug: jasmine
         .createSpy('getSerializedNodeIdForDebug')
         .and.returnValue(undefined),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(undefined),
       onRumStart: jasmine.createSpy('onRumStart'),
       snapshotCanvas: jasmine
         .createSpy('snapshotCanvas')
@@ -129,6 +132,11 @@ describe('rumPublicApi', () => {
       getSerializedNodeIdForDebug: jasmine
         .createSpy('getSerializedNodeIdForDebug')
         .and.returnValue(42),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue({
+          processMutationsCount: 3
+        }),
       onRumStart: jasmine.createSpy('onRumStart'),
       snapshotCanvas: jasmine.createSpy('snapshotCanvas'),
       start: jasmine.createSpy('start'),
@@ -215,6 +223,21 @@ describe('rumPublicApi', () => {
         canvas_mutation: 5
       }
     }
+    const replaySegmentFlushHistoryResult = [
+      {
+        creationReason: 'init',
+        flushReason: 'segment_duration_limit'
+      },
+      {
+        creationReason: 'segment_bytes_limit',
+        flushReason: 'segment_bytes_limit'
+      }
+    ]
+    const replayPerformanceResult = {
+      processMutationsCount: 7,
+      mutationCallbackCount: 2,
+      replaySegmentFlushCount: 1
+    }
     const startRumImpl = jasmine.createSpy('startRumImpl').and.returnValue({
       addAction: jasmine.createSpy('addAction'),
       addError: jasmine.createSpy('addError'),
@@ -240,6 +263,12 @@ describe('rumPublicApi', () => {
       getLastReplaySegmentFlushForDebug: jasmine
         .createSpy('getLastReplaySegmentFlushForDebug')
         .and.returnValue(replaySegmentFlushResult),
+      getReplaySegmentFlushHistoryForDebug: jasmine
+        .createSpy('getReplaySegmentFlushHistoryForDebug')
+        .and.returnValue(replaySegmentFlushHistoryResult),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(replayPerformanceResult),
       getSerializedNodeIdForDebug: jasmine
         .createSpy('getSerializedNodeIdForDebug')
         .and.returnValue(42),
@@ -278,6 +307,12 @@ describe('rumPublicApi', () => {
     )
     expect(rumPublicApi.getLastReplaySegmentFlushForDebug()).toEqual(
       replaySegmentFlushResult
+    )
+    expect(rumPublicApi.getReplaySegmentFlushHistoryForDebug()).toEqual(
+      replaySegmentFlushHistoryResult
+    )
+    expect(rumPublicApi.getReplayPerformanceForDebug()).toEqual(
+      replayPerformanceResult
     )
     expect(rumPublicApi.snapshotCanvas(document.createElement('canvas'))).toBe(
       snapshotCanvasResult

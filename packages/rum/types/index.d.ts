@@ -61,6 +61,18 @@ export interface ReplaySegmentFlushDebugResult {
   rawBytesCount: number
 }
 
+export interface ReplayPerformanceDebugResult {
+  processMutationsCount: number
+  processMutationsDuration: number
+  mutationCallbackCount: number
+  mutationRecordCount: number
+  mutationAddCount: number
+  mutationRemoveCount: number
+  mutationTextCount: number
+  mutationAttributeCount: number
+  replaySegmentFlushCount: number
+}
+
 export declare const datafluxRum: {
   init: (
     initConfiguration: RumInitConfiguration | RumSiteInitConfiguration
@@ -115,6 +127,12 @@ export declare const datafluxRum: {
     | undefined
   getLastReplaySegmentFlushForDebug: () =>
     | ReplaySegmentFlushDebugResult
+    | undefined
+  getReplaySegmentFlushHistoryForDebug: () =>
+    | ReplaySegmentFlushDebugResult[]
+    | undefined
+  getReplayPerformanceForDebug: () =>
+    | ReplayPerformanceDebugResult
     | undefined
 } & {
   onReady(callback: () => void): void

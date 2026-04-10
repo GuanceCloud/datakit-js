@@ -6,8 +6,8 @@ import { noop, throttle, requestIdleCallback } from '@cloudcare/browser-core'
  * mutations will wait MUTATION_PROCESS_MAX_DELAY milliseconds before being processed. If the
  * browser is busy executing a longer task, mutations will be processed after this task.
  */
-var MUTATION_PROCESS_MAX_DELAY = 100
-export var MUTATION_PROCESS_MIN_DELAY = 16
+var MUTATION_PROCESS_MAX_DELAY = 120
+export var MUTATION_PROCESS_MIN_DELAY = 48
 export function createMutationBatch(processMutationBatch) {
   var cancelScheduledFlush = noop
   var pendingMutations = []
@@ -34,6 +34,12 @@ export function createMutationBatch(processMutationBatch) {
     },
 
     flush: flush,
+
+    reset: function () {
+      cancelScheduledFlush()
+      cancelThrottle()
+      pendingMutations = []
+    },
 
     stop: function () {
       cancelScheduledFlush()

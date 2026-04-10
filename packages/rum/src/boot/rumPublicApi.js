@@ -301,6 +301,12 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     }),
     getLastReplaySegmentFlushForDebug: monitor(function () {
       return recorderApi.getLastReplaySegmentFlushForDebug()
+    }),
+    getReplaySegmentFlushHistoryForDebug: monitor(function () {
+      return recorderApi.getReplaySegmentFlushHistoryForDebug()
+    }),
+    getReplayPerformanceForDebug: monitor(function () {
+      return recorderApi.getReplayPerformanceForDebug()
     })
   })
   return rumPublicApi

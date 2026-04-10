@@ -141,10 +141,21 @@ describe('startRecording', () => {
     const serializedNodeId = recording.getSerializedNodeIdForDebug(canvas)
     const autoSnapshotResult =
       recording.getLastAutoCanvasSnapshotResultForDebug()
+    const replaySegmentFlushHistory =
+      recording.getReplaySegmentFlushHistoryForDebug()
+    const replayPerformance = recording.getReplayPerformanceForDebug()
 
     expect(result).toEqual({ ok: true })
     expect(serializedNodeId).toBe(42)
     expect(autoSnapshotResult).toBeUndefined()
+    expect(replaySegmentFlushHistory).toEqual([])
+    expect(replayPerformance).toEqual(
+      jasmine.objectContaining({
+        processMutationsCount: jasmine.any(Number),
+        mutationCallbackCount: jasmine.any(Number),
+        replaySegmentFlushCount: 0
+      })
+    )
     expect(
       parseBridgePayloads(sendEvent).some(
         (payload) =>

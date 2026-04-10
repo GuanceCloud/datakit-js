@@ -61,44 +61,147 @@ export function serializeDocument(
 }
 
 export function serializeNodeWithId(node, options) {
-  var serializedNode = serializeNode(node, options)
-  if (!serializedNode) {
+  var serializedNodeDescription = describeSerializedNode(node, options)
+  if (!serializedNodeDescription) {
     return null
   }
 
-  // Try to reuse the previous id
-  var id = getSerializedNodeId(node) || generateNextId()
-  var serializedNodeWithId = serializedNode
-  serializedNodeWithId.id = id
-  setSerializedNodeId(node, id)
-  if (options.serializedNodeIds) {
-    options.serializedNodeIds.add(id)
+  var serializedNodeWithId = assignSerializedNodeId(
+    node,
+    serializedNodeDescription.serializedNode,
+    options
+  )
+  if (serializedNodeDescription.shouldSerializeChildren) {
+    serializedNodeWithId.childNodes = serializeChildNodes(
+      node,
+      serializedNodeDescription.childNodesOptions
+    )
   }
   return serializedNodeWithId
 }
 
-function serializeNode(node, options) {
+export function serializeNodeWithIdForMutation(node, options) {
+  var mutationSerializerTask = createMutationSerializerTask(node, options)
+  if (!mutationSerializerTask) {
+    return null
+  }
+  mutationSerializerTask.advance(Infinity)
+  return mutationSerializerTask.serializedNode
+}
+
+export function createMutationSerializerTask(node, options) {
+  var rootNodeDescription = describeSerializedNode(node, options)
+  if (!rootNodeDescription) {
+    return null
+  }
+
+  var serializedRootNode = assignSerializedNodeId(
+    node,
+    rootNodeDescription.serializedNode,
+    options
+  )
+  var stack = []
+
+  if (rootNodeDescription.shouldSerializeChildren) {
+    pushChildNodes(node, serializedRootNode, rootNodeDescription.childNodesOptions)
+  }
+
+  return {
+    serializedNode: serializedRootNode,
+    isComplete: stack.length === 0,
+    advance: function (deadline) {
+      while (stack.length && getCurrentTime() < deadline) {
+        var current = stack.pop()
+        var childNodeDescription = describeSerializedNode(
+          current.node,
+          current.options
+        )
+        if (!childNodeDescription) {
+          continue
+        }
+
+        var serializedChildNode = assignSerializedNodeId(
+          current.node,
+          childNodeDescription.serializedNode,
+          current.options
+        )
+        current.parentSerializedNode.childNodes.push(serializedChildNode)
+
+        if (childNodeDescription.shouldSerializeChildren) {
+          pushChildNodes(
+            current.node,
+            serializedChildNode,
+            childNodeDescription.childNodesOptions
+          )
+        }
+      }
+      this.isComplete = stack.length === 0
+      return this.isComplete
+    }
+  }
+
+  function pushChildNodes(parentNode, parentSerializedNode, childNodesOptions) {
+    var childNodes = []
+    forEachChildNodes(parentNode, function (childNode) {
+      childNodes.push(childNode)
+    })
+    for (var i = childNodes.length - 1; i >= 0; i--) {
+      stack.push({
+        node: childNodes[i],
+        options: childNodesOptions,
+        parentSerializedNode: parentSerializedNode
+      })
+    }
+  }
+}
+
+function describeSerializedNode(node, options) {
   switch (node.nodeType) {
     case node.DOCUMENT_NODE:
-      return serializeDocumentNode(node, options)
+      return describeDocumentNode(node, options)
     case node.DOCUMENT_FRAGMENT_NODE:
-      return serializeDocumentFragmentNode(node, options)
+      return describeDocumentFragmentNode(node, options)
     case node.DOCUMENT_TYPE_NODE:
-      return serializeDocumentTypeNode(node)
+      return {
+        serializedNode: serializeDocumentTypeNode(node),
+        shouldSerializeChildren: false
+      }
     case node.ELEMENT_NODE:
-      return serializeElementNode(node, options)
-    case node.TEXT_NODE:
-      return serializeTextNode(node, options)
-    case node.CDATA_SECTION_NODE:
-      return serializeCDataNode()
+      return describeElementNode(node, options)
+    case node.TEXT_NODE: {
+      var serializedTextNode = serializeTextNode(node, options)
+      return serializedTextNode
+        ? {
+            serializedNode: serializedTextNode,
+            shouldSerializeChildren: false
+          }
+        : null
+    }
+    case node.CDATA_SECTION_NODE: {
+      var serializedCDataNode = serializeCDataNode()
+      return serializedCDataNode
+        ? {
+            serializedNode: serializedCDataNode,
+            shouldSerializeChildren: false
+          }
+        : null
+    }
   }
 }
 
 export function serializeDocumentNode(document, options) {
+  return describeDocumentNode(document, options).serializedNode
+}
+
+function describeDocumentNode(document, options) {
   return {
-    type: NodeType.Document,
-    childNodes: serializeChildNodes(document, options),
-    adoptedStyleSheets: serializeStyleSheets(document.adoptedStyleSheets)
+    serializedNode: {
+      type: NodeType.Document,
+      childNodes: [],
+      adoptedStyleSheets: serializeStyleSheets(document.adoptedStyleSheets)
+    },
+    shouldSerializeChildren: true,
+    childNodesOptions: options
   }
 }
 
@@ -112,17 +215,25 @@ function serializeDocumentTypeNode(documentType) {
 }
 
 function serializeDocumentFragmentNode(element, options) {
+  return describeDocumentFragmentNode(element, options).serializedNode
+}
+
+function describeDocumentFragmentNode(element, options) {
   var isShadowRoot = isNodeShadowRoot(element)
   if (isShadowRoot) {
     options.serializationContext.shadowRootsController.addShadowRoot(element)
   }
   return {
-    type: NodeType.DocumentFragment,
-    childNodes: serializeChildNodes(element, options),
-    isShadowRoot: isShadowRoot,
-    adoptedStyleSheets: isShadowRoot
-      ? serializeStyleSheets(element.adoptedStyleSheets)
-      : undefined
+    serializedNode: {
+      type: NodeType.DocumentFragment,
+      childNodes: [],
+      isShadowRoot: isShadowRoot,
+      adoptedStyleSheets: isShadowRoot
+        ? serializeStyleSheets(element.adoptedStyleSheets)
+        : undefined
+    },
+    shouldSerializeChildren: true,
+    childNodesOptions: options
   }
 }
 
@@ -144,6 +255,11 @@ function serializeDocumentFragmentNode(element, options) {
  * - fullscreen mode
  */
 export function serializeElementNode(element, options) {
+  var serializedNodeDescription = describeElementNode(element, options)
+  return serializedNodeDescription && serializedNodeDescription.serializedNode
+}
+
+function describeElementNode(element, options) {
   var tagName = getValidTagName(element.tagName)
   var isSVG = isSVGElement(element) || undefined
 
@@ -159,21 +275,24 @@ export function serializeElementNode(element, options) {
     var width = _boundingClientRect.width
     var height = _boundingClientRect.height
     return {
-      type: NodeType.Element,
-      tagName: tagName,
-      attributes: {
-        rr_width: width + 'px',
-        rr_height: height + 'px',
-        [PRIVACY_ATTR_NAME]: PRIVACY_ATTR_VALUE_HIDDEN
+      serializedNode: {
+        type: NodeType.Element,
+        tagName: tagName,
+        attributes: {
+          rr_width: width + 'px',
+          rr_height: height + 'px',
+          [PRIVACY_ATTR_NAME]: PRIVACY_ATTR_VALUE_HIDDEN
+        },
+        childNodes: [],
+        isSVG: isSVG
       },
-      childNodes: [],
-      isSVG: isSVG
+      shouldSerializeChildren: false
     }
   }
 
   // Ignore Elements like Script and some Link, Metas
   if (nodePrivacyLevel === NodePrivacyLevel.IGNORE) {
-    return
+    return null
   }
 
   var attributes = getAttributesForPrivacyLevel(
@@ -182,7 +301,8 @@ export function serializeElementNode(element, options) {
     options
   )
 
-  var childNodes = []
+  var shouldSerializeChildren = false
+  var childNodesSerializationOptions
   if (hasChildNodes(element) && tagName !== 'style') {
     // OBJECT POOLING OPTIMIZATION:
     // We should not create a new object systematically as it could impact performances. Try to reuse
@@ -199,7 +319,7 @@ export function serializeElementNode(element, options) {
         ignoreWhiteSpace: tagName === 'head'
       })
     }
-    childNodes = serializeChildNodes(element, childNodesSerializationOptions)
+    shouldSerializeChildren = true
   }
 
   //   if (isNodeShadowHost(element)) {
@@ -210,11 +330,15 @@ export function serializeElementNode(element, options) {
   //   }
 
   return {
-    type: NodeType.Element,
-    tagName: tagName,
-    attributes: attributes,
-    childNodes: childNodes,
-    isSVG: isSVG
+    serializedNode: {
+      type: NodeType.Element,
+      tagName: tagName,
+      attributes: attributes,
+      childNodes: [],
+      isSVG: isSVG
+    },
+    shouldSerializeChildren: shouldSerializeChildren,
+    childNodesOptions: childNodesSerializationOptions
   }
 }
 
@@ -260,6 +384,24 @@ export function serializeChildNodes(node, options) {
   })
   //   node.childNodes.forEach()
   return result
+}
+
+function assignSerializedNodeId(node, serializedNode, options) {
+  var id = getSerializedNodeId(node) || generateNextId()
+  var serializedNodeWithId = serializedNode
+  serializedNodeWithId.id = id
+  setSerializedNodeId(node, id)
+  if (options.serializedNodeIds) {
+    options.serializedNodeIds.add(id)
+  }
+  return serializedNodeWithId
+}
+
+function getCurrentTime() {
+  if (typeof performance !== 'undefined' && performance.now) {
+    return performance.now()
+  }
+  return Date.now()
 }
 
 export function serializeAttribute(

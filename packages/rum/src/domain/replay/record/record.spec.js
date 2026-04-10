@@ -1,9 +1,11 @@
 import { IncrementalSource, RecordType } from '../../../types'
 import { NodePrivacyLevel } from '../../../constants'
 import { record } from './record'
+import { MUTATION_PROCESS_MIN_DELAY } from './mutationBatch'
 
 describe('replay/record/record', () => {
   let container
+  const ASYNC_MUTATION_TICK = MUTATION_PROCESS_MIN_DELAY + 20
 
   beforeEach(() => {
     container = document.createElement('div')
@@ -93,6 +95,225 @@ describe('replay/record/record', () => {
 
     expect(() => recorder.flushMutations()).not.toThrow()
     expect(() => recorder.stop()).not.toThrow()
+  })
+
+  it('should expose replay performance counters for mutation processing', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      }
+    })
+
+    const child = document.createElement('div')
+    child.textContent = 'hello'
+    container.appendChild(child)
+    recorder.flushMutations()
+
+    const replayPerformance = recorder.getReplayPerformanceForDebug()
+    expect(replayPerformance.processMutationsCount).toBeGreaterThan(0)
+    expect(replayPerformance.processMutationsDuration).toBeGreaterThanOrEqual(0)
+    expect(replayPerformance.mutationCallbackCount).toBeGreaterThan(0)
+    expect(replayPerformance.mutationRecordCount).toBeGreaterThan(0)
+    expect(replayPerformance.mutationAddCount).toBeGreaterThan(0)
+  })
+
+  it('should batch consecutive mutation payloads into a single emitted snapshot', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      }
+    })
+
+    emittedRecords.length = 0
+
+    const childA = document.createElement('div')
+    const childB = document.createElement('div')
+    container.appendChild(childA)
+    container.appendChild(childB)
+
+    recorder.flushMutations()
+
+    const mutationSnapshots = emittedRecords.filter(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation
+    )
+    expect(mutationSnapshots.length).toBe(1)
+    expect(mutationSnapshots[0].data.adds.length).toBe(2)
+  })
+
+  it('should flush pending mutation payloads before taking a subsequent full snapshot', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      }
+    })
+
+    emittedRecords.length = 0
+
+    const child = document.createElement('div')
+    container.appendChild(child)
+
+    recorder.takeSubsequentFullSnapshot(4321)
+
+    const mutationSnapshots = emittedRecords.filter(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation
+    )
+    const fullSnapshots = emittedRecords.filter(
+      (event) =>
+        event.type === RecordType.FullSnapshot && event.timestamp === 4321
+    )
+
+    expect(mutationSnapshots.length).toBe(1)
+    expect(mutationSnapshots[0].data.adds.length).toBe(1)
+    expect(fullSnapshots.length).toBe(1)
+  })
+
+  it('should keep only the latest text mutation for the same node within a merged mutation window', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      }
+    })
+
+    emittedRecords.length = 0
+
+    const textNode = document.createTextNode('a')
+    container.appendChild(textNode)
+    recorder.flushMutations()
+    emittedRecords.length = 0
+
+    textNode.textContent = 'b'
+    textNode.textContent = 'c'
+    recorder.flushMutations()
+
+    const mutationSnapshot = emittedRecords.find(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation
+    )
+
+    expect(mutationSnapshot.data.texts.length).toBe(1)
+    expect(mutationSnapshot.data.texts[0].value).toBe('c')
+  })
+
+  it('should merge attribute mutations by id within a merged mutation window', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      }
+    })
+
+    emittedRecords.length = 0
+
+    const element = document.createElement('div')
+    container.appendChild(element)
+    recorder.flushMutations()
+    emittedRecords.length = 0
+
+    element.setAttribute('data-a', '1')
+    element.setAttribute('data-b', '2')
+    recorder.flushMutations()
+
+    const mutationSnapshot = emittedRecords.find(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation
+    )
+
+    expect(mutationSnapshot.data.attributes.length).toBe(1)
+    expect(mutationSnapshot.data.attributes[0].attributes).toEqual({
+      'data-a': '1',
+      'data-b': '2'
+    })
+  })
+
+  it('should split oversized mutation payloads into multiple emitted snapshots', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: {
+        subscribe() {
+          return {
+            unsubscribe: jasmine.createSpy('unsubscribe')
+          }
+        }
+      }
+    })
+
+    emittedRecords.length = 0
+
+    for (let index = 0; index < 4; index += 1) {
+      const child = document.createElement('div')
+      child.textContent = 'x'.repeat(70000)
+      container.appendChild(child)
+    }
+
+    recorder.flushMutations()
+
+    const mutationSnapshots = emittedRecords.filter(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation
+    )
+
+    expect(mutationSnapshots.length).toBeGreaterThan(1)
+    expect(
+      mutationSnapshots.reduce(
+        (count, event) => count + event.data.adds.length,
+        0
+      )
+    ).toBe(4)
   })
 
   it('should emit a canvas mutation for serialized canvases when snapshotCanvas is called', async () => {

@@ -52,6 +52,12 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       getLastReplaySegmentFlushForDebug: function () {
         return undefined
       },
+      getReplaySegmentFlushHistoryForDebug: function () {
+        return undefined
+      },
+      getReplayPerformanceForDebug: function () {
+        return undefined
+      },
       getReplayStats: function () {
         return undefined
       },
@@ -86,6 +92,12 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     return undefined
   }
   var getLastReplaySegmentFlushForDebug = function () {
+    return undefined
+  }
+  var getReplaySegmentFlushHistoryForDebug = function () {
+    return undefined
+  }
+  var getReplayPerformanceForDebug = function () {
     return undefined
   }
   return {
@@ -191,7 +203,11 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
             getLastAutoCanvasSnapshotResultForDebug:
               recordingImpl.getLastAutoCanvasSnapshotResultForDebug || noop,
             getLastReplaySegmentFlushForDebug:
-              recordingImpl.getLastReplaySegmentFlushForDebug || noop
+              recordingImpl.getLastReplaySegmentFlushForDebug || noop,
+            getReplaySegmentFlushHistoryForDebug:
+              recordingImpl.getReplaySegmentFlushHistoryForDebug || noop,
+            getReplayPerformanceForDebug:
+              recordingImpl.getReplayPerformanceForDebug || noop
           }
         })
       }
@@ -239,6 +255,18 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
         }
         return undefined
       }
+      getReplaySegmentFlushHistoryForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getReplaySegmentFlushHistoryForDebug()
+        }
+        return undefined
+      }
+      getReplayPerformanceForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getReplayPerformanceForDebug()
+        }
+        return undefined
+      }
       if (state.status === RecorderStatus.IntentToStart) {
         startStrategy()
       }
@@ -257,6 +285,12 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     },
     getLastAutoCanvasSnapshotResultForDebug: function () {
       return getLastAutoCanvasSnapshotResultForDebug()
+    },
+    getReplaySegmentFlushHistoryForDebug: function () {
+      return getReplaySegmentFlushHistoryForDebug()
+    },
+    getReplayPerformanceForDebug: function () {
+      return getReplayPerformanceForDebug()
     },
     isRecording: function () {
       return (

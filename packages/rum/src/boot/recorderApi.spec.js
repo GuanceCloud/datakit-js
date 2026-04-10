@@ -71,6 +71,25 @@ describe('recorderApi', () => {
           canvas_mutation: 3
         }
       })
+    const getReplaySegmentFlushHistoryForDebug = jasmine
+      .createSpy('getReplaySegmentFlushHistoryForDebug')
+      .and.returnValue([
+        {
+          creationReason: 'init',
+          flushReason: 'segment_duration_limit'
+        },
+        {
+          creationReason: 'segment_bytes_limit',
+          flushReason: 'segment_bytes_limit'
+        }
+      ])
+    const getReplayPerformanceForDebug = jasmine
+      .createSpy('getReplayPerformanceForDebug')
+      .and.returnValue({
+        processMutationsCount: 12,
+        mutationCallbackCount: 4,
+        replaySegmentFlushCount: 2
+      })
     const startRecordingImpl = jasmine
       .createSpy('startRecordingImpl')
       .and.returnValue({
@@ -79,7 +98,9 @@ describe('recorderApi', () => {
         snapshotCanvas,
         getSerializedNodeIdForDebug,
         getLastAutoCanvasSnapshotResultForDebug,
-        getLastReplaySegmentFlushForDebug
+        getLastReplaySegmentFlushForDebug,
+        getReplaySegmentFlushHistoryForDebug,
+        getReplayPerformanceForDebug
       })
 
     const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
@@ -133,6 +154,23 @@ describe('recorderApi', () => {
       }
     })
     expect(getLastReplaySegmentFlushForDebug).toHaveBeenCalled()
+    expect(recorderApi.getReplaySegmentFlushHistoryForDebug()).toEqual([
+      {
+        creationReason: 'init',
+        flushReason: 'segment_duration_limit'
+      },
+      {
+        creationReason: 'segment_bytes_limit',
+        flushReason: 'segment_bytes_limit'
+      }
+    ])
+    expect(getReplaySegmentFlushHistoryForDebug).toHaveBeenCalled()
+    expect(recorderApi.getReplayPerformanceForDebug()).toEqual({
+      processMutationsCount: 12,
+      mutationCallbackCount: 4,
+      replaySegmentFlushCount: 2
+    })
+    expect(getReplayPerformanceForDebug).toHaveBeenCalled()
 
     lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
       reason: PageExitReason.UNLOADING
@@ -153,7 +191,11 @@ describe('recorderApi', () => {
         getLastAutoCanvasSnapshotResultForDebug: jasmine
           .createSpy('getLastAutoCanvasSnapshotResultForDebug'),
         getLastReplaySegmentFlushForDebug: jasmine
-          .createSpy('getLastReplaySegmentFlushForDebug')
+          .createSpy('getLastReplaySegmentFlushForDebug'),
+        getReplaySegmentFlushHistoryForDebug: jasmine
+          .createSpy('getReplaySegmentFlushHistoryForDebug'),
+        getReplayPerformanceForDebug: jasmine
+          .createSpy('getReplayPerformanceForDebug')
       })
 
     const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
@@ -194,5 +236,7 @@ describe('recorderApi', () => {
     ).toBeUndefined()
     expect(recorderApi.getLastAutoCanvasSnapshotResultForDebug()).toBeUndefined()
     expect(recorderApi.getLastReplaySegmentFlushForDebug()).toBeUndefined()
+    expect(recorderApi.getReplaySegmentFlushHistoryForDebug()).toBeUndefined()
+    expect(recorderApi.getReplayPerformanceForDebug()).toBeUndefined()
   })
 })

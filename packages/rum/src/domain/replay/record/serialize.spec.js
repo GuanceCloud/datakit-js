@@ -11,7 +11,8 @@ import {
   serializeAttribute,
   serializeDocument,
   serializeElementNode,
-  serializeNodeWithId
+  serializeNodeWithId,
+  serializeNodeWithIdForMutation
 } from './serialize'
 
 describe('replay/record/serialize', () => {
@@ -196,6 +197,44 @@ describe('replay/record/serialize', () => {
 
     expect(firstSerializedNode.id).toBe(secondSerializedNode.id)
     expect(serializedNodeIds.has(firstSerializedNode.id)).toBeTrue()
+  })
+
+  it('should serialize deep mutation subtrees without recursive stack growth', () => {
+    const root = document.createElement('div')
+    let current = root
+    for (let i = 0; i < 1500; i += 1) {
+      const child = document.createElement('div')
+      current.appendChild(child)
+      current = child
+    }
+
+    const serializedNode = serializeNodeWithIdForMutation(root, {
+      configuration: {},
+      serializedNodeIds: new Set(),
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(serializedNode).toEqual(
+      jasmine.objectContaining({
+        type: NodeType.Element,
+        tagName: 'div',
+        childNodes: [jasmine.any(Object)]
+      })
+    )
+
+    let depth = 0
+    let node = serializedNode
+    while (node && node.childNodes && node.childNodes.length) {
+      depth += 1
+      node = node.childNodes[0]
+    }
+    expect(depth).toBe(1500)
   })
 
   it('should serialize element runtime state during initial full snapshots', () => {

@@ -1,4 +1,9 @@
-import { timeStampNow, getScrollX, getScrollY } from '@cloudcare/browser-core'
+import {
+  timeStampNow,
+  getScrollX,
+  getScrollY,
+  assign
+} from '@cloudcare/browser-core'
 import { getViewportDimension } from '../../initViewportObservable'
 
 import { RecordType, IncrementalSource } from '../../../types'
@@ -16,6 +21,9 @@ import {
 } from './serializationUtils'
 import { startAutoCanvasSnapshotLoop } from './canvasAutoSnapshot'
 
+var MUTATION_EMIT_DELAY_MS = 16
+var MAX_MUTATION_EMIT_APPROX_BYTES = 200000
+
 export function record(options) {
   var emit = options.emit
   // runtime checks for user options
@@ -24,9 +32,78 @@ export function record(options) {
   }
 
   var elementsScrollPositions = createElementsScrollPositions()
+  var replayPerformanceStats = createReplayPerformanceStats()
+  var pendingMutationPayload
+  var pendingMutationTimeout
+
+  var updateReplayPerformanceStats = function (delta) {
+    accumulateReplayPerformanceStats(replayPerformanceStats, delta)
+  }
 
   var mutationCb = function (mutation) {
-    emit(assembleIncrementalSnapshot(IncrementalSource.Mutation, mutation))
+    if (
+      pendingMutationPayload &&
+      shouldFlushPendingMutationPayloadBeforeMerge(
+        pendingMutationPayload,
+        mutation
+      )
+    ) {
+      flushPendingMutations()
+    }
+    pendingMutationPayload = mergeMutationPayloads(
+      pendingMutationPayload,
+      mutation
+    )
+    scheduleMutationEmit()
+  }
+  function scheduleMutationEmit() {
+    if (pendingMutationTimeout) {
+      return
+    }
+    pendingMutationTimeout = setTimeout(function () {
+      pendingMutationTimeout = undefined
+      flushPendingMutations()
+    }, MUTATION_EMIT_DELAY_MS)
+  }
+  function flushPendingMutations() {
+    if (pendingMutationTimeout) {
+      clearTimeout(pendingMutationTimeout)
+      pendingMutationTimeout = undefined
+    }
+    if (!pendingMutationPayload) {
+      return
+    }
+    var mutation = materializeMutationPayload(pendingMutationPayload)
+    pendingMutationPayload = undefined
+    var mutationPayloads = splitMutationPayloadForEmit(mutation)
+    updateReplayPerformanceStats(
+      mutationPayloads.reduce(
+        function (stats, mutationPayload) {
+          stats.mutationCallbackCount += 1
+          stats.mutationRecordCount += countMutationPayloadRecords(
+            mutationPayload
+          )
+          stats.mutationAddCount += mutationPayload.adds.length
+          stats.mutationRemoveCount += mutationPayload.removes.length
+          stats.mutationTextCount += mutationPayload.texts.length
+          stats.mutationAttributeCount += mutationPayload.attributes.length
+          return stats
+        },
+        {
+          mutationCallbackCount: 0,
+          mutationRecordCount: 0,
+          mutationAddCount: 0,
+          mutationRemoveCount: 0,
+          mutationTextCount: 0,
+          mutationAttributeCount: 0
+        }
+      )
+    )
+    mutationPayloads.forEach(function (mutationPayload) {
+      emit(
+        assembleIncrementalSnapshot(IncrementalSource.Mutation, mutationPayload)
+      )
+    })
   }
   var inputCb = function (s) {
     emit(assembleIncrementalSnapshot(IncrementalSource.Input, s))
@@ -146,6 +223,7 @@ export function record(options) {
       emit(assembleIncrementalSnapshot(source, { positions: positions }))
     },
     mutationCb: mutationCb,
+    mutationPerfCb: updateReplayPerformanceStats,
     scrollCb: function (p) {
       emit(assembleIncrementalSnapshot(IncrementalSource.Scroll, p))
     },
@@ -176,13 +254,16 @@ export function record(options) {
   })
   var stopObservers = _initObservers.stop
   var flushMutationsFromObservers = _initObservers.flush
+  var resetMutationsFromObservers = _initObservers.reset || function () {}
   function flushMutations() {
     shadowRootsController.flush()
     flushMutationsFromObservers()
+    flushPendingMutations()
   }
 
   return {
     stop: function () {
+      flushPendingMutations()
       shadowRootsController.stop()
       canvasObserver.stop()
       stopAutoCanvasSnapshots(autoCanvasSnapshotLoop)
@@ -197,8 +278,12 @@ export function record(options) {
     getLastAutoCanvasSnapshotResultForDebug: function () {
       return cloneAutoCanvasSnapshotDebugResult(lastAutoCanvasSnapshotResult)
     },
+    getReplayPerformanceForDebug: function () {
+      return cloneReplayPerformanceStats(replayPerformanceStats)
+    },
     takeSubsequentFullSnapshot: function (timestamp) {
       flushMutations()
+      resetMutationsFromObservers()
       if (canvasObserver.reset) {
         canvasObserver.reset()
       }
@@ -211,6 +296,238 @@ export function record(options) {
     },
     flushMutations: flushMutations,
     shadowRootsController: shadowRootsController
+  }
+}
+
+function materializeMutationPayload(pendingMutationPayload) {
+  return {
+    adds: pendingMutationPayload.adds,
+    removes: pendingMutationPayload.removes,
+    texts: pendingMutationPayload.texts,
+    attributes: pendingMutationPayload.attributes
+  }
+}
+
+function createEmptyMutationPayload() {
+  return {
+    adds: [],
+    removes: [],
+    texts: [],
+    attributes: [],
+    approxBytes: 0,
+    removesByKey: new Map(),
+    textsById: new Map(),
+    attributesById: new Map()
+  }
+}
+
+function mergeMutationPayloads(target, source) {
+  var merged = target || createEmptyMutationPayload()
+  merged.adds = merged.adds.concat(source.adds)
+  mergeRemoveMutations(merged, source.removes)
+  mergeTextMutations(merged, source.texts)
+  mergeAttributeMutations(merged, source.attributes)
+  merged.approxBytes += estimateMutationPayloadBytes(source)
+  return merged
+}
+
+function mergeRemoveMutations(merged, sourceRemoves) {
+  if (!sourceRemoves.length) {
+    return
+  }
+  sourceRemoves.forEach(function (remove) {
+    var key = getRemoveMutationKey(remove)
+    if (!merged.removesByKey.has(key)) {
+      merged.removes.push(remove)
+    }
+    merged.removesByKey.set(key, remove)
+  })
+}
+
+function mergeTextMutations(merged, sourceTexts) {
+  if (!sourceTexts.length) {
+    return
+  }
+  sourceTexts.forEach(function (textMutation) {
+    var existingTextMutation = merged.textsById.get(textMutation.id)
+    if (existingTextMutation) {
+      existingTextMutation.value = textMutation.value
+      return
+    }
+    merged.texts.push(textMutation)
+    merged.textsById.set(textMutation.id, textMutation)
+  })
+}
+
+function mergeAttributeMutations(merged, sourceAttributes) {
+  if (!sourceAttributes.length) {
+    return
+  }
+
+  sourceAttributes.forEach(function (attributeMutation) {
+    var existingAttributeMutation = merged.attributesById.get(attributeMutation.id)
+    if (!existingAttributeMutation) {
+      var nextAttributeMutation = {
+        id: attributeMutation.id,
+        attributes: assign({}, attributeMutation.attributes)
+      }
+      merged.attributes.push(nextAttributeMutation)
+      merged.attributesById.set(attributeMutation.id, nextAttributeMutation)
+      return
+    }
+    existingAttributeMutation.attributes = assign(
+      existingAttributeMutation.attributes,
+      attributeMutation.attributes
+    )
+  })
+}
+
+function getRemoveMutationKey(remove) {
+  return remove.parentId + ':' + remove.id
+}
+
+function shouldFlushPendingMutationPayloadBeforeMerge(target, source) {
+  return (
+    target.approxBytes + estimateMutationPayloadBytes(source) >
+    MAX_MUTATION_EMIT_APPROX_BYTES
+  )
+}
+
+function splitMutationPayloadForEmit(mutation) {
+  if (
+    !mutation.adds.length ||
+    estimateMutationPayloadBytes(mutation) <= MAX_MUTATION_EMIT_APPROX_BYTES
+  ) {
+    return [mutation]
+  }
+
+  var addOnlyPayloads = []
+  var currentAdds = []
+  var currentAddsBytes = estimateMutationPayloadBytes(createEmptyMutation())
+
+  mutation.adds.forEach(function (add) {
+    var addBytes = estimateMutationEntriesBytes([add])
+    if (
+      currentAdds.length &&
+      currentAddsBytes + addBytes > MAX_MUTATION_EMIT_APPROX_BYTES
+    ) {
+      addOnlyPayloads.push({
+        adds: currentAdds,
+        removes: [],
+        texts: [],
+        attributes: []
+      })
+      currentAdds = []
+      currentAddsBytes = estimateMutationPayloadBytes(createEmptyMutation())
+    }
+    currentAdds.push(add)
+    currentAddsBytes += addBytes
+  })
+
+  if (currentAdds.length) {
+    addOnlyPayloads.push({
+      adds: currentAdds,
+      removes: [],
+      texts: [],
+      attributes: []
+    })
+  }
+
+  if (
+    mutation.removes.length ||
+    mutation.texts.length ||
+    mutation.attributes.length
+  ) {
+    addOnlyPayloads.push({
+      adds: [],
+      removes: mutation.removes,
+      texts: mutation.texts,
+      attributes: mutation.attributes
+    })
+  }
+
+  return addOnlyPayloads
+}
+
+function createEmptyMutation() {
+  return {
+    adds: [],
+    removes: [],
+    texts: [],
+    attributes: []
+  }
+}
+
+function estimateMutationPayloadBytes(mutation) {
+  return (
+    64 +
+    estimateMutationEntriesBytes(mutation.adds) +
+    estimateMutationEntriesBytes(mutation.removes) +
+    estimateMutationEntriesBytes(mutation.texts) +
+    estimateMutationEntriesBytes(mutation.attributes)
+  )
+}
+
+function estimateMutationEntriesBytes(entries) {
+  var total = 0
+  for (var i = 0; i < entries.length; i += 1) {
+    total += JSON.stringify(entries[i]).length
+  }
+  return total
+}
+
+function createReplayPerformanceStats() {
+  return {
+    processMutationsCount: 0,
+    processMutationsDuration: 0,
+    mutationCallbackCount: 0,
+    mutationRecordCount: 0,
+    mutationAddCount: 0,
+    mutationRemoveCount: 0,
+    mutationTextCount: 0,
+    mutationAttributeCount: 0
+  }
+}
+
+function accumulateReplayPerformanceStats(stats, delta) {
+  if (!delta) {
+    return
+  }
+
+  stats.processMutationsCount += delta.processMutationsCount || 0
+  stats.processMutationsDuration += delta.processMutationsDuration || 0
+  stats.mutationCallbackCount += delta.mutationCallbackCount || 0
+  stats.mutationRecordCount += delta.mutationRecordCount || 0
+  stats.mutationAddCount += delta.mutationAddCount || 0
+  stats.mutationRemoveCount += delta.mutationRemoveCount || 0
+  stats.mutationTextCount += delta.mutationTextCount || 0
+  stats.mutationAttributeCount += delta.mutationAttributeCount || 0
+}
+
+function countMutationPayloadRecords(mutation) {
+  return (
+    mutation.adds.length +
+    mutation.removes.length +
+    mutation.texts.length +
+    mutation.attributes.length
+  )
+}
+
+function cloneReplayPerformanceStats(stats) {
+  if (!stats) {
+    return stats
+  }
+
+  return {
+    processMutationsCount: stats.processMutationsCount,
+    processMutationsDuration:
+      Math.round(stats.processMutationsDuration * 10) / 10,
+    mutationCallbackCount: stats.mutationCallbackCount,
+    mutationRecordCount: stats.mutationRecordCount,
+    mutationAddCount: stats.mutationAddCount,
+    mutationRemoveCount: stats.mutationRemoveCount,
+    mutationTextCount: stats.mutationTextCount,
+    mutationAttributeCount: stats.mutationAttributeCount
   }
 }
 

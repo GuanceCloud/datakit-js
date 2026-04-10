@@ -17,6 +17,7 @@ import { RecordType } from '../types'
 import { deleteOldestStats } from '../domain/replay/replayStats'
 /* How long to wait for error checkouts */
 export const BUFFER_CHECKOUT_TIME = 60 * ONE_SECOND
+var REPLAY_SEGMENT_FLUSH_HISTORY_LIMIT = 10
 export function startRecording(
   lifeCycle,
   configuration,
@@ -27,6 +28,8 @@ export function startRecording(
 ) {
   var cleanupTasks = []
   var lastReplaySegmentFlushForDebug
+  var replaySegmentFlushHistoryForDebug = []
+  var replaySegmentFlushCount = 0
   var reportError = function (error) {
     lifeCycle.notify(LifeCycleEventType.RAW_ERROR_COLLECTED, { error: error })
     addTelemetryDebug('Error reported to customer', {
@@ -58,9 +61,16 @@ export function startRecording(
       isRecordErrorSessionReplay,
       {
         onSegmentFlushed: function (segmentFlush) {
-          lastReplaySegmentFlushForDebug = cloneReplaySegmentFlushForDebug(
-            segmentFlush
-          )
+          replaySegmentFlushCount += 1
+          lastReplaySegmentFlushForDebug =
+            cloneReplaySegmentFlushForDebug(segmentFlush)
+          replaySegmentFlushHistoryForDebug.push(lastReplaySegmentFlushForDebug)
+          if (
+            replaySegmentFlushHistoryForDebug.length >
+            REPLAY_SEGMENT_FLUSH_HISTORY_LIMIT
+          ) {
+            replaySegmentFlushHistoryForDebug.shift()
+          }
         }
       }
     )
@@ -119,8 +129,21 @@ export function startRecording(
   var getSerializedNodeIdForDebug = _record.getSerializedNodeIdForDebug
   var getLastAutoCanvasSnapshotResultForDebug =
     _record.getLastAutoCanvasSnapshotResultForDebug
+  var getReplayPerformanceForDebug = function () {
+    return cloneReplayPerformanceForDebug(
+      _record.getReplayPerformanceForDebug
+        ? _record.getReplayPerformanceForDebug()
+        : undefined,
+      replaySegmentFlushCount
+    )
+  }
   var getLastReplaySegmentFlushForDebug = function () {
     return cloneReplaySegmentFlushForDebug(lastReplaySegmentFlushForDebug)
+  }
+  var getReplaySegmentFlushHistoryForDebug = function () {
+    return replaySegmentFlushHistoryForDebug.map(function (segmentFlush) {
+      return cloneReplaySegmentFlushForDebug(segmentFlush)
+    })
   }
   var flushMutations = _record.flushMutations
   var subscribeViewEnded = lifeCycle.subscribe(
@@ -153,7 +176,10 @@ export function startRecording(
     getSerializedNodeIdForDebug: getSerializedNodeIdForDebug,
     getLastAutoCanvasSnapshotResultForDebug:
       getLastAutoCanvasSnapshotResultForDebug,
-    getLastReplaySegmentFlushForDebug: getLastReplaySegmentFlushForDebug
+    getLastReplaySegmentFlushForDebug: getLastReplaySegmentFlushForDebug,
+    getReplaySegmentFlushHistoryForDebug:
+      getReplaySegmentFlushHistoryForDebug,
+    getReplayPerformanceForDebug: getReplayPerformanceForDebug
   }
 }
 
@@ -172,4 +198,14 @@ function cloneReplaySegmentFlushForDebug(segmentFlush) {
     indexInView: segmentFlush.indexInView,
     rawBytesCount: segmentFlush.rawBytesCount
   }
+}
+
+function cloneReplayPerformanceForDebug(stats, replaySegmentFlushCount) {
+  if (!stats && typeof replaySegmentFlushCount === 'undefined') {
+    return undefined
+  }
+
+  return assign({}, stats || {}, {
+    replaySegmentFlushCount: replaySegmentFlushCount || 0
+  })
 }

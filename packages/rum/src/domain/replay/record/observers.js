@@ -59,7 +59,8 @@ export function initObservers(o) {
   var mutationHandler = initMutationObserver(
     o.mutationCb,
     o.configuration,
-    o.shadowRootsController
+    o.shadowRootsController,
+    o.mutationPerfCb
   )
   var mousemoveHandler = initMoveObserver(o.mousemoveCb, o.configuration)
   var mouseInteractionHandler = initMouseInteractionObserver(
@@ -99,6 +100,11 @@ export function initObservers(o) {
     flush: function () {
       mutationHandler.flush()
     },
+    reset: function () {
+      if (mutationHandler.reset) {
+        mutationHandler.reset()
+      }
+    },
     stop: function () {
       mutationHandler.stop()
       mousemoveHandler()
@@ -115,12 +121,18 @@ export function initObservers(o) {
   }
 }
 
-export function initMutationObserver(cb, configuration, shadowRootsController) {
+export function initMutationObserver(
+  cb,
+  configuration,
+  shadowRootsController,
+  mutationPerfCb
+) {
   return startMutationObserver(
     cb,
     configuration,
     shadowRootsController,
-    document
+    document,
+    mutationPerfCb
   )
 }
 

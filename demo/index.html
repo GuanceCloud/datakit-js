@@ -697,6 +697,51 @@
       <div id="canvas-demo-log" class="canvas-demo__log"></div>
       <pre id="canvas-demo-export" class="canvas-demo__export">No canvas replay event exported yet.</pre>
     </div>
+    <div
+      class="large-dom-demo"
+      style="margin: 16px 0 24px; border: 1px solid #d0d7de; padding: 16px; background: #f8fafc"
+    >
+      <div style="font-weight: 600; margin-bottom: 8px">Large DOM Replay Demo</div>
+      <div style="margin-bottom: 12px; color: #475569">
+        用于验证大 DOM 场景下 session replay 的主线程占用，优先测试 dashboard 2500。
+      </div>
+      <div
+        class="large-dom-demo__status"
+        style="display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; margin-bottom: 12px"
+      >
+        <div>replay</div>
+        <div id="large-dom-status-replay">unknown</div>
+        <div>shape</div>
+        <div id="large-dom-status-shape">none</div>
+        <div>rows</div>
+        <div id="large-dom-status-rows">0</div>
+        <div>elements</div>
+        <div id="large-dom-status-elements">0</div>
+        <div>generate ms</div>
+        <div id="large-dom-status-generate-ms">0</div>
+        <div>snapshot ms</div>
+        <div id="large-dom-status-snapshot-ms">0</div>
+        <div>last action</div>
+        <div id="large-dom-status-last-action">none</div>
+        <div>host children</div>
+        <div id="large-dom-status-host-children">0</div>
+        <div>benchmark</div>
+        <div id="large-dom-status-benchmark">idle</div>
+      </div>
+      <div class="large-dom-demo__toolbar" style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px">
+        <button delay="largeDomReplayOn">replay on</button>
+        <button delay="largeDomReplayOff">replay off</button>
+        <button delay="largeDomGenerateDashboard2500">generate dashboard 2500</button>
+        <button delay="largeDomBenchmarkReplayOn">benchmark on</button>
+        <button delay="largeDomBenchmarkReplayOff">benchmark off</button>
+        <button delay="largeDomTakeFullSnapshot">take full snapshot</button>
+        <button delay="largeDomClear">clear large dom</button>
+      </div>
+      <div
+        id="large-dom-host"
+        style="min-height: 120px; border: 1px solid #cbd5e1; background: #fff; padding: 12px; overflow: auto"
+      ></div>
+    </div>
     <div style="background-color: red; width: 100px; height: 100px" id="test">
       test
     </div>
@@ -820,8 +865,31 @@
       let lastCanvasReplayEvent = null
       let lastCanvasSnapshotTrigger = 'none'
       let lastCanvasAutoResult = 'idle'
+      const largeDomHost = document.getElementById('large-dom-host')
+      const largeDomReplayStatus = document.getElementById('large-dom-status-replay')
+      const largeDomShapeStatus = document.getElementById('large-dom-status-shape')
+      const largeDomRowsStatus = document.getElementById('large-dom-status-rows')
+      const largeDomElementsStatus = document.getElementById('large-dom-status-elements')
+      const largeDomGenerateMsStatus = document.getElementById('large-dom-status-generate-ms')
+      const largeDomSnapshotMsStatus = document.getElementById('large-dom-status-snapshot-ms')
+      const largeDomLastActionStatus = document.getElementById('large-dom-status-last-action')
+      const largeDomHostChildrenStatus = document.getElementById('large-dom-status-host-children')
+      const largeDomBenchmarkStatus = document.getElementById('large-dom-status-benchmark')
+      let largeDomCurrentShape = 'none'
+      let largeDomCurrentRows = 0
+      let largeDomCurrentElements = 0
+      let largeDomGenerateStartedAt = 0
+      let largeDomGenerateFinishedAt = 0
+      let largeDomLastSnapshotMs = 0
+      let largeDomBenchmarkResult = 'idle'
 
       function setCanvasStatus(element, value) {
+        if (element) {
+          element.textContent = String(value)
+        }
+      }
+
+      function setLargeDomStatus(element, value) {
         if (element) {
           element.textContent = String(value)
         }
@@ -870,6 +938,33 @@
         setCanvasStatus(replayCanvasEventStatus, 'step=' + canvasStep)
       }
 
+      function refreshLargeDomStatus() {
+        const rum = window.DATAFLUX_RUM
+        const isRecording =
+          rum && typeof rum.isRecording === 'function' ? rum.isRecording() : 'unavailable'
+        setLargeDomStatus(largeDomReplayStatus, isRecording)
+        setLargeDomStatus(largeDomShapeStatus, largeDomCurrentShape)
+        setLargeDomStatus(largeDomRowsStatus, largeDomCurrentRows)
+        setLargeDomStatus(largeDomElementsStatus, largeDomCurrentElements)
+        setLargeDomStatus(
+          largeDomGenerateMsStatus,
+          largeDomGenerateFinishedAt && largeDomGenerateStartedAt
+            ? largeDomGenerateFinishedAt - largeDomGenerateStartedAt
+            : 0
+        )
+        setLargeDomStatus(largeDomSnapshotMsStatus, largeDomLastSnapshotMs)
+        setLargeDomStatus(
+          largeDomHostChildrenStatus,
+          largeDomHost ? largeDomHost.childElementCount : 0
+        )
+        setLargeDomStatus(largeDomBenchmarkStatus, largeDomBenchmarkResult)
+      }
+
+      function setLargeDomLastAction(message) {
+        setLargeDomStatus(largeDomLastActionStatus, message)
+        refreshLargeDomStatus()
+      }
+
       function formatAutoDebugResult(result) {
         if (!result) {
           return 'idle'
@@ -896,6 +991,344 @@
         window.localStorage.setItem('demoReplayCanvasMode', mode)
         setCanvasLog('Switching canvas mode to ' + mode + ' and reloading demo')
         window.location.reload()
+      }
+
+      function clearLargeDom() {
+        if (!largeDomHost) return
+        largeDomHost.innerHTML = ''
+        largeDomCurrentShape = 'none'
+        largeDomCurrentRows = 0
+        largeDomCurrentElements = 0
+        largeDomGenerateStartedAt = 0
+        largeDomGenerateFinishedAt = 0
+        largeDomLastSnapshotMs = 0
+        setLargeDomLastAction('cleared')
+      }
+
+      function wait(ms) {
+        return new Promise((resolve) => {
+          setTimeout(resolve, ms)
+        })
+      }
+
+      function getReplayPerformanceForBenchmark() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.getReplayPerformanceForDebug !== 'function') {
+          return null
+        }
+        return rum.getReplayPerformanceForDebug()
+      }
+
+      function diffReplayPerformanceStats(before, after) {
+        const start = before || {}
+        const end = after || {}
+        return {
+          processMutationsCount:
+            (end.processMutationsCount || 0) - (start.processMutationsCount || 0),
+          processMutationsDuration:
+            Math.round(
+              ((end.processMutationsDuration || 0) -
+                (start.processMutationsDuration || 0)) *
+                10
+            ) / 10,
+          mutationCallbackCount:
+            (end.mutationCallbackCount || 0) - (start.mutationCallbackCount || 0),
+          mutationRecordCount:
+            (end.mutationRecordCount || 0) - (start.mutationRecordCount || 0),
+          mutationAddCount:
+            (end.mutationAddCount || 0) - (start.mutationAddCount || 0),
+          mutationRemoveCount:
+            (end.mutationRemoveCount || 0) - (start.mutationRemoveCount || 0),
+          mutationTextCount:
+            (end.mutationTextCount || 0) - (start.mutationTextCount || 0),
+          mutationAttributeCount:
+            (end.mutationAttributeCount || 0) -
+            (start.mutationAttributeCount || 0),
+          replaySegmentFlushCount:
+            (end.replaySegmentFlushCount || 0) -
+            (start.replaySegmentFlushCount || 0)
+        }
+      }
+
+      function buildDashboardRow(rowIndex) {
+        const section = document.createElement('section')
+        section.style.marginBottom = '12px'
+        section.style.border = '1px solid #dbe4f0'
+        section.style.padding = '12px'
+        section.style.background = rowIndex % 2 === 0 ? '#f8fafc' : '#ffffff'
+
+        const title = document.createElement('div')
+        title.textContent = 'dashboard-section-' + (rowIndex + 1)
+        title.style.fontWeight = '600'
+        title.style.marginBottom = '8px'
+        section.appendChild(title)
+
+        const grid = document.createElement('div')
+        grid.style.display = 'grid'
+        grid.style.gridTemplateColumns = 'repeat(4, minmax(0, 1fr))'
+        grid.style.gap = '8px'
+        section.appendChild(grid)
+
+        for (let cardIndex = 0; cardIndex < 4; cardIndex += 1) {
+          const card = document.createElement('article')
+          card.style.border = '1px solid #dbe4f0'
+          card.style.padding = '10px'
+          card.style.background = '#fff'
+
+          const cardTitle = document.createElement('div')
+          cardTitle.textContent = 'row-' + (rowIndex + 1) + ' card-' + (cardIndex + 1)
+          cardTitle.style.fontWeight = '600'
+          cardTitle.style.marginBottom = '6px'
+          card.appendChild(cardTitle)
+
+          const metric = document.createElement('div')
+          metric.textContent = ((rowIndex * 13 + cardIndex * 17) % 100) + '%'
+          metric.style.marginBottom = '8px'
+          card.appendChild(metric)
+
+          const list = document.createElement('ul')
+          list.style.margin = '0'
+          list.style.paddingLeft = '16px'
+          for (let itemIndex = 0; itemIndex < 4; itemIndex += 1) {
+            const item = document.createElement('li')
+            item.textContent =
+              'item-' +
+              (rowIndex + 1) +
+              '-' +
+              (cardIndex + 1) +
+              '-' +
+              (itemIndex + 1)
+            list.appendChild(item)
+          }
+          card.appendChild(list)
+          grid.appendChild(card)
+        }
+
+        return section
+      }
+
+      function generateDashboardDom(rowCount) {
+        if (!largeDomHost) return Promise.resolve()
+        clearLargeDom()
+        largeDomCurrentShape = 'dashboard'
+        largeDomCurrentRows = rowCount
+        largeDomGenerateStartedAt = performance.now()
+        setLargeDomLastAction('generating dashboard ' + rowCount)
+
+        let appendedRows = 0
+        const chunkSize = 20
+
+        return new Promise((resolve) => {
+          function appendChunk() {
+            const fragment = document.createDocumentFragment()
+            const chunkEnd = Math.min(appendedRows + chunkSize, rowCount)
+            for (let rowIndex = appendedRows; rowIndex < chunkEnd; rowIndex += 1) {
+              fragment.appendChild(buildDashboardRow(rowIndex))
+            }
+            largeDomHost.appendChild(fragment)
+            appendedRows = chunkEnd
+            largeDomCurrentElements = appendedRows * 57
+            refreshLargeDomStatus()
+
+            if (appendedRows < rowCount) {
+              window.requestAnimationFrame(function () {
+                setTimeout(appendChunk, 8)
+              })
+              return
+            }
+
+            largeDomGenerateFinishedAt = performance.now()
+            setLargeDomLastAction('generated dashboard ' + rowCount)
+            resolve({
+              rowCount: rowCount,
+              generateMs: largeDomGenerateFinishedAt - largeDomGenerateStartedAt,
+              estimatedElements: largeDomCurrentElements
+            })
+          }
+
+          appendChunk()
+        })
+      }
+
+      function takeLargeDomFullSnapshot() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.takeSubsequentFullSnapshot !== 'function') {
+          setLargeDomLastAction('full snapshot api unavailable')
+          return
+        }
+        const start = performance.now()
+        rum.takeSubsequentFullSnapshot()
+        largeDomLastSnapshotMs = Math.round((performance.now() - start) * 10) / 10
+        setLargeDomLastAction('full snapshot taken')
+      }
+
+      function setLargeDomReplayRecording(enabled) {
+        const rum = window.DATAFLUX_RUM
+        if (!rum) {
+          setLargeDomLastAction('replay api unavailable')
+          return
+        }
+        if (enabled && typeof rum.startSessionReplayRecording === 'function') {
+          rum.startSessionReplayRecording({ force: true })
+          setLargeDomLastAction('replay on')
+        } else if (!enabled && typeof rum.stopSessionReplayRecording === 'function') {
+          rum.stopSessionReplayRecording()
+          setLargeDomLastAction('replay off')
+        }
+      }
+
+      async function runLargeDomBenchmark(replayEnabled) {
+        if (largeDomBenchmarkResult === 'running') {
+          setLargeDomLastAction('benchmark already running')
+          return
+        }
+
+        largeDomBenchmarkResult = 'running'
+        refreshLargeDomStatus()
+        setLargeDomReplayRecording(replayEnabled)
+        await wait(100)
+
+        const runCount = 3
+        const rowCount = 2500
+        const longTaskEntries = []
+        let longTaskObserver
+
+        if (typeof PerformanceObserver !== 'undefined') {
+          try {
+            longTaskObserver = new PerformanceObserver((list) => {
+              list.getEntries().forEach((entry) => {
+                longTaskEntries.push({
+                  startTime: entry.startTime,
+                  duration: entry.duration
+                })
+              })
+            })
+            longTaskObserver.observe({ type: 'longtask', buffered: true })
+          } catch (e) {}
+        }
+
+        const runs = []
+        try {
+          for (let runIndex = 0; runIndex < runCount; runIndex += 1) {
+            clearLargeDom()
+            await wait(50)
+
+            const replayPerformanceBefore = getReplayPerformanceForBenchmark()
+            const runStart = performance.now()
+            const generation = await generateDashboardDom(rowCount)
+            await wait(600)
+            const runEnd = performance.now()
+            const replayPerformanceAfter = getReplayPerformanceForBenchmark()
+            const replayPerformanceDelta = diffReplayPerformanceStats(
+              replayPerformanceBefore,
+              replayPerformanceAfter
+            )
+
+            const runLongTasks = longTaskEntries.filter((entry) => {
+              return entry.startTime >= runStart && entry.startTime <= runEnd
+            })
+
+            runs.push({
+              totalMs: Math.round((runEnd - runStart) * 10) / 10,
+              generateMs: Math.round(generation.generateMs * 10) / 10,
+              longTaskCount: runLongTasks.length,
+              longTaskTotalMs:
+                Math.round(
+                  runLongTasks.reduce((sum, entry) => sum + entry.duration, 0) * 10
+                ) / 10,
+              maxLongTaskMs:
+                Math.round(
+                  runLongTasks.reduce(
+                    (max, entry) => (entry.duration > max ? entry.duration : max),
+                    0
+                  ) * 10
+                ) / 10,
+              replayPerformance: replayPerformanceDelta
+            })
+          }
+        } finally {
+          if (longTaskObserver) {
+            longTaskObserver.disconnect()
+          }
+        }
+
+        const summary = {
+          replay: replayEnabled ? 'on' : 'off',
+          runs: runCount,
+          avgGenerateMs:
+            Math.round(
+              (runs.reduce((sum, run) => sum + run.generateMs, 0) / runCount) * 10
+            ) / 10,
+          avgTotalMs:
+            Math.round((runs.reduce((sum, run) => sum + run.totalMs, 0) / runCount) * 10) /
+            10,
+          avgLongTaskCount:
+            Math.round(
+              (runs.reduce((sum, run) => sum + run.longTaskCount, 0) / runCount) * 10
+            ) / 10,
+          avgLongTaskTotalMs:
+            Math.round(
+              (runs.reduce((sum, run) => sum + run.longTaskTotalMs, 0) / runCount) * 10
+            ) / 10,
+          maxLongTaskMs:
+            Math.round(
+              runs.reduce(
+                (max, run) => (run.maxLongTaskMs > max ? run.maxLongTaskMs : max),
+                0
+              ) * 10
+            ) / 10,
+          avgProcessMutationsCount:
+            Math.round(
+              (runs.reduce(
+                (sum, run) =>
+                  sum + run.replayPerformance.processMutationsCount,
+                0
+              ) /
+                runCount) *
+                10
+            ) / 10,
+          avgProcessMutationsDuration:
+            Math.round(
+              (runs.reduce(
+                (sum, run) =>
+                  sum + run.replayPerformance.processMutationsDuration,
+                0
+              ) /
+                runCount) *
+                10
+            ) / 10,
+          avgMutationCallbackCount:
+            Math.round(
+              (runs.reduce(
+                (sum, run) => sum + run.replayPerformance.mutationCallbackCount,
+                0
+              ) /
+                runCount) *
+                10
+            ) / 10,
+          avgMutationRecordCount:
+            Math.round(
+              (runs.reduce(
+                (sum, run) => sum + run.replayPerformance.mutationRecordCount,
+                0
+              ) /
+                runCount) *
+                10
+            ) / 10,
+          avgReplaySegmentFlushCount:
+            Math.round(
+              (runs.reduce(
+                (sum, run) => sum + run.replayPerformance.replaySegmentFlushCount,
+                0
+              ) /
+                runCount) *
+                10
+            ) / 10
+        }
+
+        largeDomBenchmarkResult = JSON.stringify(summary)
+        setLargeDomLastAction('benchmark finished (' + summary.replay + ')')
+        return summary
       }
 
       function estimateEncodedBytesFromDataUrl(dataUrl) {
@@ -1143,7 +1576,9 @@
 
       drawCanvasScene('initial')
       refreshCanvasStatusPanel()
+      refreshLargeDomStatus()
       window.setInterval(refreshCanvasStatusPanel, 1000)
+      window.setInterval(refreshLargeDomStatus, 1000)
       let right = 10
       function buttonsClickHandle(event) {
         const target = event.target
@@ -1252,6 +1687,20 @@
           clearCanvasScene()
         } else if (delay === 'canvasExportEvent') {
           exportLastCanvasReplayEvent()
+        } else if (delay === 'largeDomReplayOn') {
+          setLargeDomReplayRecording(true)
+        } else if (delay === 'largeDomReplayOff') {
+          setLargeDomReplayRecording(false)
+        } else if (delay === 'largeDomGenerateDashboard2500') {
+          generateDashboardDom(2500)
+        } else if (delay === 'largeDomBenchmarkReplayOn') {
+          runLargeDomBenchmark(true)
+        } else if (delay === 'largeDomBenchmarkReplayOff') {
+          runLargeDomBenchmark(false)
+        } else if (delay === 'largeDomTakeFullSnapshot') {
+          takeLargeDomFullSnapshot()
+        } else if (delay === 'largeDomClear') {
+          clearLargeDom()
         } else {
           sleep(Number(delay) - 5)
           switchColor()
@@ -1298,6 +1747,10 @@
         const canvasToolbar = document.querySelector('.canvas-demo__toolbar')
         if (canvasToolbar) {
           canvasToolbar.addEventListener('click', buttonsClickHandle, false)
+        }
+        const largeDomToolbar = document.querySelector('.large-dom-demo__toolbar')
+        if (largeDomToolbar) {
+          largeDomToolbar.addEventListener('click', buttonsClickHandle, false)
         }
         document
           .getElementById('test')
