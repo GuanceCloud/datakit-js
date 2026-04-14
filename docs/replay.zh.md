@@ -69,7 +69,7 @@ datafluxRum.startSessionReplayRecording()
 - Web Components
 - Shadow DOM
 
-对于 `canvas`，当前 SDK 已支持 2D canvas 录制。具体配置见 [Canvas 录制使用手册](./replay-canvas.md)。
+对于 `canvas`，当前 SDK 已支持 2D canvas 录制，包括手动录制和自动录制。具体配置见 [Canvas 录制使用手册](./replay-canvas.zh.md)。
 
 ### 字体或图片显示异常
 

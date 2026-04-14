@@ -68,11 +68,11 @@ window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
 
 SESSION REPLAY still does not support complete playback for the following HTML elements: `iframe`, `video`, and `audio`. Web Components and Shadow DOM are also not fully supported.
 
-For `canvas`, the current SDK already supports snapshot-based 2D canvas recording:
+For `canvas`, the current SDK already supports 2D canvas recording:
 
-- manual snapshot recording is supported
-- low-frequency auto snapshot recording is supported
-- playback depends on rrweb-compatible `CanvasMutation`
+- manual recording is supported
+- automatic recording is supported
+- automatic recording can use either snapshot sampling or higher-fidelity automatic recording
 - `webgl` / `webgl2` are still not supported
 
 For canvas-specific configuration and usage, refer to [Canvas Replay Recording Guide](./replay-canvas.md).

@@ -29,7 +29,7 @@ Current capability boundaries:
 - only `2d canvas` is supported
 - recording output is sent through the Session Replay event stream
 
-Currently not supported:
+Current scope limitations:
 
 - `webgl` / `webgl2`
 - full-fidelity reconstruction for every complex 2D scene
