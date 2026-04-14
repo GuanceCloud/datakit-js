@@ -256,4 +256,46 @@ After initializing the SDK, call the `startSessionReplayRecording()` method to e
 - Use the logging and monitoring tools provided by the SDK to debug and optimize your application performance.
 - Adjust parameters like `sessionSampleRate` and `sessionReplaySampleRate` based on business needs to optimize data collection.
 
+## Local Development
+
+### Start Demo Server
+
+Run the local demo server:
+
+```bash
+npm run dev
+```
+
+### Run Unit Tests
+
+Run the full unit test suite:
+
+```bash
+npm run test:unit
+```
+
+Run a single spec file:
+
+```bash
+npm run test:unit:file -- packages/core/src/helper/valueHistory.spec.js
+```
+
+You can also use a short file name. When the match is unique, it will be resolved automatically:
+
+```bash
+npm run test:unit:file -- valueHistory.spec.js
+```
+
+Run tests by case name with `grep`:
+
+```bash
+npm run test:unit:grep -- valueHistory
+```
+
+Combine `--spec` and `--grep` to reduce bundling scope and only execute matching cases:
+
+```bash
+npm run test:unit -- --spec packages/core/src/helper/valueHistory.spec.js --grep "should clear expired entries automatically"
+```
+
 By following these steps, you can successfully integrate the Guance RUM SDK into your web application and start collecting data and using session replay features to optimize user experience and performance.

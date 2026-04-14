@@ -220,6 +220,68 @@ describe('resourceCollection', () => {
     )
   })
 
+  it('should continue processing later resources when a RAW_RUM_EVENT_COLLECTED subscriber throws', () => {
+    const lifeCycle = new LifeCycle()
+    const crashingSubscriber = jasmine
+      .createSpy('crashingSubscriber')
+      .and.callFake(() => {
+        throw new Error('subscriber boom')
+      })
+    const collected = jasmine.createSpy('collected')
+
+    startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: (task) => task()
+      },
+      () => {}
+    )
+
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+    lifeCycle.subscribe(
+      LifeCycleEventType.RAW_RUM_EVENT_COLLECTED,
+      crashingSubscriber
+    )
+
+    expect(() => {
+      lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+        url: 'https://example.com/a.js',
+        method: 'GET',
+        status: 200,
+        type: RequestType.FETCH,
+        duration: 12,
+        startClocks: {
+          relative: 100,
+          timeStamp: 200
+        }
+      })
+    }).not.toThrow()
+
+    expect(() => {
+      lifeCycle.notify(LifeCycleEventType.REQUEST_COMPLETED, {
+        url: 'https://example.com/b.js',
+        method: 'GET',
+        status: 200,
+        type: RequestType.FETCH,
+        duration: 12,
+        startClocks: {
+          relative: 130,
+          timeStamp: 230
+        }
+      })
+    }).not.toThrow()
+
+    expect(crashingSubscriber).toHaveBeenCalledTimes(2)
+    expect(collected).toHaveBeenCalledTimes(2)
+  })
+
   it('should match tracked xhr requests with mixed-case resource tracker headers', () => {
     const lifeCycle = new LifeCycle()
     const collected = jasmine.createSpy('collected')

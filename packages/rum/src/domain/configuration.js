@@ -21,6 +21,7 @@ import { isTracingOption } from '../domain/tracing/tracer'
 var REPLAY_CANVAS_QUALITY_PRESETS = {
   low: {
     quality: 0.25,
+    sampling: 1,
     autoInterval: 1500,
     autoCooldown: 3000,
     autoUnchangedBackoff: 5000,
@@ -29,6 +30,7 @@ var REPLAY_CANVAS_QUALITY_PRESETS = {
   },
   medium: {
     quality: 0.4,
+    sampling: 2,
     autoInterval: 1000,
     autoCooldown: 2000,
     autoUnchangedBackoff: 3000,
@@ -37,6 +39,7 @@ var REPLAY_CANVAS_QUALITY_PRESETS = {
   },
   high: {
     quality: 0.5,
+    sampling: 4,
     autoInterval: 700,
     autoCooldown: 1400,
     autoUnchangedBackoff: 2000,
@@ -141,6 +144,19 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
     return
   }
   if (
+    initConfiguration.replayCanvasSampling !== undefined &&
+    !(
+      initConfiguration.replayCanvasSampling === 'all' ||
+      (isNumber(initConfiguration.replayCanvasSampling) &&
+        initConfiguration.replayCanvasSampling > 0)
+    )
+  ) {
+    display.error(
+      "Replay Canvas Sampling should be 'all' or a positive number"
+    )
+    return
+  }
+  if (
     initConfiguration.replayCanvasMaxCanvasSize !== undefined &&
     (!isNumber(initConfiguration.replayCanvasMaxCanvasSize) ||
       initConfiguration.replayCanvasMaxCanvasSize <= 0)
@@ -223,11 +239,17 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
   )
   var replayCanvasMode = isNullUndefinedDefaultValue(
     initConfiguration.replayCanvasMode,
-    'manual'
+    'auto'
   )
   var replayCanvasQualityPreset = getReplayCanvasQualityPreset(
     initConfiguration.replayCanvasQuality
   )
+  var replayCanvasSampling = initConfiguration.replayCanvasSampling
+  if (replayCanvasSampling === undefined || replayCanvasSampling === null) {
+    replayCanvasSampling = replayCanvasQualityPreset
+      ? replayCanvasQualityPreset.sampling
+      : 2
+  }
   return assign(
     {
       applicationId: initConfiguration.applicationId,
@@ -266,12 +288,14 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         []
       ),
       workerUrl: initConfiguration.workerUrl,
+      replayCanvasWorkerUrl: initConfiguration.replayCanvasWorkerUrl,
       compressIntakeRequests: !!initConfiguration.compressIntakeRequests,
       trackUserInteractions: trackUserInteractions,
       enableLongAnimationFrame: !!initConfiguration.enableLongAnimationFrame,
       trackViewsManually: !!initConfiguration.trackViewsManually,
       replayCanvasEnabled: !!initConfiguration.replayCanvasEnabled,
       replayCanvasMode: replayCanvasMode,
+      replayCanvasSampling: replayCanvasSampling,
       replayCanvasQuality: isNullUndefinedDefaultValue(
         replayCanvasQualityPreset
           ? replayCanvasQualityPreset.quality

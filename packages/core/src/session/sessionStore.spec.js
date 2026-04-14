@@ -2,7 +2,11 @@ import {
   selectSessionStoreStrategyType,
   startSessionStore
 } from './sessionStore'
-import { SessionPersistence, SESSION_STORE_KEY } from './sessionConstants'
+import {
+  SessionPersistence,
+  SESSION_STORE_KEY,
+  SESSION_TIME_OUT_DELAY
+} from './sessionConstants'
 import { display } from '../helper/display'
 
 describe('sessionStore', () => {
@@ -120,6 +124,29 @@ describe('sessionStore', () => {
     expect(expireSpy).toHaveBeenCalledTimes(1)
     expect(store.getSession()).toEqual({ isExpired: '1' })
     expect(localStorage.getItem(SESSION_STORE_KEY)).toBe('isExpired=1')
+
+    store.stop()
+  })
+
+  it('should not restore an expired session when restarting the store', () => {
+    const store = startSessionStore(
+      { type: SessionPersistence.LOCAL_STORAGE },
+      'rum',
+      function () {
+        return { trackingType: 'tracked', isTracked: true }
+      }
+    )
+
+    store.expandOrRenewSession()
+    const createdSession = store.getSession()
+
+    jasmine.clock().mockDate(
+      new Date(now.getTime() + SESSION_TIME_OUT_DELAY + 1)
+    )
+    store.restartSession()
+
+    expect(createdSession.id).toEqual(jasmine.any(String))
+    expect(store.getSession()).toEqual({ isExpired: '1' })
 
     store.stop()
   })

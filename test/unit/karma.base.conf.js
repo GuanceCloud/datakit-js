@@ -8,12 +8,29 @@ const webpackConfig = require('../../webpack.base')({
 const jasmineSeedReporterPlugin = require('./jasmineSeedReporterPlugin')
 
 const reporters = ['spec', 'jasmine-seed']
+const DEFAULT_SPEC_PATTERN = 'packages/*/+(src|test)/**/*.spec.js'
+
+function getSpecPatterns() {
+  const rawSpecPattern = process.env.KARMA_SPEC_PATTERN
+  if (!rawSpecPattern) {
+    return [DEFAULT_SPEC_PATTERN]
+  }
+
+  return rawSpecPattern
+    .split(',')
+    .map((pattern) => pattern.trim())
+    .filter(Boolean)
+}
 
 module.exports = {
   basePath: '../..',
-  files: ['packages/*/+(src|test)/**/*.spec.js'],
+  files: [
+    'test/unit/jasmineGrepSetup.js',
+    ...getSpecPatterns()
+  ],
   frameworks: ['jasmine', 'webpack'],
   client: {
+    grep: process.env.KARMA_GREP || '',
     jasmine: {
       random: true,
       stopSpecOnExpectationFailure: true

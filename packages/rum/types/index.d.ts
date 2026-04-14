@@ -41,7 +41,14 @@ export interface AutoCanvasSnapshotDebugEntry {
 }
 
 export interface AutoCanvasSnapshotDebugResult {
-  status: 'completed' | 'skipped_hidden' | 'skipped_no_candidates'
+  scheduler: 'continuous_snapshot' | 'command_capture'
+  status:
+    | 'completed'
+    | 'fallback'
+    | 'skipped_hidden'
+    | 'skipped_no_candidates'
+  startedAt?: number
+  completedAt?: number
   timestamp: number
   eligibleCanvasCount: number
   selectedCanvasCount: number
@@ -49,6 +56,33 @@ export interface AutoCanvasSnapshotDebugResult {
   keepSessionAliveTriggered: boolean
   results: AutoCanvasSnapshotDebugEntry[]
 }
+
+export interface CanvasMutationDebugResult {
+  timestamp: number
+  canvasId: number
+  trigger: 'manual' | 'auto'
+  reason?: string
+  encodedBytesCount?: number
+  approxBytesCount?: number
+  commandCount?: number
+  width?: number
+  height?: number
+  diagnostics?: {
+    mimeType?: string
+    dataUrlLength?: number
+    base64Length?: number
+    base64Prefix?: string
+    base64Suffix?: string
+    firstPaddingIndex?: number
+    firstPaddingWindow?: string
+    invalidCharacterIndex?: number
+    invalidCharacterWindow?: string
+    hasMidstreamPadding?: boolean
+  }
+}
+
+export interface CanvasMutationDebugHistoryResult
+  extends CanvasMutationDebugResult {}
 
 export interface ReplaySegmentFlushDebugResult {
   creationReason: string
@@ -136,6 +170,7 @@ export declare const datafluxRum: {
   stopSession: () => void
   setForcedSession: () => void
   startSessionReplayRecording: (options?: { force?: boolean }) => void
+  isRecording: () => boolean
   stopSessionReplayRecording: () => void
   takeSubsequentFullSnapshot: () => void
   snapshotCanvas: (
@@ -145,6 +180,13 @@ export declare const datafluxRum: {
   getSerializedNodeIdForDebug: (node: Node) => number | undefined
   getLastAutoCanvasSnapshotResultForDebug: () =>
     | AutoCanvasSnapshotDebugResult
+    | undefined
+  getAutoCanvasSnapshotDebugHistoryForDebug: () =>
+    | AutoCanvasSnapshotDebugResult[]
+    | undefined
+  getLastCanvasMutationForDebug: () => CanvasMutationDebugResult | undefined
+  getCanvasMutationHistoryForDebug: () =>
+    | CanvasMutationDebugHistoryResult[]
     | undefined
   getLastReplaySegmentFlushForDebug: () =>
     | ReplaySegmentFlushDebugResult

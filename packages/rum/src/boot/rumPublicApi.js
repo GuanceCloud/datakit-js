@@ -293,6 +293,9 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
         force: options && options.force
       })
     }),
+    isRecording: monitor(function () {
+      return recorderApi.isRecording()
+    }),
     stopSessionReplayRecording: monitor(recorderApi.stop),
     takeSubsequentFullSnapshot: monitor(recorderApi.takeSubsequentFullSnapshot),
     snapshotCanvas: monitor(function (canvas, options) {
@@ -303,6 +306,15 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     }),
     getLastAutoCanvasSnapshotResultForDebug: monitor(function () {
       return recorderApi.getLastAutoCanvasSnapshotResultForDebug()
+    }),
+    getAutoCanvasSnapshotDebugHistoryForDebug: monitor(function () {
+      return recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug()
+    }),
+    getLastCanvasMutationForDebug: monitor(function () {
+      return recorderApi.getLastCanvasMutationForDebug()
+    }),
+    getCanvasMutationHistoryForDebug: monitor(function () {
+      return recorderApi.getCanvasMutationHistoryForDebug()
     }),
     getLastReplaySegmentFlushForDebug: monitor(function () {
       return recorderApi.getLastReplaySegmentFlushForDebug()

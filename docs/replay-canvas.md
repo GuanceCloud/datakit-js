@@ -4,43 +4,195 @@
 
 Guance Browser RUM 现在支持在 Session Replay 中录制 `canvas` 画面。
 
+先说明最重要的一点：
+
+**只配置 `replayCanvasEnabled` 还不够。**
+
+canvas 录制要真正生效，至少还需要同时满足下面这些前置条件：
+
+- 已开启 Session Replay 采样
+  - 也就是 `sessionReplaySampleRate > 0`，或命中 `sessionReplayOnErrorSampleRate`
+- 已启动 Session Replay 录制
+  - 也就是调用 `startSessionReplayRecording()`
+- 已开启 canvas 录制
+  - 也就是 `replayCanvasEnabled: true`
+- 页面里的目标元素确实是 `2d canvas`
+- 如果是 `manual` 模式，业务代码还必须主动调用 `snapshotCanvas(canvas)`
+
 当前版本的能力边界是：
 
 - 支持手动触发录制
-- 支持低频自动采样录制
+- 支持自动录制
+- 自动录制支持两条正式路径：
+  - snapshot sampling
+  - higher-fidelity auto recording
 - 仅支持 `2d canvas`
 - 录制结果会进入 Session Replay 事件流
-- 播放侧依赖现有 `rrweb replayer`
 
 当前版本不支持：
 
 - `webgl` / `webgl2`
-- 命令级 canvas 录制
+- 对所有复杂 2D 场景都做完全一致的还原
 
 ## 快速选择
 
-优先按下面的规则选模式：
+## 最小可用配置
 
-- 你知道什么时候画面稳定：用 `manual`
-- 你希望 SDK 自己低频补帧：用 `auto`
-- 你只关心最终状态：优先 `manual`
-- 你的 canvas 会长时间静止：`auto` 也可以，当前已带重复帧去重和退避
+下面三套是当前最小可用配置。实际接入时，建议直接从这里复制，再按场景往上加。
 
-推荐配置：
+### 1. 手动录制：最稳、最推荐
 
-```js
-replayCanvasEnabled: true,
-replayCanvasMode: 'manual',
-replayCanvasQuality: 'medium'
-```
+这套配置适合：
 
-如果要开自动模式，建议从这组起步：
+- 你知道什么时候画面已经稳定
+- 你只需要关键节点补一帧
+- 你希望成本尽量可控
 
 ```js
-replayCanvasEnabled: true,
-replayCanvasMode: 'auto',
-replayCanvasQuality: 'medium'
+datafluxRum.init({
+  applicationId: '<YOUR_APPLICATION_ID>',
+  datakitOrigin: '<YOUR_DATAKIT_ORIGIN>',
+  sessionReplaySampleRate: 100,
+
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'manual',
+  replayCanvasQuality: 'medium'
+})
+
+datafluxRum.startSessionReplayRecording()
 ```
+
+然后在业务代码里主动补帧：
+
+```js
+await datafluxRum.snapshotCanvas(canvasElement)
+```
+
+这套里真正必须显式配置的是：
+
+- `sessionReplaySampleRate`
+- `replayCanvasEnabled`
+
+推荐同时显式配置的是：
+
+- `replayCanvasMode: 'manual'`
+- `replayCanvasQuality: 'medium'`
+
+### 2. 自动 snapshot：更保守的自动录制
+
+这套配置适合：
+
+- 业务不方便手动卡补帧时机
+- 你更关心稳定和成本
+- 可以接受自动补帧不是逐帧录制
+
+```js
+datafluxRum.init({
+  applicationId: '<YOUR_APPLICATION_ID>',
+  datakitOrigin: '<YOUR_DATAKIT_ORIGIN>',
+  sessionReplaySampleRate: 100,
+
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'auto',
+  replayCanvasSampling: 2,
+  replayCanvasQuality: 'medium'
+})
+
+datafluxRum.startSessionReplayRecording()
+```
+
+这套里建议显式配置的是：
+
+- `replayCanvasEnabled: true`
+- `replayCanvasMode: 'auto'`
+- `replayCanvasSampling: 2`
+- `replayCanvasQuality: 'medium'`
+
+如果你不显式传 `replayCanvasSampling`，SDK 也会用数值模式，但**不建议依赖默认值做接入说明**，最好写清楚。
+
+### 3. 自动高还原度录制
+
+这套配置适合：
+
+- 你希望自动模式更接近真实绘制过程
+- 页面主要是 2D canvas
+- 你可以接受复杂场景下自动回退为 snapshot
+
+```js
+datafluxRum.init({
+  applicationId: '<YOUR_APPLICATION_ID>',
+  datakitOrigin: '<YOUR_DATAKIT_ORIGIN>',
+  sessionReplaySampleRate: 100,
+
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'auto',
+  replayCanvasSampling: 'all',
+  replayCanvasQuality: 'medium'
+})
+
+datafluxRum.startSessionReplayRecording()
+```
+
+这套里必须显式配置的是：
+
+- `replayCanvasEnabled: true`
+- `replayCanvasMode: 'auto'`
+- `replayCanvasSampling: 'all'`
+
+## 必须配置什么
+
+如果你的目标只是“让 canvas 录制先跑起来”，最少要关心下面这些参数：
+
+### 必须满足的前置条件
+
+- `sessionReplaySampleRate`
+  - 必须保证 replay 会被采样到，否则 canvas 录制不会生效
+- `startSessionReplayRecording()`
+  - 只 `init()` 不够，必须真正启动 replay 录制
+- `replayCanvasEnabled: true`
+  - 不开这个，canvas 录制完全关闭
+
+### 手动模式必须配置
+
+- `replayCanvasEnabled: true`
+- 建议显式写 `replayCanvasMode: 'manual'`
+- 业务代码必须调用 `snapshotCanvas(canvas)`
+
+### 自动模式必须配置
+
+- `replayCanvasEnabled: true`
+- `replayCanvasMode: 'auto'`
+- 建议显式写 `replayCanvasSampling`
+  - 数值：自动 snapshot
+  - `'all'`：更高还原度的自动录制
+
+### 什么时候要配 `replayCanvasWorkerUrl`
+
+这个参数不是“功能开关”，而是部署参数。
+
+只有在这些场景才需要配：
+
+- 站点 CSP 不允许 `worker-src blob:`
+- 你要把 canvas snapshot 编码 worker 单独托管
+- 你明确希望 canvas 编码不走 inline blob worker
+
+典型写法：
+
+```js
+datafluxRum.init({
+  // ...
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'auto',
+  replayCanvasSampling: 2,
+  replayCanvasWorkerUrl: '/canvas-worker.js'
+})
+```
+
+注意：
+
+- `replayCanvasWorkerUrl` 只影响 canvas snapshot 编码
+- 它不替代原来的 `workerUrl`
+- 如果当前这一帧没有走 snapshot 编码，就不会用到 canvas worker
 
 ## 模式差异
 
@@ -63,18 +215,21 @@ replayCanvasQuality: 'medium'
 
 特点：
 
-- SDK 按固定间隔低频扫描已序列化 canvas
-- 连续重复帧会返回 `unchanged`
-- 单个 canvas 带成功冷却、重复帧退避、失败退避
-- 页面进入后台时会暂停采样，回到前台后立即补一次
-- 单轮只处理有限个 canvas，同优先级内部按轮转方式公平取样
+- SDK 自动补帧
+- 具体补帧方式由 `replayCanvasSampling` 决定
+- 页面进入后台时会暂停录制，回到前台后恢复
 - 可通过 `shouldRecordCanvas()` 返回数字优先级，让关键 canvas 先录
+
+`replayCanvasSampling` 的正式语义：
+
+- 数值：snapshot sampling
+- `'all'`：更高还原度的自动录制
 
 适合：
 
 - 业务不方便手工卡补帧时机
-- 页面里只有少量 2D canvas
-- 可以接受“低频补帧”而不是“逐帧视频”
+- 页面里有少量到中等规模的 2D canvas
+- 希望在成本和还原度之间做平衡
 - 多图表页面里只需要优先录关键主图
 
 ## 适用场景
@@ -146,10 +301,11 @@ datafluxRum.startSessionReplayRecording()
 
 ## 配置项说明
 
-日常接入时，优先只关心下面 4 个配置：
+日常接入时，优先只关心下面 5 个配置：
 
 - `replayCanvasEnabled`
 - `replayCanvasMode`
+- `replayCanvasSampling`
 - `replayCanvasQuality`
 - `shouldRecordCanvas`
 
@@ -168,12 +324,32 @@ datafluxRum.startSessionReplayRecording()
 
 - 类型：`string`
 - 当前支持：`'manual' | 'auto'`
-- 默认值：`'manual'`
+- 默认值：`'auto'`
 
 指定 canvas 录制模式。
 
 - `manual`: 由业务代码在合适时机主动调用 `snapshotCanvas()`
-- `auto`: SDK 按固定间隔低频扫描已进入序列化树的 `canvas` 并自动补帧
+- `auto`: SDK 自动补帧，具体策略由 `replayCanvasSampling` 决定
+
+### `replayCanvasSampling`
+
+- 类型：`number | 'all'`
+- 默认值：数值模式
+
+指定 `auto` 模式下的 canvas 录制策略。
+
+- 数值：走 snapshot sampling
+- `'all'`：走更高还原度的自动录制
+
+建议：
+
+- 如果目标是更稳、更保守：优先用数值模式
+- 如果目标是更接近真实绘制过程：用 `'all'`
+
+注意：
+
+- `'all'` 并不意味着所有场景都会完全按高还原度路径录制
+- 对某些复杂场景，SDK 会自动回退到 snapshot
 
 ### `replayCanvasQuality`
 
@@ -184,11 +360,11 @@ canvas 快照编码质量。
 
 推荐优先使用预设值：
 
-- `low`: 编码质量 `0.25`，更保守的 auto 节奏，默认 `maxPerRun = 1`
-- `medium`: 编码质量 `0.4`，默认 auto 策略，默认 `maxPerRun = 2`
-- `high`: 编码质量 `0.5`，更积极的 auto 节奏，默认 `maxPerRun = 4`
+- `low`: 编码质量 `0.25`
+- `medium`: 编码质量 `0.4`
+- `high`: 编码质量 `0.5`
 
-这些预设不仅决定编码质量，也会一起决定 auto 模式下的默认预算和节奏。
+这些预设主要影响 snapshot 编码质量。在 `replayCanvasSampling: 'all'` 下，command 帧本身不会走图片编码，但 fallback snapshot 仍会用到这里的质量配置。
 
 如果传数字，仍然按高级覆盖项处理。
 
@@ -336,16 +512,6 @@ datafluxRum.init({
 
 如果默认策略不够用，再考虑这些底层参数：
 
-- `replayCanvasAutoInterval`
-  控制 auto 采样频率，默认 `1000ms`
-- `replayCanvasAutoCooldown`
-  单个 canvas 成功补帧后的最小冷却时间，默认 `1000ms`
-- `replayCanvasAutoUnchangedBackoff`
-  命中重复帧去重后的退避时间，默认 `3000ms`
-- `replayCanvasAutoFailureBackoff`
-  编码失败后的退避时间，默认 `5000ms`
-- `replayCanvasAutoMaxPerRun`
-  单轮最多处理多少个 canvas
 - `replayCanvasMimeType`
   编码格式，默认 `image/webp`
 - `replayCanvasMaxCanvasSize`
@@ -379,7 +545,7 @@ datafluxRum.init({
 当前 demo 还提供两个辅助能力：
 
 - `toggle auto draw`: 周期性重绘 canvas，方便观察 auto 模式下是否持续产生变化
-- `export last canvas event`: 导出最近一次成功手动 snapshot 对应的 rrweb-compatible `CanvasMutation`
+- `export last canvas event`: 导出最近一次成功手动 snapshot 对应的调试事件
 
 需要注意：
 
@@ -387,56 +553,6 @@ datafluxRum.init({
 - `auto result` 目前是基于手动 `snapshotCanvas()` 结果做的策略映射，主要用于调试说明
 - 它还没有直接接入 SDK 内部 auto 定时采样结果
 - 导出的 event 也是 demo 侧按当前 canvas 内容重建的调试样例，不是从 intake payload 直接回读
-
-## 播放兼容性
-
-当前方案会把 canvas 录制结果编码为 rrweb-compatible `CanvasMutation`，并与普通 DOM replay 共用同一条时间轴。
-
-这意味着：
-
-- 普通 DOM snapshot 先恢复页面结构
-- 随后的 `CanvasMutation` 再把 canvas 画面应用回对应节点
-
-你不需要为播放器单独接一套“canvas 图片资源 API”。
-
-播放器要正确回放 canvas，至少需要满足：
-
-- 打开 rrweb replayer 的 `UNSAFE_replayCanvas`
-- 正常消费 `IncrementalSource.CanvasMutation`
-- `pause` 时保留当前 canvas 画面，不要额外清空
-- `seek` 时按目标时间点之前最近一条 canvas frame 重建状态
-- 不要因为中间夹杂 `scroll`、`mouse interaction` 等普通 replay event 而打断 canvas 状态恢复
-
-当前仓库已经提供了可直接复用的 fixture 基线，后续播放器项目可以直接拿这组事件流做验收：
-
-- `packages/rum/src/domain/replay/record/canvasReplayFixtures.js`
-- 兼容测试示例：`packages/rum/src/domain/replay/record/canvasReplayCompatibility.spec.js`
-
-如果播放器项目希望直接拿一个接近真实 intake 结构的样例，可以使用：
-
-- `createCanvasReplayFixturePayload()`
-
-示例：
-
-```js
-import {
-  createCanvasReplayFixturePayload
-} from '../packages/rum/src/domain/replay/record/canvasReplayFixtures'
-
-const payload = createCanvasReplayFixturePayload()
-const replayer = new rrweb.Replayer(payload.records, {
-  UNSAFE_replayCanvas: true
-})
-
-replayer.play()
-```
-
-这组 payload 的语义是：
-
-- 第 1 帧：手动 snapshot 后的 canvas 画面
-- 中间夹杂普通 scroll / click 类 replay event
-- 第 2 帧：后续 frame 更新
-- 第 3 帧：clear 后的空白画面
 
 ## 性能建议
 
@@ -487,19 +603,19 @@ canvas 录制是高成本能力，建议保守使用。
 
 ### 2. 为什么自动模式不是逐帧录制？
 
-当前版本已经支持自动录制，但它是“低频采样”，不是“逐帧视频”。
+当前版本已经支持自动录制，但它不是“逐帧视频”。
 
 原因是：
 
-- canvas 编码本身成本较高
-- 高频抓帧会明显放大 replay 体积
-- 多个 canvas 同时存在时，必须做冷却、退避和预算控制
+- snapshot sampling 本质上仍然是采样
+- 更高还原度的自动录制虽然更接近真实绘制，但仍然会受到复杂场景边界和自动回退约束
+- canvas 编码和上传成本仍然明显高于普通 DOM replay
 - WebGL 和高频动画场景仍然不适合走这条路径
 
 所以当前自动模式的设计目标是：
 
 - 用较低成本补关键视觉状态
-- 尽量避免静止画面反复上传
+- 在还原度和成本之间做平衡
 - 不把 Session Replay 变成视频录制
 
 ### 3. 为什么不支持 WebGL？
@@ -551,8 +667,8 @@ dashboard 场景示例：
 datafluxRum.init({
   replayCanvasEnabled: true,
   replayCanvasMode: 'auto',
+  replayCanvasSampling: 2,
   replayCanvasQuality: 'medium',
-  replayCanvasAutoInterval: 1000,
   shouldRecordCanvas(canvas) {
     if (canvas.dataset.miniChart === 'true') {
       return false
@@ -579,4 +695,4 @@ datafluxRum.init({
 
 - 把 canvas 录制当成“关键视觉状态补帧”，不要当成“持续视频录制”
 
-如果业务时机明确，优先 `manual`；如果是 dashboard 一类多图场景，再谨慎开启低频 `auto`。
+如果业务时机明确，优先 `manual`；如果是 dashboard 一类多图场景，再谨慎开启 `auto`，并明确选择数值 sampling 或 `'all'`。 

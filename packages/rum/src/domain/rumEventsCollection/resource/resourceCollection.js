@@ -12,9 +12,10 @@ import {
   RumEventType,
   LifeCycleEventType,
   toServerDuration,
-  createTaskQueue
+  createTaskQueue,
+  addTelemetryError
 } from '@cloudcare/browser-core'
-import { matchRequestResourceEntry } from './matchRequestResourceEntry'
+import { createRequestResourceEntryMatcher } from './matchRequestResourceEntry'
 import {
   computePerformanceResourceDetails,
   computeResourceEntryDuration,
@@ -53,9 +54,10 @@ export function startResourceCollection(
       lifeCycle.notify(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, rawEvent)
     })
   }
+  var requestResourceEntryMatcher = createRequestResourceEntryMatcher()
   lifeCycle.subscribe(LifeCycleEventType.REQUEST_COMPLETED, function (request) {
     handleResource(function () {
-      return processRequest(request, pageStateHistory)
+      return processRequest(request, pageStateHistory, requestResourceEntryMatcher)
     })
   })
   var performanceResourceSubscription = createPerformanceObservable(
@@ -88,20 +90,24 @@ export function startResourceCollection(
   })
   function handleResource(computeRawEvent) {
     taskQueue.push(function () {
-      const rawEvent = computeRawEvent()
-      if (rawEvent) {
-        if (
-          resourceTrackerManager &&
-          rawEvent.domainContext &&
-          rawEvent.domainContext.resourceTrackerId &&
-          resourceTrackerManager.trackRequestResource(
-            rawEvent.domainContext.resourceTrackerId,
-            rawEvent
-          )
-        ) {
-          return
+      try {
+        const rawEvent = computeRawEvent()
+        if (rawEvent) {
+          if (
+            resourceTrackerManager &&
+            rawEvent.domainContext &&
+            rawEvent.domainContext.resourceTrackerId &&
+            resourceTrackerManager.trackRequestResource(
+              rawEvent.domainContext.resourceTrackerId,
+              rawEvent
+            )
+          ) {
+            return
+          }
+          lifeCycle.notify(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, rawEvent)
         }
-        lifeCycle.notify(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, rawEvent)
+      } catch (error) {
+        addTelemetryError(error)
       }
     })
   }
@@ -120,8 +126,8 @@ export function startResourceCollection(
   }
 }
 
-function processRequest(request, pageStateHistory) {
-  var matchingTiming = matchRequestResourceEntry(request)
+function processRequest(request, pageStateHistory, requestResourceEntryMatcher) {
+  var matchingTiming = requestResourceEntryMatcher.matchRequestResourceEntry(request)
   var startClocks = matchingTiming
     ? relativeToClocks(matchingTiming.startTime)
     : request.startClocks

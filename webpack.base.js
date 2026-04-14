@@ -1,5 +1,6 @@
 const TerserPlugin = require('terser-webpack-plugin')
 const webpack = require('webpack')
+const nodePath = require('path')
 const { buildEnvKeys, getBuildEnvValue } = require('./scripts/build-env')
 module.exports = ({
   entry,
@@ -14,6 +15,25 @@ module.exports = ({
   output: {
     filename,
     path
+  },
+  resolve: {
+    alias:
+      mode === 'development'
+        ? {
+            '@cloudcare/browser-core$': nodePath.resolve(
+              __dirname,
+              'packages/core/src/index.js'
+            ),
+            '@cloudcare/browser-core/worker$': nodePath.resolve(
+              __dirname,
+              'packages/core/src/worker.js'
+            ),
+            '@cloudcare/browser-worker$': nodePath.resolve(
+              __dirname,
+              'packages/worker/src/index.js'
+            )
+          }
+        : {}
   },
   target: ['web', 'es5'],
   devtool: false,

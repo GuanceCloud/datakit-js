@@ -42,7 +42,7 @@ API behavior:
 - `appendResourceContext(resourceId, context)`
   Merges more fields into the tracker context.
 - `finishResource(resourceId)`
-  Flushes the tracked resource event if the request has already completed.
+  Marks the tracked resource as ready to flush. If the request has already completed, the resource event is flushed immediately. If the request has not completed yet, the SDK waits until the request completes and flushes it then.
 - `getResource(resourceId)`
   Returns the current tracker snapshot for debugging.
 
@@ -198,7 +198,26 @@ Tracker statuses:
 
 If `finishResource()` is never called, the SDK automatically flushes the tracked resource after `30s`.
 
-This prevents tracked requests from staying pending forever.
+Important timing detail:
+
+- the `30s` timeout starts **after the request has completed and the SDK has collected the resource event**
+- it does **not** start when the request begins
+
+The actual sequence is:
+
+1. the request starts
+2. the request completes
+3. the SDK matches the request through `x-rum-resource-id`
+4. if `finishResource()` has still not been called, the SDK waits up to `30s`
+5. after `30s`, the resource is flushed automatically with status `timeout_flushed`
+
+This prevents tracked requests from staying pending forever while still leaving time for business code to append response-side context after the request has finished.
+
+## Timing Notes
+
+- If you call `finishResource()` **before** the request completes, the SDK does not flush immediately. It marks the tracker as finished and flushes as soon as the request completes.
+- If you call `finishResource()` **after** the request completes, the SDK flushes immediately.
+- If you never call `finishResource()`, the SDK uses the `30s` post-completion timeout described above.
 
 ## Notes
 

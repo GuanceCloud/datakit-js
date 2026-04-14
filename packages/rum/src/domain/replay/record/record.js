@@ -15,14 +15,32 @@ import { assembleIncrementalSnapshot } from './utils'
 import { createElementsScrollPositions } from './elementsScrollPositions'
 import { initShadowRootsController } from './shadowRootsController'
 import { createCanvasObserver } from './canvasObserver'
+import { startCanvasCommandCapture } from './canvasCommandObserver'
 import {
   getSerializedCanvasNodes,
   getSerializedNodeId
 } from './serializationUtils'
-import { startAutoCanvasSnapshotLoop } from './canvasAutoSnapshot'
+import { startContinuousCanvasSnapshotLoop } from './canvasContinuousScheduler'
 
 var MUTATION_EMIT_DELAY_MS = 16
 var MAX_MUTATION_EMIT_APPROX_BYTES = 200000
+var CANVAS_DEBUG_HISTORY_LIMIT = 200
+
+function shouldUseCommandCapture(configuration) {
+  return (
+    configuration.replayCanvasEnabled &&
+    configuration.replayCanvasMode === 'auto' &&
+    configuration.replayCanvasSampling === 'all'
+  )
+}
+
+function shouldUseContinuousCanvasSnapshot(configuration) {
+  return (
+    configuration.replayCanvasEnabled &&
+    configuration.replayCanvasMode === 'auto' &&
+    configuration.replayCanvasSampling !== 'all'
+  )
+}
 
 export function record(options) {
   var emit = options.emit
@@ -115,15 +133,33 @@ function flushPendingMutations() {
     inputCb
   })
   var lastAutoCanvasSnapshotResult
+  var autoCanvasSnapshotDebugHistoryForDebug = []
+  var lastCanvasMutationForDebug
+  var canvasMutationHistoryForDebug = []
+  var shouldUseCanvasCommandCapture = shouldUseCommandCapture(
+    options.configuration
+  )
   var canvasObserver = (
     options.createCanvasObserver || createCanvasObserver
   )({
     configuration: options.configuration,
-    emit: emit
+    emit: emit,
+    onMutationDebug: function (result) {
+      lastCanvasMutationForDebug = cloneCanvasMutationDebugResult(result)
+      pushCanvasDebugHistoryEntry(
+        canvasMutationHistoryForDebug,
+        lastCanvasMutationForDebug
+      )
+    }
   })
-  var autoCanvasSnapshotLoop = (
-    options.startAutoCanvasSnapshotLoop || startAutoCanvasSnapshotLoop
-  )({
+  var startCanvasSnapshotLoop =
+    options.startContinuousCanvasSnapshotLoop || startContinuousCanvasSnapshotLoop
+  var canvasSnapshotLoop = shouldUseCanvasCommandCapture
+    ? {
+        stop: function () {},
+        reset: function () {}
+      }
+    : startCanvasSnapshotLoop({
     configuration: options.configuration,
     getCanvases: function () {
       return getSerializedCanvasNodes()
@@ -145,9 +181,57 @@ function flushPendingMutations() {
         result,
         keepSessionAliveTriggered
       )
+      pushCanvasDebugHistoryEntry(
+        autoCanvasSnapshotDebugHistoryForDebug,
+        lastAutoCanvasSnapshotResult
+      )
     },
     snapshotCanvas: function (canvas) {
-      return canvasObserver.snapshot(canvas, { trigger: 'auto' })
+      return canvasObserver.snapshot(canvas, {
+        trigger: 'auto',
+        scheduler: 'continuous_snapshot'
+      })
+    }
+  })
+  var canvasCommandCapture = (
+    options.startCanvasCommandCapture || startCanvasCommandCapture
+  )({
+    configuration: options.configuration,
+    emit: emit,
+    snapshotCanvas: function (canvas, snapshotOptions) {
+      return canvasObserver.snapshot(canvas, snapshotOptions)
+    },
+    getCanvases: function () {
+      return getSerializedCanvasNodes()
+    },
+    getSerializedNodeId: function (canvas) {
+      return getSerializedNodeId(canvas)
+    },
+    onDebug: function (result) {
+      var keepSessionAliveTriggered = false
+      if (
+        shouldKeepSessionAliveAfterAutoCanvasSnapshot(result) &&
+        options.sessionManager &&
+        options.sessionManager.keepSessionAlive
+      ) {
+        options.sessionManager.keepSessionAlive()
+        keepSessionAliveTriggered = true
+      }
+      lastAutoCanvasSnapshotResult = cloneAutoCanvasSnapshotDebugResult(
+        result,
+        keepSessionAliveTriggered
+      )
+      pushCanvasDebugHistoryEntry(
+        autoCanvasSnapshotDebugHistoryForDebug,
+        lastAutoCanvasSnapshotResult
+      )
+    },
+    onMutationDebug: function (result) {
+      lastCanvasMutationForDebug = cloneCanvasMutationDebugResult(result)
+      pushCanvasDebugHistoryEntry(
+        canvasMutationHistoryForDebug,
+        lastCanvasMutationForDebug
+      )
     }
   })
 
@@ -209,6 +293,9 @@ function flushPendingMutations() {
   }
 
   takeFullSnapshot()
+  if (canvasCommandCapture.scanExistingCanvases) {
+    canvasCommandCapture.scanExistingCanvases()
+  }
   var _initObservers = initObservers({
     lifeCycle: options.lifeCycle,
     configuration: options.configuration,
@@ -266,8 +353,9 @@ function flushPendingMutations() {
     stop: function () {
       flushPendingMutations()
       shadowRootsController.stop()
+      canvasCommandCapture.stop()
       canvasObserver.stop()
-      stopAutoCanvasSnapshots(autoCanvasSnapshotLoop)
+      stopCanvasSnapshots(canvasSnapshotLoop)
       stopObservers()
     },
     snapshotCanvas: function (canvas, snapshotOptions) {
@@ -282,6 +370,17 @@ function flushPendingMutations() {
     getLastAutoCanvasSnapshotResultForDebug: function () {
       return cloneAutoCanvasSnapshotDebugResult(lastAutoCanvasSnapshotResult)
     },
+    getAutoCanvasSnapshotDebugHistoryForDebug: function () {
+      return autoCanvasSnapshotDebugHistoryForDebug.map(
+        cloneAutoCanvasSnapshotDebugResult
+      )
+    },
+    getLastCanvasMutationForDebug: function () {
+      return cloneCanvasMutationDebugResult(lastCanvasMutationForDebug)
+    },
+    getCanvasMutationHistoryForDebug: function () {
+      return canvasMutationHistoryForDebug.map(cloneCanvasMutationDebugResult)
+    },
     getReplayPerformanceForDebug: function () {
       return cloneReplayPerformanceStats(replayPerformanceStats)
     },
@@ -291,12 +390,18 @@ function flushPendingMutations() {
       if (canvasObserver.reset) {
         canvasObserver.reset()
       }
-      resetAutoCanvasSnapshots(autoCanvasSnapshotLoop)
+      if (canvasCommandCapture.reset) {
+        canvasCommandCapture.reset()
+      }
+      resetCanvasSnapshots(canvasSnapshotLoop)
       takeFullSnapshot(timestamp, {
         shadowRootsController: shadowRootsController,
         status: SerializationContextStatus.SUBSEQUENT_FULL_SNAPSHOT,
         elementsScrollPositions: elementsScrollPositions
       })
+      if (canvasCommandCapture.scanExistingCanvases) {
+        canvasCommandCapture.scanExistingCanvases()
+      }
     },
     flushMutations: flushMutations,
     shadowRootsController: shadowRootsController
@@ -598,19 +703,30 @@ function cloneReplayPerformanceStats(stats) {
   }
 }
 
-function stopAutoCanvasSnapshots(autoCanvasSnapshotLoop) {
-  if (typeof autoCanvasSnapshotLoop === 'function') {
-    autoCanvasSnapshotLoop()
+function pushCanvasDebugHistoryEntry(history, entry) {
+  if (!entry) {
     return
   }
-  if (autoCanvasSnapshotLoop && autoCanvasSnapshotLoop.stop) {
-    autoCanvasSnapshotLoop.stop()
+
+  history.push(entry)
+  if (history.length > CANVAS_DEBUG_HISTORY_LIMIT) {
+    history.shift()
   }
 }
 
-function resetAutoCanvasSnapshots(autoCanvasSnapshotLoop) {
-  if (autoCanvasSnapshotLoop && autoCanvasSnapshotLoop.reset) {
-    autoCanvasSnapshotLoop.reset()
+function stopCanvasSnapshots(canvasSnapshotLoop) {
+  if (typeof canvasSnapshotLoop === 'function') {
+    canvasSnapshotLoop()
+    return
+  }
+  if (canvasSnapshotLoop && canvasSnapshotLoop.stop) {
+    canvasSnapshotLoop.stop()
+  }
+}
+
+function resetCanvasSnapshots(canvasSnapshotLoop) {
+  if (canvasSnapshotLoop && canvasSnapshotLoop.reset) {
+    canvasSnapshotLoop.reset()
   }
 }
 
@@ -647,7 +763,14 @@ function cloneAutoCanvasSnapshotDebugResult(
   }
 
   return {
+    scheduler: result.scheduler,
     status: result.status,
+    startedAt:
+      typeof result.startedAt === 'number' ? result.startedAt : result.timestamp,
+    completedAt:
+      typeof result.completedAt === 'number'
+        ? result.completedAt
+        : result.timestamp,
     timestamp: result.timestamp,
     eligibleCanvasCount: result.eligibleCanvasCount,
     selectedCanvasCount: result.selectedCanvasCount,
@@ -662,4 +785,30 @@ function cloneAutoCanvasSnapshotDebugResult(
       }
     })
   }
+}
+
+function cloneCanvasMutationDebugResult(result) {
+  if (!result) {
+    return result
+  }
+
+  var clonedResult = {
+    timestamp: result.timestamp,
+    canvasId: result.canvasId,
+    trigger: result.trigger,
+    encodedBytesCount: result.encodedBytesCount,
+    approxBytesCount: result.approxBytesCount,
+    commandCount: result.commandCount,
+    width: result.width,
+    height: result.height
+  }
+
+  if (typeof result.reason !== 'undefined') {
+    clonedResult.reason = result.reason
+  }
+  if (typeof result.diagnostics !== 'undefined') {
+    clonedResult.diagnostics = result.diagnostics
+  }
+
+  return clonedResult
 }

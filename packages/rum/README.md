@@ -139,4 +139,89 @@ Web application integration can be done in three ways: NPM integration, asynchro
 | `storeContextsToLocal`                 | Boolean                          | No       |               | Version requirement:`>3.1.2`. Whether to cache custom user data locally in localStorage, e.g., data added via `setUser`, `addGlobalContext` APIs.                                                                                                                                                                                                                                                                                                                                             |
 | `storeContextsKey`                     | String                           | No       |               | Version requirement:`>3.1.18`. Define the key used to store data in localStorage, defaults to auto-generated if not specified. This parameter helps differentiate storage across different subpaths within the same domain.                                                                                                                                                                                                                                                                   |
 | `compressIntakeRequests`               | Boolean                          | No       |               | Compress RUM data request content to reduce bandwidth usage when sending large amounts of data, reducing the number of data requests. Compression occurs in the WebWorker thread. For CSP security policy, refer to [CSP Security](../../docs/rum/content-security-policy.md#webwork). SDK version requirement `>= 3.2.0`. DataKit version requirement `>=1.60`. Deployment Plan version requirement `>= 1.96.178`.                                                                           |
-| `workerUrl`                            | String                           | No       |               | Both sessionReplay and compressIntakeRequests data compression occur in the WebWorker thread, so by default, in CSP secure access scenarios, you need to allow worker-src blob:. This configuration allows adding a self-hosted worker URL. For CSP security policy, refer to [CSP Security](../../docs/rum/content-security-policy.md#webwork). SDK version requirement `>= 3.2.0`.                                                                                                          |
+| `workerUrl`                            | String                           | No       |               | Self-hosted URL for the existing session replay/compress deflate worker. By default, the SDK uses an inlined blob worker, so in CSP secure access scenarios you need to allow `worker-src blob:` or host the worker yourself. For CSP security policy, refer to [CSP Security](../../docs/rum/content-security-policy.md#webwork). SDK version requirement `>= 3.2.0`.                                                           |
+| `replayCanvasWorkerUrl`                | String                           | No       |               | Self-hosted URL for the dedicated canvas encode worker (`canvas-worker.js`). This only affects canvas snapshot encoding and does not replace `workerUrl` or the existing deflate worker. Use this in stricter CSP/security environments where blob workers are blocked.                                                                                                                                        |
+| `replayCanvasEnabled`                  | Boolean                          | No       | `false`       | Whether to enable canvas recording for Session Replay. This is the primary switch for all canvas recording behavior. If this is not set to `true`, no canvas recording will occur.                                                                                                                                                                                      |
+| `replayCanvasMode`                     | `'manual' \| 'auto'`             | No       | `auto`        | Canvas recording mode. `manual` requires calling `snapshotCanvas(canvas)` explicitly. `auto` enables automatic canvas recording, and is the default when `replayCanvasEnabled` is turned on. You should still explicitly configure `replayCanvasSampling` for predictable behavior.                                                                              |
+| `replayCanvasSampling`                 | Number / `'all'`                 | No       |               | Canvas replay sampling strategy. A number enables snapshot sampling. `'all'` enables a higher-fidelity auto recording strategy. In some complex scenes, the SDK may automatically fall back to snapshot recording.                                                                                                                                                    |
+
+### Canvas replay notes
+
+- Canvas replay does not work by default.
+- To make canvas replay actually work, you must satisfy all of the following:
+  - Session Replay is sampled in (`sessionReplaySampleRate > 0` or `sessionReplayOnErrorSampleRate` is hit)
+  - Session Replay recording is started with `startSessionReplayRecording()`
+  - `replayCanvasEnabled: true` is configured
+  - The target element is a `2d canvas`
+- In `manual` mode, business code must also call `snapshotCanvas(canvas)`.
+- `replayCanvasMode` still controls whether canvas replay is `manual` or `auto`.
+- `replayCanvasSampling` controls how `auto` canvas replay is recorded:
+  - a number: snapshot sampling
+  - `'all'`: higher-fidelity auto recording
+- `replayCanvasWorkerUrl` only affects snapshot encoding. It does not replace `workerUrl`.
+- In `replayCanvasSampling: 'all'` mode, some complex scenes may still fall back to snapshot recording.
+
+Recommended minimum configurations:
+
+Manual mode:
+
+```js
+datafluxRum.init({
+  // ...
+  sessionReplaySampleRate: 100,
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'manual',
+  replayCanvasQuality: 'medium'
+})
+
+datafluxRum.startSessionReplayRecording()
+```
+
+Auto snapshot mode:
+
+```js
+datafluxRum.init({
+  // ...
+  sessionReplaySampleRate: 100,
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'auto',
+  replayCanvasSampling: 2,
+  replayCanvasQuality: 'medium'
+})
+
+datafluxRum.startSessionReplayRecording()
+```
+
+Higher-fidelity auto mode:
+
+```js
+datafluxRum.init({
+  // ...
+  sessionReplaySampleRate: 100,
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'auto',
+  replayCanvasSampling: 'all',
+  replayCanvasQuality: 'medium'
+})
+
+datafluxRum.startSessionReplayRecording()
+```
+
+If CSP blocks blob workers, add:
+
+```js
+datafluxRum.init({
+  // ...
+  replayCanvasWorkerUrl: '/canvas-worker.js'
+})
+```
+
+For canvas recording, the parameters you should treat as required in practice are:
+
+- `sessionReplaySampleRate`
+- `replayCanvasEnabled`
+- `replayCanvasMode`
+
+And in `auto` mode, also explicitly set:
+
+- `replayCanvasSampling`

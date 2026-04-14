@@ -35,6 +35,7 @@ const modifiableFieldPaths = {
   actionNameAttribute: 'string',
   trackViewsManually: 'boolean',
   workerUrl: 'string',
+  replayCanvasWorkerUrl: 'string',
   compressIntakeRequests: 'boolean',
   traceType: 'string'
 }

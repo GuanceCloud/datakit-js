@@ -50,10 +50,19 @@ If you have enabled the RUM SDK [Session Replay](../replay.md) feature or added 
  worker-src blob:;
 ```
 
-Starting with SDK version `>=3.2.0`, self-hosting web worker files is supported. Add `workerUrl` in the SDK configuration to specify the hosting address. The worker file can be obtained in two ways:
+Starting with SDK version `>=3.2.0`, self-hosting web worker files is supported.
 
-1. Download from the official Guance URL: https://static.guance.com/browser-sdk/v3/worker.js
-2. Install the @cloudcare/browser-worker NPM package and include it in your build assets using a build tool (refer to the documentation for [Webpack 4](https://v4.webpack.js.org/loaders/file-loader/), [Webpack 5](https://webpack.js.org/guides/asset-modules/#url-assets), [Vite](https://vitejs.dev/guide/assets.html#new-url-url-import-meta-url), and [Rollup](https://github.com/rollup/plugins/tree/master/packages/url/#readme)).
+- Use `workerUrl` for the existing deflate worker (`worker.js`)
+- Use `replayCanvasWorkerUrl` for the dedicated canvas encode worker (`canvas-worker.js`)
+
+`replayCanvasWorkerUrl` is only used for canvas snapshot encoding. It does not replace `workerUrl`, and pure command-capture frames do not use the canvas worker.
+
+The worker files can be obtained in two ways:
+
+1. Download from the official Guance URL:
+   - `https://static.guance.com/browser-sdk/v3/worker.js`
+   - `https://static.guance.com/browser-sdk/v3/canvas-worker.js`
+2. Install the @cloudcare/browser-worker NPM package and include the generated worker assets in your build output using a build tool (refer to the documentation for [Webpack 4](https://v4.webpack.js.org/loaders/file-loader/), [Webpack 5](https://webpack.js.org/guides/asset-modules/#url-assets), [Vite](https://vitejs.dev/guide/assets.html#new-url-url-import-meta-url), and [Rollup](https://github.com/rollup/plugins/tree/master/packages/url/#readme)).
 
 Prerequisites:
 

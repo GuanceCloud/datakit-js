@@ -20,6 +20,7 @@ describe('replay/record/canvasObserver', () => {
   })
 
   it('should emit a canvas mutation when snapshot succeeds', async () => {
+    const onMutationDebug = jasmine.createSpy('onMutationDebug')
     const observer = createCanvasObserver({
       configuration: {
         replayCanvasEnabled: true,
@@ -28,6 +29,7 @@ describe('replay/record/canvasObserver', () => {
         replayCanvasMaxEncodedBytes: 1000
       },
       emit,
+      onMutationDebug,
       encodeBridge: {
         encode: () =>
           Promise.resolve({
@@ -53,6 +55,14 @@ describe('replay/record/canvasObserver', () => {
         })
       })
     )
+    expect(onMutationDebug).toHaveBeenCalledWith({
+      timestamp: jasmine.any(Number),
+      canvasId: 42,
+      trigger: 'manual',
+      encodedBytesCount: 3,
+      width: 20,
+      height: 10
+    })
   })
 
   it('should not emit when canvas replay is disabled', async () => {
@@ -118,6 +128,56 @@ describe('replay/record/canvasObserver', () => {
     expect(emit).not.toHaveBeenCalled()
   })
 
+  it('should reject malformed encoded payloads before emitting a canvas mutation', async () => {
+    const onMutationDebug = jasmine.createSpy('onMutationDebug')
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      onMutationDebug,
+      encodeBridge: {
+        encode: () =>
+          Promise.resolve({
+            dataUrl: 'data:image/webp;base64,QUJD=REVG',
+            width: 20,
+            height: 10
+          }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(await observer.snapshot(canvas)).toEqual({
+      ok: false,
+      reason: 'invalid_encoded_payload'
+    })
+    expect(emit).not.toHaveBeenCalled()
+    expect(onMutationDebug).toHaveBeenCalledWith({
+      timestamp: jasmine.any(Number),
+      canvasId: 42,
+      trigger: 'manual',
+      reason: 'invalid_encoded_payload',
+      encodedBytesCount: 7,
+      width: 20,
+      height: 10,
+      diagnostics: {
+        mimeType: 'image/webp',
+        dataUrlLength: 32,
+        base64Length: 9,
+        base64Prefix: 'QUJD=REVG',
+        base64Suffix: 'QUJD=REVG',
+        firstPaddingIndex: 4,
+        firstPaddingWindow: 'QUJD=REVG',
+        invalidCharacterIndex: undefined,
+        invalidCharacterWindow: undefined,
+        hasMidstreamPadding: true
+      }
+    })
+  })
+
   it('should include encoded byte count in the emitted canvas mutation', async () => {
     const observer = createCanvasObserver({
       configuration: {
@@ -157,6 +217,71 @@ describe('replay/record/canvasObserver', () => {
         })
       })
     )
+  })
+
+  it('should emit snapshot drawImage commands with the configured target size', async () => {
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: () =>
+          Promise.resolve({
+            dataUrl: 'data:image/webp;base64,QUJD',
+            width: 20,
+            height: 10
+          }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    await observer.snapshot(canvas)
+
+    expect(emit.calls.mostRecent().args[0].data.commands[1]).toEqual(
+      jasmine.objectContaining({
+        property: 'drawImage',
+        args: [jasmine.any(Object), 0, 0, 20, 10]
+      })
+    )
+  })
+
+  it('should use the actual data url mime type for the emitted snapshot image blob', async () => {
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: () =>
+          Promise.resolve({
+            dataUrl: 'data:image/png;base64,QUJD',
+            width: 20,
+            height: 10
+          }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    await observer.snapshot(canvas)
+
+    var mutation = emit.calls.mostRecent().args[0]
+    expect(mutation.data.commands[1].args[0]).toEqual({
+      rr_type: 'ImageBitmap',
+      args: [
+        {
+          rr_type: 'Blob',
+          data: [{ rr_type: 'ArrayBuffer', base64: 'QUJD' }],
+          type: 'image/png'
+        }
+      ]
+    })
   })
 
   it('should return rejected_by_should_record_canvas when the hook blocks recording', async () => {
@@ -455,6 +580,90 @@ describe('replay/record/canvasObserver', () => {
       ok: true
     })
     expect(emit.calls.count()).toBe(2)
+  })
+
+  it('should apply adaptive encode overrides for large continuous auto snapshots only', async () => {
+    canvas.width = 600
+    canvas.height = 300
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValue(
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 510,
+          height: 255
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasQuality: 0.4,
+        replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: encode,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    await observer.snapshot(canvas, {
+      trigger: 'auto',
+      scheduler: 'continuous_snapshot'
+    })
+
+    expect(encode).toHaveBeenCalledWith(
+      canvas,
+      jasmine.objectContaining({
+        quality: 0.30000000000000004,
+        maxSize: 1088
+      })
+    )
+  })
+
+  it('should apply adaptive encode overrides on numeric auto snapshots', async () => {
+    canvas.width = 600
+    canvas.height = 300
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValue(
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 600,
+          height: 300
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasQuality: 0.4,
+        replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: encode,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    await observer.snapshot(canvas, {
+      trigger: 'auto',
+      scheduler: 'continuous_snapshot'
+    })
+
+    expect(encode).toHaveBeenCalledWith(
+      canvas,
+      jasmine.objectContaining({
+        quality: 0.30000000000000004,
+        maxSize: 1088
+      })
+    )
   })
 
   it('should keep allowing duplicate manual snapshots', async () => {

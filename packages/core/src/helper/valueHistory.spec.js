@@ -1,3 +1,4 @@
+import { ONE_MINUTE } from './tools'
 import { createValueHistory } from './valueHistory'
 
 describe('createValueHistory', () => {
@@ -63,5 +64,25 @@ describe('createValueHistory', () => {
 
     expect(valueHistory.find()).toBeUndefined()
     expect(valueHistory.findAll()).toEqual([])
+  })
+
+  it('should clear expired entries automatically', () => {
+    valueHistory.stop()
+    jasmine.clock().install()
+    try {
+      let now = 0
+      spyOn(performance, 'now').and.callFake(() => now)
+      const autoCleanupHistory = createValueHistory({ expireDelay: 100 })
+
+      autoCleanupHistory.add('value', 0).close(50)
+      now = ONE_MINUTE + 200
+      jasmine.clock().tick(ONE_MINUTE + 200)
+
+      expect(autoCleanupHistory.find(50, { returnInactive: true })).toBeUndefined()
+
+      autoCleanupHistory.stop()
+    } finally {
+      jasmine.clock().uninstall()
+    }
   })
 })

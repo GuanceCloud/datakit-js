@@ -45,7 +45,9 @@
         "release": "scripts/cli release",
         "version": "scripts/cli version",
         "test": "npm run test:unit:watch",
-        "test:unit": "karma start ./test/unit/karma.local.conf.js",
+        "test:unit": "node ./scripts/test-unit.js",
+        "test:unit:file": "node ./scripts/test-unit.js --spec",
+        "test:unit:grep": "node ./scripts/test-unit.js --grep",
         "test:unit:watch": "npm run test:unit --no-single-run"
     },
     "keywords": [

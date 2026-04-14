@@ -49,6 +49,15 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       getLastAutoCanvasSnapshotResultForDebug: function () {
         return undefined
       },
+      getAutoCanvasSnapshotDebugHistoryForDebug: function () {
+        return undefined
+      },
+      getLastCanvasMutationForDebug: function () {
+        return undefined
+      },
+      getCanvasMutationHistoryForDebug: function () {
+        return undefined
+      },
       getLastReplaySegmentFlushForDebug: function () {
         return undefined
       },
@@ -89,6 +98,15 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     return undefined
   }
   var getLastAutoCanvasSnapshotResultForDebug = function () {
+    return undefined
+  }
+  var getAutoCanvasSnapshotDebugHistoryForDebug = function () {
+    return undefined
+  }
+  var getLastCanvasMutationForDebug = function () {
+    return undefined
+  }
+  var getCanvasMutationHistoryForDebug = function () {
     return undefined
   }
   var getLastReplaySegmentFlushForDebug = function () {
@@ -202,6 +220,12 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
               recordingImpl.getSerializedNodeIdForDebug || noop,
             getLastAutoCanvasSnapshotResultForDebug:
               recordingImpl.getLastAutoCanvasSnapshotResultForDebug || noop,
+            getAutoCanvasSnapshotDebugHistoryForDebug:
+              recordingImpl.getAutoCanvasSnapshotDebugHistoryForDebug || noop,
+            getLastCanvasMutationForDebug:
+              recordingImpl.getLastCanvasMutationForDebug || noop,
+            getCanvasMutationHistoryForDebug:
+              recordingImpl.getCanvasMutationHistoryForDebug || noop,
             getLastReplaySegmentFlushForDebug:
               recordingImpl.getLastReplaySegmentFlushForDebug || noop,
             getReplaySegmentFlushHistoryForDebug:
@@ -249,6 +273,24 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
         }
         return undefined
       }
+      getAutoCanvasSnapshotDebugHistoryForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getAutoCanvasSnapshotDebugHistoryForDebug()
+        }
+        return undefined
+      }
+      getLastCanvasMutationForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getLastCanvasMutationForDebug()
+        }
+        return undefined
+      }
+      getCanvasMutationHistoryForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getCanvasMutationHistoryForDebug()
+        }
+        return undefined
+      }
       getLastReplaySegmentFlushForDebug = function () {
         if (state.status === RecorderStatus.Started) {
           return state.getLastReplaySegmentFlushForDebug()
@@ -285,6 +327,15 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     },
     getLastAutoCanvasSnapshotResultForDebug: function () {
       return getLastAutoCanvasSnapshotResultForDebug()
+    },
+    getAutoCanvasSnapshotDebugHistoryForDebug: function () {
+      return getAutoCanvasSnapshotDebugHistoryForDebug()
+    },
+    getLastCanvasMutationForDebug: function () {
+      return getLastCanvasMutationForDebug()
+    },
+    getCanvasMutationHistoryForDebug: function () {
+      return getCanvasMutationHistoryForDebug()
     },
     getReplaySegmentFlushHistoryForDebug: function () {
       return getReplaySegmentFlushHistoryForDebug()

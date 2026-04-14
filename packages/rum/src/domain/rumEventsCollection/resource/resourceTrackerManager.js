@@ -1,9 +1,10 @@
-import { UUID, assign, deepClone } from '@cloudcare/browser-core'
+import { UUID, assign, deepClone, addTelemetryError } from '@cloudcare/browser-core'
 
 var RESOURCE_TRACKER_HEADER = 'x-rum-resource-id'
 var RESOURCE_TRACKER_TIMEOUT_MS = 30 * 1000
 var RESOURCE_TRACKER_RETENTION_MS = 60 * 1000
 var RESOURCE_TRACKER_ORPHAN_TTL_MS = 5 * 60 * 1000
+var DEBUG_CLONE_MAX_DEPTH = 8
 
 export function createResourceTrackerManager() {
   var trackers = new Map()
@@ -113,7 +114,7 @@ export function createResourceTrackerManager() {
   }
 
   function flushTracker(tracker, status) {
-    if (!flushTrackedResource || tracker.flushed || !tracker.rawResourceEvent) {
+    if (tracker.flushed || !tracker.rawResourceEvent) {
       tracker.status = status
       return
     }
@@ -121,12 +122,28 @@ export function createResourceTrackerManager() {
     clearTrackerTimeout(tracker)
     tracker.flushed = true
     tracker.status = status
-    flushTrackedResource({
-      startTime: tracker.startTime,
-      rawRumEvent: tracker.rawResourceEvent,
-      customerContext: assign({}, tracker.context),
-      domainContext: tracker.domainContext
-    })
+
+    if (!flushTrackedResource) {
+      scheduleTrackerClear(tracker)
+      return
+    }
+
+    try {
+      flushTrackedResource({
+        startTime: tracker.startTime,
+        rawRumEvent: tracker.rawResourceEvent,
+        customerContext: assign({}, tracker.context),
+        domainContext: tracker.domainContext
+      })
+    } catch (error) {
+      addTelemetryError(error)
+    } finally {
+      scheduleTrackerClear(tracker)
+    }
+  }
+
+  function scheduleTrackerClear(tracker) {
+    clearTrackerTimeout(tracker)
     tracker.clearTimeoutId = setTimeout(function () {
       tracker.status = 'cleared'
       trackers.delete(tracker.id)
@@ -178,9 +195,41 @@ function cloneTrackerSnapshot(tracker) {
     context: deepClone(tracker.context),
     resource: tracker.resource ? assign({}, tracker.resource) : undefined,
     rawRumEvent: tracker.rawResourceEvent
-      ? deepClone(tracker.rawResourceEvent)
+      ? cloneDebugRawRumEvent(tracker.rawResourceEvent)
       : undefined
   }
+}
+
+function cloneDebugRawRumEvent(rawRumEvent) {
+  var clonedEvent = {}
+  for (var key in rawRumEvent) {
+    if (Object.prototype.hasOwnProperty.call(rawRumEvent, key)) {
+      clonedEvent[key] = cloneDebugObject(rawRumEvent[key], DEBUG_CLONE_MAX_DEPTH)
+    }
+  }
+  return clonedEvent
+}
+
+function cloneDebugObject(value, depth) {
+  if (!value || typeof value !== 'object' || depth < 0) {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    var clonedArray = []
+    for (var i = 0; i < value.length; i += 1) {
+      clonedArray.push(cloneDebugObject(value[i], depth - 1))
+    }
+    return clonedArray
+  }
+
+  var clonedObject = {}
+  for (var key in value) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      clonedObject[key] = cloneDebugObject(value[key], depth - 1)
+    }
+  }
+  return clonedObject
 }
 
 function getHeaderValue(headers, key) {

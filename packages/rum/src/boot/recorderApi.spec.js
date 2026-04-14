@@ -62,6 +62,18 @@ describe('recorderApi', () => {
         status: 'completed',
         selectedCanvasCount: 1
       })
+    const getAutoCanvasSnapshotDebugHistoryForDebug = jasmine
+      .createSpy('getAutoCanvasSnapshotDebugHistoryForDebug')
+      .and.returnValue([{ status: 'completed', selectedCanvasCount: 1 }])
+    const getLastCanvasMutationForDebug = jasmine
+      .createSpy('getLastCanvasMutationForDebug')
+      .and.returnValue({
+        canvasId: 42,
+        encodedBytesCount: 2048
+      })
+    const getCanvasMutationHistoryForDebug = jasmine
+      .createSpy('getCanvasMutationHistoryForDebug')
+      .and.returnValue([{ canvasId: 42, encodedBytesCount: 2048 }])
     const getLastReplaySegmentFlushForDebug = jasmine
       .createSpy('getLastReplaySegmentFlushForDebug')
       .and.returnValue({
@@ -98,6 +110,9 @@ describe('recorderApi', () => {
         snapshotCanvas,
         getSerializedNodeIdForDebug,
         getLastAutoCanvasSnapshotResultForDebug,
+        getAutoCanvasSnapshotDebugHistoryForDebug,
+        getLastCanvasMutationForDebug,
+        getCanvasMutationHistoryForDebug,
         getLastReplaySegmentFlushForDebug,
         getReplaySegmentFlushHistoryForDebug,
         getReplayPerformanceForDebug
@@ -146,6 +161,19 @@ describe('recorderApi', () => {
       selectedCanvasCount: 1
     })
     expect(getLastAutoCanvasSnapshotResultForDebug).toHaveBeenCalled()
+    expect(recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+      { status: 'completed', selectedCanvasCount: 1 }
+    ])
+    expect(getAutoCanvasSnapshotDebugHistoryForDebug).toHaveBeenCalled()
+    expect(recorderApi.getLastCanvasMutationForDebug()).toEqual({
+      canvasId: 42,
+      encodedBytesCount: 2048
+    })
+    expect(getLastCanvasMutationForDebug).toHaveBeenCalled()
+    expect(recorderApi.getCanvasMutationHistoryForDebug()).toEqual([
+      { canvasId: 42, encodedBytesCount: 2048 }
+    ])
+    expect(getCanvasMutationHistoryForDebug).toHaveBeenCalled()
     expect(recorderApi.getLastReplaySegmentFlushForDebug()).toEqual({
       creationReason: 'init',
       flushReason: 'segment_duration_limit',
@@ -190,6 +218,12 @@ describe('recorderApi', () => {
           .createSpy('getSerializedNodeIdForDebug'),
         getLastAutoCanvasSnapshotResultForDebug: jasmine
           .createSpy('getLastAutoCanvasSnapshotResultForDebug'),
+        getAutoCanvasSnapshotDebugHistoryForDebug: jasmine
+          .createSpy('getAutoCanvasSnapshotDebugHistoryForDebug'),
+        getLastCanvasMutationForDebug: jasmine
+          .createSpy('getLastCanvasMutationForDebug'),
+        getCanvasMutationHistoryForDebug: jasmine
+          .createSpy('getCanvasMutationHistoryForDebug'),
         getLastReplaySegmentFlushForDebug: jasmine
           .createSpy('getLastReplaySegmentFlushForDebug'),
         getReplaySegmentFlushHistoryForDebug: jasmine
@@ -235,6 +269,9 @@ describe('recorderApi', () => {
       recorderApi.getSerializedNodeIdForDebug(document.createElement('canvas'))
     ).toBeUndefined()
     expect(recorderApi.getLastAutoCanvasSnapshotResultForDebug()).toBeUndefined()
+    expect(recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug()).toBeUndefined()
+    expect(recorderApi.getLastCanvasMutationForDebug()).toBeUndefined()
+    expect(recorderApi.getCanvasMutationHistoryForDebug()).toBeUndefined()
     expect(recorderApi.getLastReplaySegmentFlushForDebug()).toBeUndefined()
     expect(recorderApi.getReplaySegmentFlushHistoryForDebug()).toBeUndefined()
     expect(recorderApi.getReplayPerformanceForDebug()).toBeUndefined()

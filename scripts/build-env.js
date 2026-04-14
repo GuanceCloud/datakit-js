@@ -32,6 +32,13 @@ const buildEnvFactories = {
     return readFileSync(path.join(workerPath, 'bundle/worker.js'), {
       encoding: 'utf-8'
     })
+  },
+  CANVAS_WORKER_STRING: () => {
+    const workerPath = path.join(__dirname, '../packages/worker')
+    command`npm run build`.withCurrentWorkingDirectory(workerPath).run()
+    return readFileSync(path.join(workerPath, 'bundle/canvas-worker.js'), {
+      encoding: 'utf-8'
+    })
   }
 }
 

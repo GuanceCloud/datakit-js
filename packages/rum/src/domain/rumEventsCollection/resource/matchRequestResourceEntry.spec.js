@@ -1,4 +1,4 @@
-import { matchRequestResourceEntry } from './matchRequestResourceEntry'
+import { createRequestResourceEntryMatcher } from './matchRequestResourceEntry'
 
 describe('matchRequestResourceEntry', () => {
   let originalGetEntriesByName
@@ -12,6 +12,7 @@ describe('matchRequestResourceEntry', () => {
   })
 
   it('should return the closest matching resource entry and mark it as matched', () => {
+    const matcher = createRequestResourceEntryMatcher()
     const firstEntry = {
       startTime: 11,
       duration: 20,
@@ -50,11 +51,12 @@ describe('matchRequestResourceEntry', () => {
       duration: 25
     }
 
-    expect(matchRequestResourceEntry(request)).toEqual({ id: 'first' })
-    expect(matchRequestResourceEntry(request)).toEqual({ id: 'second' })
+    expect(matcher.matchRequestResourceEntry(request)).toEqual({ id: 'first' })
+    expect(matcher.matchRequestResourceEntry(request)).toEqual({ id: 'second' })
   })
 
   it('should ignore missing or invalid performance entries', () => {
+    const matcher = createRequestResourceEntryMatcher()
     performance.getEntriesByName = jasmine
       .createSpy('getEntriesByName')
       .and.returnValue([
@@ -65,7 +67,7 @@ describe('matchRequestResourceEntry', () => {
       ])
 
     expect(
-      matchRequestResourceEntry({
+      matcher.matchRequestResourceEntry({
         url: 'https://example.com/invalid.js',
         startClocks: { relative: 10 },
         duration: 10
@@ -74,7 +76,7 @@ describe('matchRequestResourceEntry', () => {
 
     performance.getEntriesByName.and.returnValue([])
     expect(
-      matchRequestResourceEntry({
+      matcher.matchRequestResourceEntry({
         url: 'https://example.com/empty.js',
         startClocks: { relative: 10 },
         duration: 10
@@ -83,6 +85,7 @@ describe('matchRequestResourceEntry', () => {
   })
 
   it('should match entries that are within the one-millisecond error margin', () => {
+    const matcher = createRequestResourceEntryMatcher()
     const edgeEntry = {
       startTime: 9,
       duration: 12,
@@ -101,11 +104,45 @@ describe('matchRequestResourceEntry', () => {
       .and.returnValue([edgeEntry])
 
     expect(
-      matchRequestResourceEntry({
+      matcher.matchRequestResourceEntry({
         url: 'https://example.com/edge.js',
         startClocks: { relative: 10 },
         duration: 10
       })
     ).toEqual({ id: 'edge' })
+  })
+
+  it('should keep matched entry state isolated per matcher instance', () => {
+    const firstMatcher = createRequestResourceEntryMatcher()
+    const secondMatcher = createRequestResourceEntryMatcher()
+    const entry = {
+      startTime: 11,
+      duration: 20,
+      fetchStart: 11,
+      domainLookupStart: 11,
+      domainLookupEnd: 12,
+      connectStart: 12,
+      connectEnd: 13,
+      requestStart: 13,
+      responseStart: 20,
+      responseEnd: 30,
+      toJSON: jasmine.createSpy('toJSON').and.returnValue({ id: 'shared' })
+    }
+    performance.getEntriesByName = jasmine
+      .createSpy('getEntriesByName')
+      .and.returnValue([entry])
+
+    const request = {
+      url: 'https://example.com/shared.js',
+      startClocks: { relative: 12 },
+      duration: 25
+    }
+
+    expect(firstMatcher.matchRequestResourceEntry(request)).toEqual({
+      id: 'shared'
+    })
+    expect(secondMatcher.matchRequestResourceEntry(request)).toEqual({
+      id: 'shared'
+    })
   })
 })

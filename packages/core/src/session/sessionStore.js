@@ -160,7 +160,10 @@ export function startSessionStore(
     processSessionStoreOperations(
       {
         process: function (sessionState) {
-          if (isSessionInNotStartedState(sessionState)) {
+          if (
+            isSessionInNotStartedState(sessionState) ||
+            isSessionInExpiredState(sessionState)
+          ) {
             return getExpiredSessionState()
           }
         },

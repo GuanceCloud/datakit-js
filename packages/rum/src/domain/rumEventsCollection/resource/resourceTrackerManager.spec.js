@@ -241,4 +241,194 @@ describe('resourceTrackerManager', () => {
 
     expect(manager.getResource(trackerId)).toBeUndefined()
   })
+
+  it('should clear flushed trackers after retention even when no flush handler is configured', () => {
+    const manager = createResourceTrackerManager()
+    const trackerId = manager.createTrackerId()
+
+    manager.trackRequestResource(trackerId, {
+      startTime: 1,
+      rawRumEvent: {
+        type: 'resource',
+        resource: {
+          method: 'GET',
+          status: 200,
+          url: 'https://example.com/no-handler.css'
+        }
+      },
+      domainContext: {}
+    })
+
+    manager.finishResource(trackerId)
+
+    expect(manager.getResource(trackerId)).toEqual(
+      jasmine.objectContaining({
+        status: 'flushed'
+      })
+    )
+
+    jasmine.clock().tick(60 * 1000)
+
+    expect(manager.getResource(trackerId)).toBeUndefined()
+  })
+
+  it('should return an isolated debug snapshot without exposing the internal raw event reference', () => {
+    const manager = createResourceTrackerManager()
+    const trackerId = manager.createTrackerId()
+
+    manager.trackRequestResource(trackerId, {
+      startTime: 1,
+      rawRumEvent: {
+        type: 'resource',
+        resource: {
+          method: 'GET',
+          status: 200,
+          url: 'https://example.com/debug.css',
+          urlQuery: {
+            trace: '1'
+          }
+        },
+        _gc: {
+          traceId: 'trace-id'
+        }
+      },
+      domainContext: {}
+    })
+
+    const snapshot = manager.getResource(trackerId)
+    snapshot.rawRumEvent.resource.url = 'https://example.com/mutated.css'
+    snapshot.rawRumEvent.resource.urlQuery.trace = '0'
+    snapshot.rawRumEvent._gc.traceId = 'mutated-trace-id'
+
+    expect(manager.getResource(trackerId)).toEqual(
+      jasmine.objectContaining({
+        rawRumEvent: jasmine.objectContaining({
+          resource: jasmine.objectContaining({
+            url: 'https://example.com/debug.css',
+            urlQuery: {
+              trace: '1'
+            }
+          }),
+          _gc: {
+            traceId: 'trace-id'
+          }
+        })
+      })
+    )
+  })
+
+  it('should clear flushed trackers after retention even when flush handler throws', () => {
+    const manager = createResourceTrackerManager()
+    const trackerId = manager.createTrackerId()
+
+    manager.setFlushTrackedResource(function () {
+      throw new Error('flush failed')
+    })
+
+    manager.trackRequestResource(trackerId, {
+      startTime: 1,
+      rawRumEvent: {
+        type: 'resource',
+        resource: {
+          method: 'GET',
+          status: 200,
+          url: 'https://example.com/throw.css'
+        }
+      },
+      domainContext: {}
+    })
+
+    expect(function () {
+      manager.finishResource(trackerId)
+    }).not.toThrow()
+
+    expect(manager.getResource(trackerId)).toEqual(
+      jasmine.objectContaining({
+        status: 'flushed'
+      })
+    )
+
+    jasmine.clock().tick(60 * 1000)
+
+    expect(manager.getResource(trackerId)).toBeUndefined()
+  })
+
+  it('should isolate additional nested debug fields beyond resource and _gc', () => {
+    const manager = createResourceTrackerManager()
+    const trackerId = manager.createTrackerId()
+
+    manager.trackRequestResource(trackerId, {
+      startTime: 1,
+      rawRumEvent: {
+        type: 'resource',
+        resource: {
+          method: 'GET',
+          status: 200,
+          url: 'https://example.com/extra.css'
+        },
+        extra: {
+          nested: {
+            value: 'original'
+          }
+        }
+      },
+      domainContext: {}
+    })
+
+    const snapshot = manager.getResource(trackerId)
+    snapshot.rawRumEvent.extra.nested.value = 'mutated'
+
+    expect(manager.getResource(trackerId)).toEqual(
+      jasmine.objectContaining({
+        rawRumEvent: jasmine.objectContaining({
+          extra: {
+            nested: {
+              value: 'original'
+            }
+          }
+        })
+      })
+    )
+  })
+
+  it('should isolate deep nested debug fields beyond two levels', () => {
+    const manager = createResourceTrackerManager()
+    const trackerId = manager.createTrackerId()
+
+    manager.trackRequestResource(trackerId, {
+      startTime: 1,
+      rawRumEvent: {
+        type: 'resource',
+        deep: {
+          level1: {
+            level2: {
+              level3: {
+                value: 'original'
+              }
+            }
+          }
+        }
+      },
+      domainContext: {}
+    })
+
+    const snapshot = manager.getResource(trackerId)
+    snapshot.rawRumEvent.deep.level1.level2.level3.value = 'mutated'
+
+    expect(manager.getResource(trackerId)).toEqual(
+      jasmine.objectContaining({
+        rawRumEvent: jasmine.objectContaining({
+          deep: {
+            level1: {
+              level2: {
+                level3: {
+                  value: 'original'
+                }
+              }
+            }
+          }
+        })
+      })
+    )
+  })
 })

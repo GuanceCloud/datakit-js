@@ -129,6 +129,11 @@ export function startRecording(
   var getSerializedNodeIdForDebug = _record.getSerializedNodeIdForDebug
   var getLastAutoCanvasSnapshotResultForDebug =
     _record.getLastAutoCanvasSnapshotResultForDebug
+  var getAutoCanvasSnapshotDebugHistoryForDebug =
+    _record.getAutoCanvasSnapshotDebugHistoryForDebug
+  var getLastCanvasMutationForDebug = _record.getLastCanvasMutationForDebug
+  var getCanvasMutationHistoryForDebug =
+    _record.getCanvasMutationHistoryForDebug
   var getReplayPerformanceForDebug = function () {
     return cloneReplayPerformanceForDebug(
       _record.getReplayPerformanceForDebug
@@ -176,6 +181,10 @@ export function startRecording(
     getSerializedNodeIdForDebug: getSerializedNodeIdForDebug,
     getLastAutoCanvasSnapshotResultForDebug:
       getLastAutoCanvasSnapshotResultForDebug,
+    getAutoCanvasSnapshotDebugHistoryForDebug:
+      getAutoCanvasSnapshotDebugHistoryForDebug,
+    getLastCanvasMutationForDebug: getLastCanvasMutationForDebug,
+    getCanvasMutationHistoryForDebug: getCanvasMutationHistoryForDebug,
     getLastReplaySegmentFlushForDebug: getLastReplaySegmentFlushForDebug,
     getReplaySegmentFlushHistoryForDebug:
       getReplaySegmentFlushHistoryForDebug,

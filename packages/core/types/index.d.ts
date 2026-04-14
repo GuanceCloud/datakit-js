@@ -200,6 +200,12 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    */
   workerUrl?: string
   /**
+   * Canvas snapshot encoding is done in a dedicated canvas worker thread. By
+   * default it uses an inlined blob worker, or you can host a separate
+   * canvas-worker bundle yourself for stricter CSP/security environments.
+   */
+  replayCanvasWorkerUrl?: string
+  /**
    * Compress RUM data request content to reduce bandwidth usage when sending large amounts of data. Compression is done in the Worker thread.
    */
   compressIntakeRequests?: boolean | undefined
@@ -246,10 +252,17 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    */
   replayCanvasEnabled?: boolean | undefined
   /**
-   * Canvas replay recording mode. `manual` records only when `snapshotCanvas()` is called.
-   * `auto` performs low-frequency automatic snapshots.
+   * Canvas replay recording mode. Defaults to `auto`.
+   * `manual` records only when `snapshotCanvas()` is called.
+   * `auto` performs automatic canvas recording.
    */
   replayCanvasMode?: 'manual' | 'auto' | undefined
+  /**
+   * Canvas replay sampling strategy. A number means snapshot sampling at the configured rate.
+   * `'all'` enables 2D command capture, with automatic snapshot fallback for
+   * unsupported replay-fidelity cases. Defaults to a numeric sampling mode.
+   */
+  replayCanvasSampling?: 'all' | number | undefined
   /**
    * Encoded image mime type used for canvas snapshots.
    */

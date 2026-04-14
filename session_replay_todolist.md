@@ -1,344 +1,386 @@
-# Session Replay Todo List
+# Session Replay Canvas Todo List
 
-## Background
+## Final Goal
 
-当前 session replay 在大 DOM 场景下的主要风险点有两类：
+canvas replay 的最终目标保持不变：
 
-1. SDK 自身的 mutation 序列化链可能在极端场景下放大主线程开销。
-2. 页面和浏览器本身的布局/重排成本很高，容易和 SDK 开销混在一起，导致问题边界不清。
+- **效果不能比 Sentry 差**
+- **性能要优于 Sentry**
+- **必须同时支持 `sampling.canvas = number | 'all'`**
+- **默认是 `sampling.canvas = number`**
+- **`number -> snapshot`**
+- **`'all' -> command capture`**
 
-前一轮基于“节点预算”的保护已经回退。后续方案改为优先推进“时间片化 mutation 序列化”，目标是限制单次 mutation flush 对主线程的连续占用时长，而不是靠静态节点数阈值硬截断。
+## Source Baseline
 
-## Goals
+这份 todo 基于已阅读源码：
 
-- 让大 DOM mutation 不再以单个长任务的形式持续占住主线程。
-- 保持现有 replay 协议和消费端语义不变。
-- 不再引入 full snapshot fallback。
-- 先控制 `childList add` 场景，再评估是否扩展到更多 mutation 类型。
+- [rrweb canvas-manager.ts](/tmp/rrweb/packages/rrweb/src/record/observers/canvas/canvas-manager.ts)
+- [rrweb 2d.ts](/tmp/rrweb/packages/rrweb/src/record/observers/canvas/2d.ts)
+- [rrweb serialize-args.ts](/tmp/rrweb/packages/rrweb/src/record/observers/canvas/serialize-args.ts)
+- [Sentry replay-canvas canvas.ts](/tmp/sentry-javascript-codex/packages/replay-canvas/src/canvas.ts)
 
-## Non-Goals
+## What We Confirmed
 
-- 不在第一版里改 full snapshot 序列化。
-- 不在第一版里引入 worker 化 DOM 序列化。
-- 不在第一版里改 replay event schema。
-- 不在第一版里追求极端场景下的 100% 回放完整性。
+1. rrweb 有两条 canvas 路线
+   - `sampling: 'all'` -> command capture
+   - `sampling: number` -> snapshot sampling
 
-## Current Findings
+2. Sentry 外层 integration 当前默认更像 rrweb 的 `sampling:number`
+   - `low -> 1`
+   - `medium -> 2`
+   - `high -> 4`
 
-### Confirmed
+3. rrweb command capture 的关键不是“每次调用立即发”
+   - `CanvasRenderingContext2D.prototype` patch
+   - 异步收集
+   - rAF flush
 
-- `deep 2500` 这种极深单链场景，浏览器自身的布局/重排已足够成为主瓶颈，不能再作为 SDK 主验证场景。
-- `dashboard 2500` 这种更接近 SPA 路由切换的场景里，SDK 有额外开销，但目前 trace 里主峰仍是浏览器布局链，不是 `dataflux-rum.js`。
-- hidden 节点不再默认读取 `getBoundingClientRect()` 的优化已保留，可继续作为现状基线。
+4. 我们如果只继续修 snapshot continuous，最多只能逼近 Sentry 当前外层 integration
+   - 做不到超越 rrweb command capture 这条上限
 
-### Open Questions
+## Strategic Decision
 
-- `childList add` 时间片化后，后续 attribute/text mutation 是否需要延后对齐，避免顺序错乱。
-- 一个新增根节点如果跨多个时间片才完成，最稳妥的 emit 时机应该是“根节点完成后统一 emit”，还是允许部分展开后逐步 emit。
+后续主路线是明确的 rrweb mode split：
 
-## Proposed Design
+- **`sampling.canvas = number` 走 snapshot**
+- **`sampling.canvas = 'all'` 走 rrweb-compatible 2D command capture**
 
-### Design Principles
+这些都不再作为产品终态：
 
-- 限制的是单次主线程连续占用时长，不再把静态节点预算作为长期主方案。
-- 对外 replay 协议、事件类型和消费端语义保持不变。
-- 内部允许分片推进，但对外仍坚持“完整 add 再可见”。
-- 第一版只收口 `childList add`，不同时重写全部 mutation 类型。
-- 优先保证正确性和可回退性，再逐步追求吞吐。
+- 继续调 `continuous_snapshot`
+- 把 `continuous_snapshot` 当正式对外模式
+- 继续把 scheduler 调优当最终方案
 
-### Scope Of Phase 1
+## Product Positioning
 
-第一版只覆盖下面这条链：
+### Product Model
 
-- `MutationObserver` 收到 `childList` 的 `addedNodes`
-- 大子树序列化改成显式任务队列 + 时间片推进
-- 根节点完整序列化完成后，再一次性 emit `add`
+- 默认档位：
+  - `sampling.canvas = number`
+  - 走 snapshot sampling
+- 高保真档位：
+  - `sampling.canvas = 'all'`
+  - 走 command capture
 
-第一版暂时不改：
+### Snapshot Role
 
-- `characterData`
-- `attributes`
-- `removes`
-- full snapshot 序列化
-- replay 事件协议
+- 在 `sampling:number` 下，snapshot 是主路径
+- 在 `sampling:'all'` 下，snapshot 是局部 fallback
 
-### Internal Task Model
+fallback 只用于：
 
-内部新增一层 pending root task，避免继续把“采集”和“提交”绑死在同一个同步调用栈里。
+- 初始校准
+- command drift 修正
+- rrweb 2D replay 当前无法可靠还原的复杂 canvas 对象
+- recorder 明确失败
+- 复杂 `drawImage` / cross-origin / video / WebGL 场景
 
-建议结构：
+## Current Implementation Status
 
-```js
-{
-  generation,
-  rootNode,
-  rootSerializedNode,
-  rootSerializedNodeId,
-  parentId,
-  nextId,
-  status: 'pending' | 'serializing' | 'completed' | 'cancelled',
-  stack,
-  pendingAttributeMutations,
-  pendingTextMutations,
-  pendingRemoveMutations
-}
-```
+### Already Landed
 
-核心约束：
-
-- 一个新增根节点对应一个 task
-- task 内部维护显式 `stack`
-- task 可以跨多个时间片推进
-- 只有 `completed` 才允许对外 emit
-
-### Scheduler
-
-引入内部时间片调度器，初始常量：
-
-- `MUTATION_SERIALIZATION_SLICE_MS = 4`
-
-调度规则：
-
-1. `childList add` 到来时创建 pending root tasks。
-2. 如果当前没有 active scheduler，立即排一轮消费。
-3. 每轮消费最多执行 `4ms`。
-4. 超时后用 `setTimeout(..., 0)` 继续下一轮。
-5. generation 变化后，旧任务全部失效。
-
-### Stable Identity Before Expansion
-
-为避免跨时间片后 `parentId` / `nextId` 漂移，root task 创建时只做一层很轻的同步工作：
-
-- 计算 `parentId`
-- 计算 `nextId`
-- 为 root 分配稳定序列化 id
-
-第一版不要求在这一阶段同步展开整棵子树，只要求：
-
-- 根级引用关系稳定
-- 后续 task 推进时不再重新计算这些根级引用
-
-### Emit Strategy
-
-第一版固定采用：
-
-- 根节点完整序列化后统一 emit
-
-不采用：
-
-- 半棵树先 emit，后续再补 childNodes
-
-这样做的原因是：
-
-- 时序最稳
-- 对现有 replay 消费端影响最小
-- 更容易和后续 `attributes` / `text` 对齐
-
-## Correctness Strategy
-
-### Attribute / Text Reordering
-
-如果某个 attribute/text mutation 命中的节点属于 pending root：
-
-- 不立刻 emit
-- 先缓存在对应 task 的 pending 队列
-- 等 root add emit 后，再按原顺序补发
-
-目标是避免：
-
-- 节点还没出现，属性先改了
-- 文本先变了，但节点树还没建立
-
-### Remove Cancels Pending Root
-
-如果一个 pending root 在 emit 前就被移除：
-
-- 直接将 task 标记为 `cancelled`
-- 清掉该 task 相关的 pending attribute/text
-- 不再发这条 root add
-
-目标是避免“节点已经被删，后面又补出一棵旧树”。
-
-### Generation Isolation
-
-所有 pending task 都必须带 `generation`。
-
-遇到下面场景时，直接推进 generation：
-
-- `takeSubsequentFullSnapshot()`
-- recorder `stop()`
-- session replay recorder 重新启动
-
-旧 generation 的 task 即使后续异步完成，也不能再：
-
-- 写回当前状态
-- emit add
-- emit pending attribute/text/remove
-
-### Order Guarantees
-
-第一版要守住这几个顺序约束：
-
-1. 同一批新增根节点仍按当前 topological 排序进入 task 队列。
-2. 同一个 root task 内部仍按 DOM 顺序展开。
-3. root add 必须早于它的 pending attribute/text。
-4. 被取消的 root 不能在 remove 之后再次出现。
-
-## Implementation Outline
-
-### Step 1
-
-在 `mutationObserver.js` 抽出一层只负责 `childList add` 的任务构建逻辑：
-
-- 收集新增根节点
-- 生成 pending root tasks
-- 启动内部 scheduler
-
-### Step 2
-
-在 `serialize.js` 新增仅供 mutation 使用的显式队列遍历器：
-
-- 不走递归
-- 支持分次推进
-- 支持返回 `completed / pending`
-
-### Step 3
-
-在 `mutationObserver.js` 增加 pending mutation 缓存逻辑：
-
-- attribute
-- characterData
-- remove
-
-只要命中 pending root 子树，就挂起而不是立刻 emit。
-
-### Step 4
-
-在 `record.js` 接 generation reset：
-
-- full snapshot
-- stop
-- restart
-
-## Rollback Safety
-
-为了保证这条改动可控，第一版需要保留清晰的回退边界：
-
-- 新逻辑仅包裹 `childList add`
-- 其余 mutation 继续走原同步路径
-- 内部 scheduler 只在检测到 pending root tasks 时启用
-- 如验证失败，可整体回退到同步 `childList add` 路径，不影响 canvas / segment / session 主逻辑
-
-## Success Criteria
-
-可以认为 Phase 1 成功的标志是：
-
-- `dashboard 2500` 场景下，SDK 不再形成明显单个长任务主峰
-- 不出现 add/attribute/text 顺序错乱
-- 不出现 full snapshot 与 pending task 污染
-- 不引入新的 public API 和配置项
-- demo 和真实业务页中，页面可交互性优于当前同步 mutation 序列化路径
-
-## Phase Plan
-
-## Phase 1: Baseline And Instrumentation
-
-- [ ] 固化一个更接近真实路由切换的 demo 大 DOM 场景，避免继续依赖极深单链。
-- [ ] 建立 replay on/off 的 trace 对照基线。
-- [ ] 在本地记录以下指标，先不对外暴露：
-  - 单轮 childList mutation 处理耗时
-  - 单轮新增根节点数量
-  - 单轮实际展开的任务数量
-  - 单轮切片次数
-
-## Phase 2: Time-Sliced ChildList Add Serialization
-
-- [ ] 将 `processChildListMutations()` 里的新增子树序列化从同步递归/同步整批处理，改成显式任务队列。
-- [ ] 只时间片化 `childList add` 路径。
-- [ ] `removes`、`attributes`、`characterData` 第一版仍保持现有同步语义。
-- [ ] 引入内部时间片常量，建议起始值：
-  - `MUTATION_SERIALIZATION_SLICE_MS = 4`
-- [ ] 使用显式队列保存待展开节点，不使用递归。
-- [ ] 保持现有 topological 排序逻辑，避免 parent/next sibling 引用错乱。
-- [ ] 第一版按“根节点完成后再 emit add mutation”实现，优先保证正确性。
-
-## Phase 3: Correctness Hardening
-
-- [ ] 验证 add/remove 顺序在跨时间片时不乱。
-- [ ] 验证 attribute/text mutation 不会早于对应 add 被消费。
-- [ ] 验证 shadow root、privacy hidden、ignore 节点在新路径下语义一致。
-- [ ] 验证 `takeSubsequentFullSnapshot()` 与时间片中的 pending add 不会互相污染。
-
-## Phase 4: Performance Validation
-
-- [ ] 在 demo 的 dashboard 场景下，对比 replay on/off 的 trace：
-  - 总长任务数
-  - 最长 task
-  - `dataflux-rum.js` 占比
-  - `Layout / UpdateLayoutTree` 占比
-- [ ] 对比时间片化前后的 UX：
-  - 页面是否仍然长时间卡死
-  - 是否从“单个长任务”变成“多个小任务”
-- [ ] 如有必要，再考虑增加内部 telemetry 或开发态 debug。
-
-## Test Plan
-
-### Unit Tests
-
-- [ ] 宽树场景：大量 sibling roots 的 childList add 不应出现长链递归依赖。
-- [ ] 深树场景：显式队列遍历不应爆栈。
-- [ ] 顺序场景：add 后紧跟 attribute/text mutation，最终输出顺序必须正确。
-- [ ] reset/full snapshot 场景：pending mutation tasks 不应污染 subsequent full snapshot。
-
-### Required Boundary Tests
-
-下面这些测试不是可选增强，而是第一版必须具备的边界验证：
-
-- [ ] 宽树极限：单轮插入大量 sibling roots，不应形成单个长任务，也不应丢失根级顺序。
-- [ ] 深树极限：超深子树在时间片化路径下不应爆栈，不应因为显式队列推进而漏节点或死循环。
-- [ ] 混合场景：宽树 + 深树同时存在时，不应因为一个大 root 阻塞其他 root 的完成和提交。
-- [ ] add 后立即 attribute：节点尚未 emit 时收到 attribute mutation，必须挂起并在 add 后按顺序补发。
-- [ ] add 后立即 text：节点尚未 emit 时收到 characterData mutation，必须挂起并在 add 后按顺序补发。
-- [ ] add 后立即 remove：pending root 在 emit 前被移除时，必须取消 task，不能稍后又补发旧树。
-- [ ] sibling 引用边界：多个新增兄弟节点跨多个时间片完成时，`nextId` 和 parent 关系必须稳定。
-- [ ] reorder 边界：同一批新增根节点仍需保持 topological 排序，不允许因时间片化而交换顺序。
-- [ ] generation reset：`takeSubsequentFullSnapshot()`、`stop()`、restart 发生时，旧 generation 的 pending task 必须整体失效。
-- [ ] pending + full snapshot：full snapshot 后，旧 pending task 不得回写、不得 emit、不得污染后续 mutation。
-- [ ] shadow root：含 shadow root 的新增子树在新路径下语义要与现有路径一致。
-- [ ] hidden / ignored 节点：privacy hidden、ignore 节点在时间片化路径下仍按原规则处理。
-
-### Test Strictness
-
-第一版实现时，测试策略需要满足下面这些约束：
-
-- 必须同时覆盖宽树、深树、混合树三类最坏输入，不能只测“普通结构”。
-- 必须覆盖时序交叉场景，不能只测单纯的 add 成功路径。
-- 必须有“失败即说明设计不成立”的回归测试，不接受只做 happy path 验证。
-- 每次主链改动后，优先跑最窄的定向单测；如果 Karma 仍出现 bundling 慢或 Chrome 断连，需要在变更说明里明确记录。
-- 手工验证不能只看“页面没崩”，还要核对 replay 顺序和节点完整性。
-
-### Manual Validation
-
-- [ ] demo `dashboard 2500`，replay off
-- [ ] demo `dashboard 2500`，replay on
-- [ ] 采集 trace 对比主线程占用
-- [ ] 确认页面不再因 SDK 形成明显单个长任务
-
-## Risks
-
-- 时间片化会把现有同步 flush 语义改成异步消费，最容易引入 replay 时序问题。
-- 若设计不谨慎，可能出现：
-  - add 未完成就收到 attribute/text
-  - next sibling id 尚未存在
-  - subsequent full snapshot 与 pending add 交叉
-
-## Rollout Strategy
-
-- 第一版仅在内部实现，不暴露配置项。
-- 先以固定时间片常量验证正确性和性能收益。
-- 如果效果稳定，再评估是否需要让时间片策略可配。
-
-## Notes
-
-- 预算式节点数量截断不是最终方向，只作为已验证但已回退的探索记录。
-- 后续评估应尽量使用真实 SPA 风格结构，而不是继续用极深单链场景做主判断。
+- [x] `replayCanvasSampling: number | 'all'` 正式配置入口
+- [x] 删除 legacy timer runtime path
+- [x] runtime 主链只保留 continuous / command 两条
+- [x] demo 删除 legacy mode / benchmark 按钮
+- [x] 独立的 command arg serializer
+- [x] 独立的 2D command recorder
+- [x] per-context pending queue
+- [x] rAF flush
+- [x] rrweb-compatible `CanvasMutation` record builder
+- [x] command observer 接入 `record()`
+- [x] behind flag 接入 demo
+- [x] command path 的 debug / benchmark 接线
+- [x] command path benchmark 已拿到非零结果
+- [x] rrweb-compatible setter command (`setter: true`)
+- [x] 去掉非 rrweb 的 command `kind` 字段
+
+### Canvas Worker Status
+
+当前 canvas encode worker 已经从 `canvasEncodeBridge` 内的轻量实现升级为独立 worker 基础设施。
+
+和现有 deflate worker 对比，当前 canvas worker 还没补齐：
+
+- [x] 独立 worker 生命周期状态机
+- [x] `init -> initialized` 往返握手
+- [x] 初始化超时
+- [x] 启动失败与运行期失败分离
+- [x] 独立 self-hosted worker URL
+- [x] 独立 bundle 交付
+- [x] 放到 `packages/worker` 下统一管理和构建
+- [x] 独立 `canvas-worker` bundle，且不影响现有 deflate worker bundle
+
+这里要明确：
+
+- 这不是“优化项”
+- 而是 canvas worker 达到现有 session replay worker 工程标准的必要条件
+- 现有 `workerUrl` 和 deflate worker 行为不能被 canvas worker 改坏
+
+### Patch Model
+
+当前 recorder 不再只靠 instance patch。
+
+现在的实际模型是：
+
+- **优先共享 prototype patch**
+- **tracked context 过滤**
+- fake context / 单元测试 fallback 时才走 instance patch
+
+这比之前的 instance-only patch 更接近 rrweb 的方向。
+
+### Hard Safety Constraint
+
+这是硬约束，不允许退：
+
+- **command capture 绝不能破坏 live canvas 绘制**
+
+当前已经为此修过一轮：
+
+- property setter 记录时必须透传原生 descriptor
+- 不能为了录制改变真实绘制结果
+
+## Current 2D Coverage
+
+### Methods Landed
+
+- [x] `save`
+- [x] `restore`
+- [x] `translate`
+- [x] `scale`
+- [x] `rotate`
+- [x] `transform`
+- [x] `setTransform`
+- [x] `clearRect`
+- [x] `fillRect`
+- [x] `strokeRect`
+- [x] `rect`
+- [x] `beginPath`
+- [x] `moveTo`
+- [x] `lineTo`
+- [x] `bezierCurveTo`
+- [x] `quadraticCurveTo`
+- [x] `closePath`
+- [x] `arc`
+- [x] `ellipse`
+- [x] `roundRect`
+- [x] `clip`
+- [x] `fill`
+- [x] `stroke`
+- [x] `fillText`
+- [x] `strokeText`
+- [x] `setLineDash`
+- [x] `drawImage`
+- [x] `createLinearGradient`
+- [x] `createRadialGradient`
+- [x] `createPattern`
+- [x] `createConicGradient`
+
+### Properties Landed
+
+- [x] `fillStyle`
+- [x] `strokeStyle`
+- [x] `lineWidth`
+- [x] `lineCap`
+- [x] `lineJoin`
+- [x] `miterLimit`
+- [x] `font`
+- [x] `globalAlpha`
+- [x] `shadowColor`
+- [x] `shadowBlur`
+- [x] `shadowOffsetX`
+- [x] `shadowOffsetY`
+- [x] `textAlign`
+- [x] `textBaseline`
+- [x] `filter`
+
+## Serialization Status
+
+### Already Covered
+
+- [x] primitives
+- [x] arrays
+- [x] typed arrays
+- [x] `ArrayBuffer`
+- [x] `DataView`
+- [x] `ImageData`
+- [x] `HTMLImageElement`
+- [x] `HTMLCanvasElement`
+- [x] mixed `drawImage(...)` args
+
+### Opaque Object Strategy
+
+当前已经不是“直接漏掉复杂对象”，而是：
+
+- [x] 对 opaque canvas object 使用稳定引用语义
+- [x] 引用按 **context 维度** 分配
+- [x] 输出 `{ rr_type, index }`
+
+目前这条策略已经覆盖到：
+
+- [x] `CanvasGradient`
+- [x] `CanvasPattern`
+- [x] `Path2D` 类对象
+- [x] 其他无法直接展开的 object
+
+但 runtime 当前策略已经收紧成：
+
+- [x] `CanvasGradient` 命中 style/fidelity 风险时切 snapshot fallback
+- [x] `CanvasPattern` 命中 style/fidelity 风险时切 snapshot fallback
+- [x] `Path2D` 作为命令参数时切 snapshot fallback
+- [x] `CanvasGradient.addColorStop` 触发 snapshot fallback
+- [x] `drawImage(HTMLVideoElement, ...)` 触发 snapshot fallback
+- [x] `drawImage(cross-origin HTMLImageElement, ...)` 触发 snapshot fallback
+- [x] `drawImage(tainted HTMLCanvasElement, ...)` 触发 snapshot fallback
+
+### Still Open
+
+- [ ] `CanvasGradient` 的 color stop 还原策略
+- [ ] `CanvasPattern` 的 image source 和 repeat 语义验证
+- [ ] 更复杂 `drawImage` fidelity 边界
+
+### Stable Fallback Boundary
+
+- [x] `Path2D` 当前明确作为稳定 snapshot fallback 边界
+- [x] `Path2D` 不进入近期 command fidelity 计划
+- [x] `Path2D` 只有在真实业务占比和回放体感证明收益足够时再单独立项
+
+## Observer / Integration Status
+
+### Already Landed
+
+- [x] patch 未来的 `getContext('2d')`
+- [x] observer 启动时补挂当前已存在的 canvas
+- [x] `record()` 会把当前 serialized canvas 列表传给 observer
+- [x] command path 会绕开 auto snapshot loop
+- [x] `stop()` / `takeSubsequentFullSnapshot()` 已接线
+
+### Still Open
+
+- [ ] `reset()` 语义是否需要进一步 generation 隔离
+- [ ] freeze / lock 能力是否也要像 rrweb `CanvasManager` 那样补齐
+- [ ] visibility gate 最终验收
+- [x] canvas worker 生命周期对齐现有 deflate worker
+- [x] canvas worker 从 `canvasEncodeBridge` 内嵌字符串迁移到 `packages/worker`
+- [x] canvas worker 进入 worker package 独立 bundle 产物
+- [x] `replayCanvasWorkerUrl` 指向独立 canvas worker bundle
+- [x] `replayCanvasWorkerUrl` 正式配置
+- [x] canvas worker 独立 bundle
+- [x] 保持现有 deflate worker 入口、协议、bundle 和 `workerUrl` 完全不变
+
+## Test Gates
+
+### Correctness
+
+- [x] method capture 顺序
+- [x] property setter capture
+- [x] live canvas rendering 不被破坏
+- [x] drawImage(image)
+- [x] drawImage(canvas)
+- [x] typed array / buffer / DataView
+- [x] per-context batch flush
+- [x] manual `flush()`
+- [x] `stop()`
+- [x] double patch guard
+- [x] existing canvas startup patch
+
+### Still Missing
+
+- [x] `Path2D` 行为级测试
+- [x] `CanvasGradient` / `addColorStop` fallback 规则
+- [x] `CanvasPattern` fallback 规则
+- [x] 多 canvas dashboard 下复杂对象不串
+- [x] `takeSubsequentFullSnapshot()` 后命令边界
+- [ ] hidden / visible 下 command path 行为
+
+## Benchmark Gates
+
+command capture 默认化前必须对齐这几组：
+
+- [ ] main canvas `auto command`
+- [ ] main canvas `visibility command`
+- [ ] dashboard `auto command`
+- [ ] dashboard `visibility command`
+
+每组都必须看：
+
+- [ ] completed update count
+- [ ] avg/max update gap
+- [ ] `avgCanvasMutationBytes`
+- [ ] `bytesLimitFlushCount`
+- [ ] `replaySegmentFlushCount`
+- [ ] main-thread cost
+
+## Current Call
+
+当前不要再把 command capture 写成“未跑通原型”。
+
+更准确的判断是：
+
+- `sampling:number -> continuous snapshot` 已稳定
+- `sampling:'all' -> command capture` 已走通主链
+- command 现在的主要工作不再是“能不能录到”
+- 而是：
+  - replay fidelity
+  - visibility gate
+  - 与 snapshot / Sentry 的浏览器性能对照
+
+### Configuration Convergence
+
+- [x] runtime 已收敛到最终 `replayCanvasSampling = number | 'all'`
+- [x] 默认配置已切到 numeric sampling
+- [x] `'all'` 已映射到 command capture
+
+### Current Blocking Issue
+
+- [x] command capture 已经开始产生命令
+- [x] runtime / docs 已收敛到最终 `replayCanvasSampling` 配置语义
+- [ ] 复杂对象的 rrweb replay fidelity 仍依赖 snapshot fallback
+- [ ] hidden / visible 浏览器级行为仍需最终验收
+- [x] canvas worker 外部 URL / 独立 bundle / init lifecycle 已完成
+- [x] canvas worker 已进入 `packages/worker` 统一交付模型
+- [x] canvas worker 已和 deflate worker 做到交付层解耦
+
+虽然 command 主链已经走通，但 **复杂对象 fidelity 和最终浏览器级 gate 还没有完全收口**。
+
+这里再明确一层：
+
+- `Path2D` 当前不再作为“待补完整 fidelity”的近期 blocker
+- 当前复杂对象 blocker 主要收敛为：
+  - `CanvasGradient`
+  - `CanvasPattern`
+  - 更复杂 `drawImage`
+  - visibility gate
+  - canvas worker delivery / lifecycle
+
+这件事在复杂对象和 visibility gate 收完前，仍然是当前主 blocker。
+
+## Rollout Criteria
+
+只有下面这些同时满足，才允许把 command capture 升成默认路径：
+
+- [ ] correctness gate 全绿
+- [ ] benchmark gate 全绿
+- [ ] live rendering 零破坏
+- [ ] fallback 语义清晰
+- [ ] 文档和 debug 能力收口完成
+
+## Immediate Next Steps
+
+- [x] 用 rrweb `CanvasManager` 真实实现重写路线判断
+- [x] 把主路线正式改成 command capture
+- [x] 起 command recorder 骨架
+- [x] 接入 per-canvas pending queue + rAF flush
+- [x] 接入 rrweb-compatible canvas mutation record 结构
+- [x] 接入 demo behind flag
+- [x] 扩第一批高频 2D API
+- [x] 加入 opaque object stable ref 策略
+- [x] 跑通 command path 的有效 benchmark
+- [x] 对齐 rrweb setter command 格式
+- [x] 结构化 fallback reason
+- [ ] 补 `CanvasGradient / CanvasPattern` 的完整语义策略
+- [x] 把 canvas encode worker 提升到和 deflate worker 同等级的 worker 基础设施
+- [x] `replayCanvasWorkerUrl` 与独立 bundle 交付
+- [x] `packages/worker` 下的 canvas worker 入口与构建产物
+- [x] `canvas-worker` 独立 bundle，确保不影响现有 worker bundle
+- [ ] 再决定是否继续向 rrweb 式 full manager（freeze/lock/reset）收拢

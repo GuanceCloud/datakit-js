@@ -1,10 +1,12 @@
 import { timeStampNow } from '@cloudcare/browser-core'
-import { IncrementalSource, RecordType } from '../../../types'
 import { getSerializedNodeId, hasSerializedNode } from './serializationUtils'
 import {
   buildSerializedCanvasImage,
-  estimateEncodedBytesFromDataUrl
+  estimateEncodedBytesFromDataUrl,
+  getEncodedCanvasDataUrlDiagnostics,
+  isValidEncodedCanvasDataUrl
 } from './canvasSerializeArgs'
+import { createEncodedCanvasMutationRecord } from './canvasMutationRecord'
 import { createCanvasEncodeBridge } from './canvasEncodeBridge'
 import {
   createCanvasFrameSignatureExtractor,
@@ -26,9 +28,33 @@ function isSupportedReplayCanvasMode(mode) {
   return mode === 'manual' || mode === 'auto'
 }
 
+function getContinuousAutoEncodeOptions(canvas, configuration, snapshotOptions) {
+  if (
+    !snapshotOptions ||
+    snapshotOptions.trigger !== 'auto' ||
+    snapshotOptions.scheduler !== 'continuous_snapshot'
+  ) {
+    return undefined
+  }
+
+  var pixelArea = canvas.width * canvas.height
+  if (pixelArea < 120000) {
+    return undefined
+  }
+
+  return {
+    quality: Math.max(configuration.replayCanvasQuality * 0.75, 0.2),
+    maxSize: Math.max(
+      1,
+      Math.round(configuration.replayCanvasMaxCanvasSize * 0.85)
+    )
+  }
+}
+
 export function createCanvasObserver(options) {
   var configuration = options.configuration
   var emit = options.emit
+  var onMutationDebug = options.onMutationDebug || function () {}
   var now = options.now || Date.now
   var encodeBridge =
     options.encodeBridge || createCanvasEncodeBridge(configuration)
@@ -96,8 +122,14 @@ export function createCanvasObserver(options) {
         return Promise.resolve(autoFrameSignatureResult.result)
       }
 
+      var encodeOptions = getContinuousAutoEncodeOptions(
+        canvas,
+        configuration,
+        snapshotOptions
+      )
+
       return encodeBridge
-        .encode(canvas)
+        .encode(canvas, encodeOptions)
         .then(function (encodedCanvas) {
           if (stopped) {
             return createSnapshotFailureResult('observer_stopped')
@@ -116,6 +148,24 @@ export function createCanvasObserver(options) {
           var encodedBytesCount = estimateEncodedBytesFromDataUrl(
             encodedCanvas.dataUrl
           )
+          if (!isValidEncodedCanvasDataUrl(encodedCanvas.dataUrl)) {
+            onMutationDebug({
+              timestamp: timeStampNow(),
+              canvasId: id,
+              trigger:
+                snapshotOptions && snapshotOptions.trigger === 'auto'
+                  ? 'auto'
+                  : 'manual',
+              reason: 'invalid_encoded_payload',
+              width: encodedCanvas.width,
+              height: encodedCanvas.height,
+              encodedBytesCount: encodedBytesCount,
+              diagnostics: getEncodedCanvasDataUrlDiagnostics(
+                encodedCanvas.dataUrl
+              )
+            })
+            return createSnapshotFailureResult('invalid_encoded_payload')
+          }
           if (
             encodedBytesCount > configuration.replayCanvasMaxEncodedBytes
           ) {
@@ -133,13 +183,12 @@ export function createCanvasObserver(options) {
             lastAutoSuccessfulSnapshotAtByCanvas.set(canvas, now())
           }
 
-          emit({
-            type: RecordType.IncrementalSnapshot,
-            timestamp: timeStampNow(),
-            data: {
-              source: IncrementalSource.CanvasMutation,
+          var mutationTimestamp = timeStampNow()
+          emit(
+            createEncodedCanvasMutationRecord({
+              timestamp: mutationTimestamp,
               id: id,
-              type: '2D',
+              contextType: '2D',
               commands: [
                 {
                   property: 'clearRect',
@@ -160,7 +209,18 @@ export function createCanvasObserver(options) {
                 }
               ],
               encodedBytesCount: encodedBytesCount
-            }
+            })
+          )
+          onMutationDebug({
+            timestamp: mutationTimestamp,
+            canvasId: id,
+            trigger:
+              snapshotOptions && snapshotOptions.trigger === 'auto'
+                ? 'auto'
+                : 'manual',
+            encodedBytesCount: encodedBytesCount,
+            width: encodedCanvas.width,
+            height: encodedCanvas.height
           })
           return createSnapshotSuccessResult()
         })

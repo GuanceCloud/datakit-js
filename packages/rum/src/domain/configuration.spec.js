@@ -44,12 +44,14 @@ describe('rum configuration', () => {
       ],
       defaultPrivacyLevel: DefaultPrivacyLevel.ALLOW,
       trackInteractions: true,
+      replayCanvasWorkerUrl: '/canvas-worker.js',
       sessionReplaySampleRate: 50,
       sessionOnErrorSampleRate: 10,
       sessionReplayOnErrorSampleRate: 20,
       compressIntakeRequests: 1,
       replayCanvasEnabled: true,
       replayCanvasMode: 'auto',
+      replayCanvasSampling: 'all',
       replayCanvasQuality: 0.5,
       replayCanvasMaxCanvasSize: 1024,
       replayCanvasMaxEncodedBytes: 12345,
@@ -68,8 +70,10 @@ describe('rum configuration', () => {
     expect(configuration.sessionReplayOnErrorSampleRate).toBe(20)
     expect(configuration.defaultPrivacyLevel).toBe(DefaultPrivacyLevel.ALLOW)
     expect(configuration.compressIntakeRequests).toBeTrue()
+    expect(configuration.replayCanvasWorkerUrl).toBe('/canvas-worker.js')
     expect(configuration.replayCanvasEnabled).toBeTrue()
     expect(configuration.replayCanvasMode).toBe('auto')
+    expect(configuration.replayCanvasSampling).toBe('all')
     expect(configuration.replayCanvasQuality).toBe(0.5)
     expect(configuration.replayCanvasMaxCanvasSize).toBe(1024)
     expect(configuration.replayCanvasMaxEncodedBytes).toBe(12345)
@@ -116,6 +120,7 @@ describe('rum configuration', () => {
     })
 
     expect(lowConfiguration.replayCanvasQuality).toBe(0.25)
+    expect(lowConfiguration.replayCanvasSampling).toBe(1)
     expect(lowConfiguration.replayCanvasAutoInterval).toBe(1500)
     expect(lowConfiguration.replayCanvasAutoCooldown).toBe(3000)
     expect(lowConfiguration.replayCanvasAutoUnchangedBackoff).toBe(5000)
@@ -123,6 +128,7 @@ describe('rum configuration', () => {
     expect(lowConfiguration.replayCanvasAutoMaxPerRun).toBe(1)
     expect(lowConfiguration.replayCanvasFlushImmediately).toBeFalse()
     expect(mediumConfiguration.replayCanvasQuality).toBe(0.4)
+    expect(mediumConfiguration.replayCanvasSampling).toBe(2)
     expect(mediumConfiguration.replayCanvasAutoInterval).toBe(1000)
     expect(mediumConfiguration.replayCanvasAutoCooldown).toBe(2000)
     expect(mediumConfiguration.replayCanvasAutoUnchangedBackoff).toBe(3000)
@@ -130,6 +136,7 @@ describe('rum configuration', () => {
     expect(mediumConfiguration.replayCanvasAutoMaxPerRun).toBe(2)
     expect(mediumConfiguration.replayCanvasFlushImmediately).toBeFalse()
     expect(highConfiguration.replayCanvasQuality).toBe(0.5)
+    expect(highConfiguration.replayCanvasSampling).toBe(4)
     expect(highConfiguration.replayCanvasAutoInterval).toBe(700)
     expect(highConfiguration.replayCanvasAutoCooldown).toBe(1400)
     expect(highConfiguration.replayCanvasAutoUnchangedBackoff).toBe(2000)
@@ -185,6 +192,17 @@ describe('rum configuration', () => {
     expect(manualConfiguration.replayCanvasFlushImmediately).toBeTrue()
     expect(autoConfiguration.replayCanvasFlushImmediately).toBeFalse()
     expect(explicitOverrideConfiguration.replayCanvasFlushImmediately).toBeTrue()
+  })
+
+  it('should default replay canvas mode to auto', () => {
+    const configuration = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      replayCanvasEnabled: true
+    })
+
+    expect(configuration.replayCanvasMode).toBe('auto')
+    expect(configuration.replayCanvasFlushImmediately).toBeFalse()
   })
 
   it('should convert legacy tracing origins and warn on precedence conflicts', () => {

@@ -282,12 +282,17 @@
       }
       .canvas-demo__dashboard-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 14px;
       }
       .canvas-demo__dashboard-tile {
         display: grid;
         gap: 8px;
+        padding: 10px;
+        border: 1px solid var(--demo-border);
+        border-radius: 18px;
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
       }
       .canvas-demo__dashboard-label {
         font-size: 11px;
@@ -298,6 +303,13 @@
       }
       .canvas-demo__dashboard-tile .canvas-demo__board {
         border-radius: 14px;
+        min-height: 132px;
+      }
+      .canvas-demo__dashboard-meta {
+        font-size: 10px;
+        color: #6a7e95;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
       }
       .canvas-demo__toolbar {
         margin: 0;
@@ -481,6 +493,9 @@
         .demo-lab__body {
           grid-template-columns: 1fr;
         }
+        .canvas-demo__dashboard-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
       }
       @media (max-width: 640px) {
         .demo-shell__title {
@@ -493,6 +508,9 @@
         }
         .demo-status-grid {
           grid-template-columns: 1fr;
+        }
+        .canvas-demo__dashboard-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
     </style>
@@ -710,6 +728,11 @@
       window.DATAFLUX_RUM.onReady(() => {
         const replayCanvasMode =
           window.localStorage.getItem('demoReplayCanvasMode') || 'manual'
+        const replayCanvasScheduler =
+          window.localStorage.getItem('demoReplayCanvasScheduler') ||
+          'continuous_snapshot'
+        const replayCanvasWorkerMode =
+          window.localStorage.getItem('demoReplayCanvasWorkerMode') || 'inline'
         const allowedTracingOrigins = [
           window.location.origin,
           'https://console-api.guance.com',
@@ -736,7 +759,13 @@
           retryMaxSize: 10,
           replayCanvasEnabled: true,
           replayCanvasMode: replayCanvasMode,
+          replayCanvasSampling:
+            replayCanvasScheduler === 'command_capture' ? 'all' : 2,
           replayCanvasQuality: 'medium',
+          replayCanvasWorkerUrl:
+            replayCanvasWorkerMode === 'external'
+              ? window.location.origin + '/canvas-worker.js'
+              : undefined,
           remoteConfiguration: true,
 
           beforeSend: function (event, context) {
@@ -750,6 +779,7 @@
         })
         window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
         window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
+        whenSessionReplayRecordingReady(captureInitialCanvasReplayBaseline)
       })
     </script>
     <script>
@@ -1086,6 +1116,10 @@
                   <div id="canvas-status-recording" class="canvas-demo__status-value">unknown</div>
                   <div class="canvas-demo__status-label">mode</div>
                   <div id="canvas-status-mode" class="canvas-demo__status-value">manual</div>
+                  <div class="canvas-demo__status-label">scheduler</div>
+                  <div id="canvas-status-scheduler" class="canvas-demo__status-value">continuous_snapshot</div>
+                  <div class="canvas-demo__status-label">canvas worker</div>
+                  <div id="canvas-status-worker" class="canvas-demo__status-value">inline</div>
                   <div class="canvas-demo__status-label">auto policy</div>
                   <div id="canvas-status-policy" class="canvas-demo__status-value">1000/3000/5000</div>
                   <div class="canvas-demo__status-label">auto draw</div>
@@ -1104,6 +1138,8 @@
                   <div id="canvas-status-auto-keepalive" class="canvas-demo__status-value">none</div>
                   <div class="canvas-demo__status-label">last event</div>
                   <div id="canvas-status-event" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">benchmark</div>
+                  <div id="canvas-status-benchmark" class="canvas-demo__status-value">idle</div>
                 </div>
               </div>
               <div class="demo-card">
@@ -1123,7 +1159,15 @@
                   <div class="demo-toolbar-group__title">Mode</div>
                   <div class="demo-toolbar-group__actions">
                     <button delay="canvasModeManual">mode: manual</button>
-                    <button delay="canvasModeAuto">mode: auto</button>
+                    <button delay="canvasModeAutoContinuous">mode: auto continuous</button>
+                    <button delay="canvasModeAutoCommand">mode: auto command</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Worker</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="canvasWorkerInline">worker: inline</button>
+                    <button delay="canvasWorkerExternal">worker: external</button>
                   </div>
                 </div>
                 <div class="demo-toolbar-group">
@@ -1133,6 +1177,7 @@
                     <button delay="canvasDrawLineChart">line chart</button>
                     <button delay="canvasDrawBarChart">bar chart</button>
                     <button delay="canvasDrawDashboard">dashboard chart</button>
+                    <button delay="canvasDrawComplexFidelity">complex fidelity</button>
                     <button delay="canvasAnimateCharts">animate charts</button>
                     <button delay="canvasAutoDrawToggle">toggle auto draw</button>
                     <button delay="canvasClear">canvas clear</button>
@@ -1142,8 +1187,18 @@
                   <div class="demo-toolbar-group__title">Capture</div>
                   <div class="demo-toolbar-group__actions">
                     <button delay="canvasSnapshot">canvas snapshot</button>
+                    <button delay="canvasSnapshotConcurrent">canvas snapshot concurrent</button>
                     <button delay="canvasAnimateAndSnapshot">canvas animate + snapshot</button>
                     <button delay="canvasExportEvent">export last canvas event</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Benchmark</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="canvasAutoBenchmarkContinuous">auto continuous</button>
+                    <button delay="canvasAutoBenchmarkCommand">auto command</button>
+                    <button delay="canvasVisibilityBenchmarkContinuous">visibility continuous</button>
+                    <button delay="canvasVisibilityBenchmarkCommand">visibility command</button>
                   </div>
                 </div>
               </div>
@@ -1156,7 +1211,7 @@
             <div>
               <div class="canvas-demo__title demo-section__title">Canvas Dashboard Bench</div>
               <div class="canvas-demo__desc demo-section__desc">
-                单独用来模拟 dashboard 场景下的 canvas 图表采集，固定展示 KPI 卡片、折线图和柱状图的复合面板。
+                单独用来模拟 dashboard 场景下的 canvas 图表采集，固定展示 10 个独立 chart canvas 的看板。
               </div>
               <div class="demo-flow">
                 <div class="demo-flow__step">1. draw dashboard</div>
@@ -1174,16 +1229,32 @@
                 <div class="canvas-demo__status demo-status-grid">
                   <div class="canvas-demo__status-label">isRecording</div>
                   <div id="dashboard-canvas-status-recording" class="canvas-demo__status-value">unknown</div>
+                  <div class="canvas-demo__status-label">scheduler</div>
+                  <div id="dashboard-canvas-status-scheduler" class="canvas-demo__status-value">continuous_snapshot</div>
+                  <div class="canvas-demo__status-label">canvas worker</div>
+                  <div id="dashboard-canvas-status-worker" class="canvas-demo__status-value">inline</div>
+                  <div class="canvas-demo__status-label">canvas count</div>
+                  <div id="dashboard-canvas-status-count" class="canvas-demo__status-value">0</div>
                   <div class="canvas-demo__status-label">scene</div>
                   <div id="dashboard-canvas-status-scene" class="canvas-demo__status-value">idle</div>
+                  <div class="canvas-demo__status-label">renders</div>
+                  <div id="dashboard-canvas-status-renders" class="canvas-demo__status-value">0</div>
+                  <div class="canvas-demo__status-label">last render ms</div>
+                  <div id="dashboard-canvas-status-render-ms" class="canvas-demo__status-value">0</div>
                   <div class="canvas-demo__status-label">last trigger</div>
                   <div id="dashboard-canvas-status-trigger" class="canvas-demo__status-value">none</div>
                   <div class="canvas-demo__status-label">last snapshot</div>
                   <div id="dashboard-canvas-status-snapshot" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">last snapshot ok</div>
+                  <div id="dashboard-canvas-status-snapshot-ok" class="canvas-demo__status-value">0/0</div>
+                  <div class="canvas-demo__status-label">last snapshot ms</div>
+                  <div id="dashboard-canvas-status-snapshot-ms" class="canvas-demo__status-value">0</div>
                   <div class="canvas-demo__status-label">last reason</div>
                   <div id="dashboard-canvas-status-reason" class="canvas-demo__status-value">none</div>
                   <div class="canvas-demo__status-label">last event</div>
                   <div id="dashboard-canvas-status-event" class="canvas-demo__status-value">none</div>
+                  <div class="canvas-demo__status-label">benchmark</div>
+                  <div id="dashboard-canvas-status-benchmark" class="canvas-demo__status-value">idle</div>
                 </div>
               </div>
               <div class="demo-card">
@@ -1206,7 +1277,18 @@
                   <div class="demo-toolbar-group__title">Capture</div>
                   <div class="demo-toolbar-group__actions">
                     <button delay="dashboardCanvasSnapshot">dashboard snapshot</button>
+                    <button delay="dashboardCanvasSnapshotConcurrent">dashboard snapshot concurrent</button>
                     <button delay="dashboardCanvasExportEvent">export dashboard event</button>
+                  </div>
+                </div>
+                <div class="demo-toolbar-group">
+                  <div class="demo-toolbar-group__title">Benchmark</div>
+                  <div class="demo-toolbar-group__actions">
+                    <button delay="dashboardCanvasBenchmarkContinuous">benchmark continuous</button>
+                    <button delay="dashboardCanvasAutoBenchmarkContinuous">auto continuous</button>
+                    <button delay="dashboardCanvasAutoBenchmarkCommand">auto command</button>
+                    <button delay="dashboardCanvasVisibilityBenchmarkContinuous">visibility continuous</button>
+                    <button delay="dashboardCanvasVisibilityBenchmarkCommand">visibility command</button>
                   </div>
                 </div>
               </div>
@@ -1510,6 +1592,10 @@
       const replayCanvasLog = document.getElementById('canvas-demo-log')
       const replayCanvasRecordingStatus = document.getElementById('canvas-status-recording')
       const replayCanvasModeStatus = document.getElementById('canvas-status-mode')
+      const replayCanvasSchedulerStatus = document.getElementById(
+        'canvas-status-scheduler'
+      )
+      const replayCanvasWorkerStatus = document.getElementById('canvas-status-worker')
       const replayCanvasPolicyStatus = document.getElementById('canvas-status-policy')
       const replayCanvasAutoDrawStatus = document.getElementById('canvas-status-auto-draw')
       const replayCanvasSceneStatus = document.getElementById('canvas-status-scene')
@@ -1521,14 +1607,32 @@
         'canvas-status-auto-keepalive'
       )
       const replayCanvasEventStatus = document.getElementById('canvas-status-event')
+      const replayCanvasBenchmarkStatus = document.getElementById(
+        'canvas-status-benchmark'
+      )
       const replayCanvasExport = document.getElementById('canvas-demo-export')
       const replayDashboardCanvasGrid = document.getElementById('replay-dashboard-canvas-grid')
       const replayDashboardCanvasLog = document.getElementById('dashboard-canvas-log')
       const replayDashboardCanvasRecordingStatus = document.getElementById(
         'dashboard-canvas-status-recording'
       )
+      const replayDashboardCanvasSchedulerStatus = document.getElementById(
+        'dashboard-canvas-status-scheduler'
+      )
+      const replayDashboardCanvasWorkerStatus = document.getElementById(
+        'dashboard-canvas-status-worker'
+      )
+      const replayDashboardCanvasCountStatus = document.getElementById(
+        'dashboard-canvas-status-count'
+      )
       const replayDashboardCanvasSceneStatus = document.getElementById(
         'dashboard-canvas-status-scene'
+      )
+      const replayDashboardCanvasRendersStatus = document.getElementById(
+        'dashboard-canvas-status-renders'
+      )
+      const replayDashboardCanvasRenderMsStatus = document.getElementById(
+        'dashboard-canvas-status-render-ms'
       )
       const replayDashboardCanvasTriggerStatus = document.getElementById(
         'dashboard-canvas-status-trigger'
@@ -1536,17 +1640,32 @@
       const replayDashboardCanvasSnapshotStatus = document.getElementById(
         'dashboard-canvas-status-snapshot'
       )
+      const replayDashboardCanvasSnapshotOkStatus = document.getElementById(
+        'dashboard-canvas-status-snapshot-ok'
+      )
+      const replayDashboardCanvasSnapshotMsStatus = document.getElementById(
+        'dashboard-canvas-status-snapshot-ms'
+      )
       const replayDashboardCanvasReasonStatus = document.getElementById(
         'dashboard-canvas-status-reason'
       )
       const replayDashboardCanvasEventStatus = document.getElementById(
         'dashboard-canvas-status-event'
       )
+      const replayDashboardCanvasBenchmarkStatus = document.getElementById(
+        'dashboard-canvas-status-benchmark'
+      )
       const replayDashboardCanvasExport = document.getElementById(
         'dashboard-canvas-export'
       )
       const demoReplayCanvasMode =
         window.localStorage.getItem('demoReplayCanvasMode') || 'manual'
+      const demoReplayCanvasScheduler =
+        window.localStorage.getItem('demoReplayCanvasScheduler') ||
+        'continuous_snapshot'
+      const demoReplayCanvasWorkerMode =
+        window.localStorage.getItem('demoReplayCanvasWorkerMode') || 'inline'
+      let initialCanvasReplayBaselineCaptured = false
       let canvasStep = 0
       let canvasAnimationFrameId = null
       let canvasAutoDrawIntervalId = null
@@ -1555,6 +1674,8 @@
       let lastCanvasSnapshotTrigger = 'none'
       let lastCanvasAutoResult = 'idle'
       let lastCanvasScene = 'initial'
+      let canvasBenchmarkResult = 'idle'
+      const canvasPendingBenchmarkStorageKey = 'demoCanvasPendingBenchmark'
       let replayDashboardCanvases = []
       let dashboardCanvasStep = 0
       let dashboardCanvasAnimationFrameId = null
@@ -1562,13 +1683,20 @@
       let lastDashboardCanvasReplayEvent = null
       let lastDashboardCanvasTrigger = 'none'
       let lastDashboardCanvasScene = 'idle'
+      let dashboardCanvasRenderCount = 0
+      let lastDashboardCanvasRenderMs = 0
+      let lastDashboardCanvasSnapshotMs = 0
+      let lastDashboardCanvasSnapshotOkCount = 0
+      let dashboardCanvasBenchmarkResult = 'idle'
+      const dashboardCanvasPendingBenchmarkStorageKey =
+        'demoDashboardCanvasPendingBenchmark'
       const dashboardCanvasPanels = [
         { title: 'Revenue', type: 'line', accent: '#0f766e' },
         { title: 'Orders', type: 'bar', accent: '#0284c7' },
         { title: 'Conversion', type: 'area', accent: '#7c3aed' },
         { title: 'Latency', type: 'line', accent: '#ea580c' },
         { title: 'Errors', type: 'bar', accent: '#dc2626' },
-        { title: 'Engagement', type: 'area', accent: '#0891b2' },
+        { title: 'Sessions', type: 'area', accent: '#0891b2' },
         { title: 'Retention', type: 'line', accent: '#4f46e5' },
         { title: 'Regions', type: 'bar', accent: '#2563eb' },
         { title: 'Capacity', type: 'area', accent: '#0f766e' },
@@ -1640,7 +1768,26 @@
           rum.getLastAutoCanvasSnapshotResultForDebug()
         setCanvasStatus(replayCanvasRecordingStatus, isRecording)
         setCanvasStatus(replayCanvasModeStatus, demoReplayCanvasMode)
-        setCanvasStatus(replayCanvasPolicyStatus, 'quality=medium')
+        setCanvasStatus(
+          replayCanvasSchedulerStatus,
+          autoDebugResult && autoDebugResult.scheduler
+            ? autoDebugResult.scheduler
+            : demoReplayCanvasMode === 'manual'
+              ? 'manual'
+              : demoReplayCanvasScheduler
+        )
+        setCanvasStatus(
+          replayCanvasPolicyStatus,
+          'quality=medium ' +
+            (demoReplayCanvasMode === 'manual'
+              ? '(manual)'
+              : demoReplayCanvasScheduler === 'continuous_snapshot'
+                ? '(rAF)'
+                : demoReplayCanvasScheduler === 'command_capture'
+                  ? '(commands)'
+                : '(timer)')
+        )
+        setCanvasStatus(replayCanvasWorkerStatus, demoReplayCanvasWorkerMode)
         setCanvasStatus(
           replayCanvasAutoDrawStatus,
           canvasAutoDrawIntervalId ? 'on' : 'off'
@@ -1672,6 +1819,7 @@
             : 'none'
         )
         setCanvasStatus(replayCanvasEventStatus, 'step=' + canvasStep)
+        setCanvasStatus(replayCanvasBenchmarkStatus, canvasBenchmarkResult)
       }
 
       function refreshDashboardCanvasStatusPanel() {
@@ -1679,7 +1827,23 @@
         const isRecording =
           rum && typeof rum.isRecording === 'function' ? rum.isRecording() : 'unavailable'
         setCanvasStatus(replayDashboardCanvasRecordingStatus, isRecording)
+        setCanvasStatus(
+          replayDashboardCanvasSchedulerStatus,
+          demoReplayCanvasMode === 'manual'
+            ? 'manual'
+            : demoReplayCanvasScheduler
+        )
+        setCanvasStatus(
+          replayDashboardCanvasWorkerStatus,
+          demoReplayCanvasWorkerMode
+        )
+        setCanvasStatus(
+          replayDashboardCanvasCountStatus,
+          replayDashboardCanvases.length
+        )
         setCanvasStatus(replayDashboardCanvasSceneStatus, lastDashboardCanvasScene)
+        setCanvasStatus(replayDashboardCanvasRendersStatus, dashboardCanvasRenderCount)
+        setCanvasStatus(replayDashboardCanvasRenderMsStatus, lastDashboardCanvasRenderMs)
         setCanvasStatus(replayDashboardCanvasTriggerStatus, lastDashboardCanvasTrigger)
         setCanvasStatus(
           replayDashboardCanvasSnapshotStatus,
@@ -1688,6 +1852,16 @@
               ? 'ok'
               : 'failed'
             : 'none'
+        )
+        setCanvasStatus(
+          replayDashboardCanvasSnapshotOkStatus,
+          lastDashboardCanvasSnapshotResult
+            ? lastDashboardCanvasSnapshotOkCount + '/' + replayDashboardCanvases.length
+            : '0/' + replayDashboardCanvases.length
+        )
+        setCanvasStatus(
+          replayDashboardCanvasSnapshotMsStatus,
+          lastDashboardCanvasSnapshotMs
         )
         setCanvasStatus(
           replayDashboardCanvasReasonStatus,
@@ -1701,6 +1875,7 @@
             ? 'none'
             : 'dashboard step=' + dashboardCanvasStep
         )
+        setCanvasStatus(replayDashboardCanvasBenchmarkStatus, dashboardCanvasBenchmarkResult)
       }
 
       function refreshLargeDomStatus() {
@@ -1943,10 +2118,11 @@
           return 'idle'
         }
         if (result.status !== 'completed') {
-          return result.status
+          return result.scheduler + ':' + result.status
         }
         return (
-          'completed selected=' +
+          result.scheduler +
+          ':completed selected=' +
           result.selectedCanvasCount +
           ' budget=' +
           result.skippedBudgetCount
@@ -1960,10 +2136,221 @@
         refreshCanvasStatusPanel()
       }
 
-      function switchReplayCanvasMode(mode) {
+      function switchReplayCanvasMode(mode, scheduler) {
         window.localStorage.setItem('demoReplayCanvasMode', mode)
-        setCanvasLog('Switching canvas mode to ' + mode + ' and reloading demo')
+        window.localStorage.setItem(
+          'demoReplayCanvasScheduler',
+          scheduler || 'continuous_snapshot'
+        )
+        setCanvasLog(
+          'Switching canvas mode to ' +
+            mode +
+            ' / ' +
+            (scheduler || 'continuous_snapshot') +
+            ' and reloading demo'
+        )
         window.location.reload()
+      }
+
+      function switchReplayCanvasWorkerMode(mode) {
+        window.localStorage.setItem('demoReplayCanvasWorkerMode', mode)
+        setCanvasLog('Switching canvas worker to ' + mode + ' and reloading demo')
+        window.location.reload()
+      }
+
+      function captureInitialCanvasReplayBaseline() {
+        if (initialCanvasReplayBaselineCaptured) {
+          return
+        }
+        initialCanvasReplayBaselineCaptured = true
+        if (demoReplayCanvasMode === 'manual') {
+          window.setTimeout(async () => {
+            await snapshotCanvasScene('initial-ready')
+            await snapshotDashboardCanvasScene('initial-ready')
+          }, 0)
+          return
+        }
+        drawCanvasScene('initial')
+        drawDashboardCanvasChart('initial-board')
+      }
+
+      function whenSessionReplayRecordingReady(callback) {
+        var rum = window.DATAFLUX_RUM
+        if (!rum || typeof callback !== 'function') {
+          return
+        }
+        if (typeof rum.isRecording !== 'function') {
+          window.setTimeout(callback, 0)
+          return
+        }
+
+        var attempts = 0
+        var maxAttempts = 120
+
+        function tryRun() {
+          attempts += 1
+          if (rum.isRecording()) {
+            callback()
+            return
+          }
+          if (attempts >= maxAttempts) {
+            callback()
+            return
+          }
+          window.requestAnimationFrame(tryRun)
+        }
+
+        tryRun()
+      }
+
+      function drawMainCanvasBenchmarkFrame(step) {
+        if (step % 3 === 1) {
+          drawCanvasLineChart('auto-benchmark-line')
+        } else if (step % 3 === 2) {
+          drawCanvasBarChart('auto-benchmark-bar')
+        } else {
+          drawCanvasDashboardChart('auto-benchmark-board')
+        }
+      }
+
+      function getReplaySegmentFlushHistoryForBenchmark() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.getReplaySegmentFlushHistoryForDebug !== 'function') {
+          return []
+        }
+        return rum.getReplaySegmentFlushHistoryForDebug() || []
+      }
+
+      function getLastAutoCanvasSnapshotDebugResult() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.getLastAutoCanvasSnapshotResultForDebug !== 'function') {
+          return undefined
+        }
+        return rum.getLastAutoCanvasSnapshotResultForDebug()
+      }
+
+      function getAutoCanvasSnapshotDebugHistoryForBenchmark() {
+        const rum = window.DATAFLUX_RUM
+        if (
+          !rum ||
+          typeof rum.getAutoCanvasSnapshotDebugHistoryForDebug !== 'function'
+        ) {
+          return []
+        }
+        return rum.getAutoCanvasSnapshotDebugHistoryForDebug() || []
+      }
+
+      function getLastCanvasMutationDebugForBenchmark() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.getLastCanvasMutationForDebug !== 'function') {
+          return undefined
+        }
+        return rum.getLastCanvasMutationForDebug()
+      }
+
+      function getCanvasMutationHistoryForBenchmark() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.getCanvasMutationHistoryForDebug !== 'function') {
+          return []
+        }
+        return rum.getCanvasMutationHistoryForDebug() || []
+      }
+
+      function getAutoDebugStartedAt(result) {
+        if (!result) {
+          return undefined
+        }
+        return typeof result.startedAt === 'number'
+          ? result.startedAt
+          : result.timestamp
+      }
+
+      function getAutoDebugCompletedAt(result) {
+        if (!result) {
+          return undefined
+        }
+        return typeof result.completedAt === 'number'
+          ? result.completedAt
+          : result.timestamp
+      }
+
+      function getReplayFlushTailIndex(history) {
+        if (!history || !history.length) {
+          return -1
+        }
+        return history[history.length - 1].indexInView
+      }
+
+      function summarizeFallbackReasons(records) {
+        const reasonCounts = {}
+        records.forEach((record) => {
+          const results = record && record.results ? record.results : []
+          results.forEach((entry) => {
+            if (!entry || !entry.reason) {
+              return
+            }
+            reasonCounts[entry.reason] = (reasonCounts[entry.reason] || 0) + 1
+          })
+        })
+        return reasonCounts
+      }
+
+      function aggregateDashboardAutoCompletionRecords(records) {
+        const batches = []
+        const batchByKey = {}
+
+        records.forEach((record) => {
+          const startedAt = getAutoDebugStartedAt(record)
+          const completedAt = getAutoDebugCompletedAt(record)
+          const key =
+            (typeof startedAt === 'number' ? startedAt : 'na') +
+            ':' +
+            (typeof completedAt === 'number' ? completedAt : 'na')
+          var batch = batchByKey[key]
+          if (!batch) {
+            batch = {
+              startedAt: startedAt,
+              completedAt: completedAt,
+              selectedCanvasCount: 0,
+              records: []
+            }
+            batchByKey[key] = batch
+            batches.push(batch)
+          }
+          batch.selectedCanvasCount += record.selectedCanvasCount || 0
+          batch.records.push(record)
+        })
+
+        return batches
+      }
+
+      function aggregateDashboardAutoCompletionRecords(records) {
+        const batches = []
+        const batchByKey = {}
+
+        records.forEach((record) => {
+          const startedAt = getAutoDebugStartedAt(record)
+          const completedAt = getAutoDebugCompletedAt(record)
+          const key =
+            (typeof startedAt === 'number' ? startedAt : 'na') +
+            ':' +
+            (typeof completedAt === 'number' ? completedAt : 'na')
+          var batch = batchByKey[key]
+          if (!batch) {
+            batch = {
+              startedAt: startedAt,
+              completedAt: completedAt,
+              selectedCanvasCount: 0,
+              records: []
+            }
+            batchByKey[key] = batch
+            batches.push(batch)
+          }
+          batch.selectedCanvasCount += record.selectedCanvasCount || 0
+          batch.records.push(record)
+        })
+
+        return batches
       }
 
       function clearLargeDom() {
@@ -1982,6 +2369,47 @@
         return new Promise((resolve) => {
           setTimeout(resolve, ms)
         })
+      }
+
+      async function withMockedDocumentVisibility(run) {
+        const originalDescriptor = Object.getOwnPropertyDescriptor(
+          Document.prototype,
+          'visibilityState'
+        )
+        let mockedVisibilityState = document.visibilityState || 'visible'
+
+        Object.defineProperty(document, 'visibilityState', {
+          configurable: true,
+          get() {
+            return mockedVisibilityState
+          }
+        })
+
+        function emitVisibilityChange(nextState) {
+          mockedVisibilityState = nextState
+          document.dispatchEvent(new Event('visibilitychange'))
+          window.dispatchEvent(new Event('visibilitychange'))
+        }
+
+        try {
+          return await run({
+            getState() {
+              return mockedVisibilityState
+            },
+            setState(nextState) {
+              emitVisibilityChange(nextState)
+            }
+          })
+        } finally {
+          delete document.visibilityState
+          if (originalDescriptor) {
+            Object.defineProperty(
+              Document.prototype,
+              'visibilityState',
+              originalDescriptor
+            )
+          }
+        }
       }
 
       function getReplayPerformanceForBenchmark() {
@@ -2021,6 +2449,80 @@
             (end.replaySegmentFlushCount || 0) -
             (start.replaySegmentFlushCount || 0)
         }
+      }
+
+      function summarizeAutoVisibilityBenchmark(
+        kind,
+        mode,
+        scheduler,
+        durationMs,
+        drawCount,
+        beforePerformance,
+        beforeHistory,
+        beforeFlushTail,
+        completionRecords,
+        fallbackRecords,
+        hiddenStartedAt,
+        visibleAgainAt
+      ) {
+        const afterHistory = getReplaySegmentFlushHistoryForBenchmark()
+        const afterFlushTail = getReplayFlushTailIndex(afterHistory)
+        const afterPerformance = getReplayPerformanceForBenchmark()
+        const performanceDelta = diffReplayPerformanceStats(
+          beforePerformance,
+          afterPerformance
+        )
+        const hiddenSnapshots = completionRecords.filter((record) => {
+          return (
+            typeof record.startedAt === 'number' &&
+            record.startedAt >= hiddenStartedAt &&
+            record.startedAt < visibleAgainAt
+          )
+        })
+        const resumedSnapshots = completionRecords.filter((record) => {
+          return (
+            typeof record.startedAt === 'number' &&
+            record.startedAt >= visibleAgainAt
+          )
+        })
+        const firstResumedTimestamp = resumedSnapshots.length
+          ? resumedSnapshots[0].startedAt
+          : 0
+        const newFlushHistory = afterHistory.filter((entry) => {
+          return typeof entry.indexInView === 'number' && entry.indexInView > beforeFlushTail
+        })
+        const fallbackReasonCounts = summarizeFallbackReasons(fallbackRecords || [])
+
+        return JSON.stringify({
+          kind: kind,
+          mode: mode,
+          scheduler: scheduler,
+          durationMs: durationMs,
+          drawCount: drawCount,
+          completedSnapshots: completionRecords.length,
+          hiddenSnapshotCount: hiddenSnapshots.length,
+          resumedSnapshotCount: resumedSnapshots.length,
+          fallbackCount: (fallbackRecords || []).length,
+          fallbackReasonCounts: fallbackReasonCounts,
+          resumeFirstGapMs: firstResumedTimestamp
+            ? Math.max(0, firstResumedTimestamp - visibleAgainAt)
+            : 0,
+          flushDelta:
+            afterFlushTail >= beforeFlushTail && beforeFlushTail >= 0
+              ? afterFlushTail - beforeFlushTail
+              : afterHistory.length - beforeHistory.length,
+          bytesLimitFlushCount: newFlushHistory.filter((entry) => {
+            return entry.flushReason === 'segment_bytes_limit'
+          }).length,
+          durationLimitFlushCount: newFlushHistory.filter((entry) => {
+            return entry.flushReason === 'segment_duration_limit'
+          }).length,
+          processMutationsCount: performanceDelta.processMutationsCount,
+          processMutationsDuration: performanceDelta.processMutationsDuration,
+          mutationCallbackCount: performanceDelta.mutationCallbackCount,
+          mutationRecordCount: performanceDelta.mutationRecordCount,
+          replaySegmentFlushCount: performanceDelta.replaySegmentFlushCount
+        })
       }
 
       function buildDashboardRow(rowIndex) {
@@ -2429,20 +2931,26 @@
       }
 
       function createDashboardCanvasTiles() {
-        if (!replayDashboardCanvasGrid || replayDashboardCanvases.length) return
+        if (!replayDashboardCanvasGrid) return
+        replayDashboardCanvasGrid.innerHTML = ''
         replayDashboardCanvases = dashboardCanvasPanels.map((panel, index) => {
           const tile = document.createElement('div')
           tile.className = 'canvas-demo__dashboard-tile'
 
           const label = document.createElement('div')
           label.className = 'canvas-demo__dashboard-label'
-          label.textContent = panel.title + ' chart'
+          label.textContent = panel.title
           tile.appendChild(label)
+
+          const meta = document.createElement('div')
+          meta.className = 'canvas-demo__dashboard-meta'
+          meta.textContent = 'panel ' + (index + 1) + ' · ' + panel.type
+          tile.appendChild(meta)
 
           const canvas = document.createElement('canvas')
           canvas.className = 'canvas-demo__board'
-          canvas.width = 400
-          canvas.height = 150
+          canvas.width = 220
+          canvas.height = 132
           canvas.dataset.panelIndex = String(index)
           tile.appendChild(canvas)
 
@@ -2548,7 +3056,7 @@
         context.fillText(panel.title, 14, 20)
         context.fillStyle = '#64748b'
         context.font = '10px sans-serif'
-        context.fillText(label + ' #' + step, canvas.width - 76, 20)
+        context.fillText('#' + step, canvas.width - 34, 20)
 
         context.setLineDash([4, 6])
         context.strokeStyle = '#eef2f7'
@@ -2562,19 +3070,19 @@
 
         if (panel.type === 'bar') {
           series.slice(0, 5).forEach((value, barIndex) => {
-            const barX = 24 + barIndex * 30
+            const barX = 24 + barIndex * 34
             const barHeight = Math.max(10, value)
             const barY = canvas.height - 18 - barHeight
             context.fillStyle =
               barIndex % 2 === 0 ? panel.accent : `hsl(${(hue + 13) % 360} 78% 62%)`
-            context.fillRect(barX, barY, 16, barHeight)
+            context.fillRect(barX, barY, 18, barHeight)
           })
         } else {
           context.strokeStyle = panel.accent
           context.lineWidth = 2
           context.beginPath()
           series.forEach((value, pointIndex) => {
-            const pointX = 22 + pointIndex * 60
+            const pointX = 22 + pointIndex * 34
             const pointY = canvas.height - 18 - value
             if (pointIndex === 0) {
               context.moveTo(pointX, pointY)
@@ -2585,7 +3093,7 @@
           context.stroke()
 
           if (panel.type === 'area') {
-            context.lineTo(22 + (series.length - 1) * 60, canvas.height - 18)
+            context.lineTo(22 + (series.length - 1) * 34, canvas.height - 18)
             context.lineTo(22, canvas.height - 18)
             context.closePath()
             context.fillStyle = panel.accent + '22'
@@ -2791,10 +3299,166 @@
         )
       }
 
+      function createCanvasPatternSource(step) {
+        const patternCanvas = document.createElement('canvas')
+        patternCanvas.width = 28
+        patternCanvas.height = 28
+        const patternContext = patternCanvas.getContext('2d')
+        if (!patternContext) return patternCanvas
+        patternContext.fillStyle = '#ecfeff'
+        patternContext.fillRect(0, 0, 28, 28)
+        patternContext.strokeStyle = '#0f766e'
+        patternContext.lineWidth = 2
+        patternContext.beginPath()
+        patternContext.moveTo(0, 28)
+        patternContext.lineTo(28, 0)
+        patternContext.stroke()
+        patternContext.fillStyle = step % 2 === 0 ? '#0ea5e9' : '#7c3aed'
+        patternContext.beginPath()
+        patternContext.arc(14, 14, 5, 0, Math.PI * 2)
+        patternContext.fill()
+        return patternCanvas
+      }
+
+      function createCanvasStampSource(step) {
+        const stampCanvas = document.createElement('canvas')
+        stampCanvas.width = 96
+        stampCanvas.height = 60
+        const stampContext = stampCanvas.getContext('2d')
+        if (!stampContext) return stampCanvas
+        const hue = (step * 29) % 360
+        stampContext.fillStyle = '#ffffff'
+        stampContext.fillRect(0, 0, stampCanvas.width, stampCanvas.height)
+        stampContext.fillStyle = `hsl(${hue} 80% 56%)`
+        stampContext.fillRect(0, 0, stampCanvas.width, stampCanvas.height)
+        stampContext.fillStyle = 'rgba(255,255,255,0.22)'
+        stampContext.fillRect(8, 8, 80, 20)
+        stampContext.fillStyle = '#ffffff'
+        stampContext.font = '700 12px sans-serif'
+        stampContext.fillText('STAMP #' + step, 12, 23)
+        stampContext.strokeStyle = '#082f49'
+        stampContext.lineWidth = 3
+        stampContext.beginPath()
+        stampContext.moveTo(12, 44)
+        stampContext.lineTo(34, 28)
+        stampContext.lineTo(52, 38)
+        stampContext.lineTo(74, 18)
+        stampContext.stroke()
+        return stampCanvas
+      }
+
+      function drawCanvasComplexFidelityScene(label) {
+        const context = getReplayCanvasContext()
+        if (!context) return
+        canvasStep += 1
+        lastCanvasScene = 'complex-fidelity'
+        const hue = (canvasStep * 23) % 360
+        const patternSource = createCanvasPatternSource(canvasStep)
+        const stampSource = createCanvasStampSource(canvasStep)
+        const gradient = context.createLinearGradient(0, 0, replayCanvas.width, 0)
+        gradient.addColorStop(0, '#0f172a')
+        gradient.addColorStop(0.55, `hsl(${hue} 78% 54%)`)
+        gradient.addColorStop(1, '#0ea5e9')
+        const pattern = context.createPattern(patternSource, 'repeat')
+        const wavePath = new Path2D()
+        wavePath.moveTo(52, 154)
+        wavePath.bezierCurveTo(118, 108, 188, 210, 252, 156)
+        wavePath.bezierCurveTo(302, 118, 362, 182, 430, 130)
+        const cardPath = new Path2D()
+        if (cardPath.roundRect) {
+          cardPath.roundRect(24, 24, 432, 172, 22)
+        } else {
+          cardPath.rect(24, 24, 432, 172)
+        }
+
+        context.clearRect(0, 0, replayCanvas.width, replayCanvas.height)
+        context.fillStyle = '#e2e8f0'
+        context.fillRect(0, 0, replayCanvas.width, replayCanvas.height)
+
+        context.save()
+        context.fillStyle = gradient
+        context.shadowColor = 'rgba(15, 23, 42, 0.24)'
+        context.shadowBlur = 18
+        context.shadowOffsetX = 0
+        context.shadowOffsetY = 12
+        context.fill(cardPath)
+        context.restore()
+
+        context.save()
+        context.strokeStyle = '#0f172a'
+        context.lineWidth = 2
+        context.stroke(cardPath)
+        context.restore()
+
+        context.save()
+        context.fillStyle = pattern || '#ffffff33'
+        context.globalAlpha = 0.32
+        context.fill(cardPath)
+        context.restore()
+
+        context.save()
+        context.translate(352, 66)
+        context.rotate(((canvasStep % 10) - 5) * 0.03)
+        context.drawImage(stampSource, -48, -28, 96, 60)
+        context.restore()
+
+        context.save()
+        context.strokeStyle = '#ffffff'
+        context.lineWidth = 6
+        context.lineCap = 'round'
+        context.lineJoin = 'round'
+        context.stroke(wavePath)
+        context.restore()
+
+        context.save()
+        context.strokeStyle = '#082f49'
+        context.lineWidth = 2
+        context.setLineDash([6, 8])
+        context.stroke(wavePath)
+        context.setLineDash([])
+        context.restore()
+
+        context.save()
+        context.fillStyle = '#ffffff'
+        context.font = '700 22px sans-serif'
+        context.fillText('Complex Fidelity Scene', 44, 66)
+        context.font = '12px sans-serif'
+        context.fillStyle = 'rgba(255,255,255,0.86)'
+        context.fillText(
+          'gradient + pattern + Path2D + transform + drawImage(canvas)',
+          44,
+          88
+        )
+        context.fillText(label + ' #' + canvasStep, 44, 108)
+        context.restore()
+
+        context.save()
+        context.fillStyle = 'rgba(255,255,255,0.14)'
+        for (let index = 0; index < 5; index += 1) {
+          const barHeight = 24 + ((canvasStep * 7 + index * 13) % 46)
+          context.fillRect(44 + index * 32, 164 - barHeight, 16, barHeight)
+        }
+        context.restore()
+
+        setCanvasStatus(
+          replayCanvasEventStatus,
+          'chart:complex step=' + canvasStep
+        )
+        setCanvasLog(
+          'Complex fidelity scene rendered at ' +
+            new Date().toLocaleTimeString() +
+            ' with label: ' +
+            label +
+            ' (gradient/pattern/path2d/drawImage)'
+        )
+      }
+
       function drawDashboardCanvasChart(label) {
         if (!replayDashboardCanvases.length) return
+        const startedAt = performance.now()
         dashboardCanvasStep += 1
-        lastDashboardCanvasScene = 'dashboard-chart'
+        dashboardCanvasRenderCount += 1
+        lastDashboardCanvasScene = 'dashboard-chart:' + label
         replayDashboardCanvases.forEach((canvas, index) => {
           drawDashboardChartPanelCanvas(
             canvas,
@@ -2804,17 +3468,23 @@
             dashboardCanvasStep
           )
         })
+        lastDashboardCanvasRenderMs =
+          Math.round((performance.now() - startedAt) * 10) / 10
 
         setCanvasStatus(
           replayDashboardCanvasEventStatus,
           'dashboard x' + replayDashboardCanvases.length + ' step=' + dashboardCanvasStep
         )
         setDashboardCanvasLog(
-          'Dashboard canvases rendered at ' +
+          'Dashboard wallboard rendered at ' +
             new Date().toLocaleTimeString() +
             ' with label: ' +
-            label
+            label +
+            ' across ' +
+            replayDashboardCanvases.length +
+            ' canvases'
         )
+        refreshDashboardCanvasStatusPanel()
       }
 
       function clearCanvasScene() {
@@ -2842,8 +3512,17 @@
           context.clearRect(0, 0, canvas.width, canvas.height)
         })
         lastDashboardCanvasScene = 'clear'
+        lastDashboardCanvasReplayEvent = null
+        lastDashboardCanvasSnapshotResult = null
+        lastDashboardCanvasSnapshotOkCount = 0
+        lastDashboardCanvasSnapshotMs = 0
         setCanvasStatus(replayDashboardCanvasEventStatus, 'clear')
+        if (replayDashboardCanvasExport) {
+          replayDashboardCanvasExport.textContent =
+            'No dashboard canvas replay event exported yet.'
+        }
         setDashboardCanvasLog('Dashboard canvases cleared')
+        refreshDashboardCanvasStatusPanel()
       }
 
       function describeAutoResult(result, trigger, time) {
@@ -2910,6 +3589,72 @@
         )
       }
 
+      async function snapshotCanvasSceneConcurrently(trigger) {
+        if (!trigger) {
+          trigger = 'manual-concurrent-button'
+        }
+        lastCanvasSnapshotTrigger = trigger
+        if (!window.DATAFLUX_RUM || !window.DATAFLUX_RUM.snapshotCanvas) {
+          lastCanvasSnapshotResult = {
+            ok: false,
+            reason: 'api_unavailable'
+          }
+          setCanvasLog('snapshotCanvas API is not available on DATAFLUX_RUM')
+          return
+        }
+        const startedAt = performance.now()
+        const requests = [0, 1, 2].map(function () {
+          return window.DATAFLUX_RUM.snapshotCanvas(replayCanvas)
+        })
+        const results = await Promise.all(requests)
+        const okCount = results.filter(function (result) {
+          return result && result.ok
+        }).length
+        const firstFailure = results.find(function (result) {
+          return !result || !result.ok
+        })
+        lastCanvasSnapshotResult =
+          okCount === results.length
+            ? { ok: true, reason: 'concurrent_ok', count: okCount }
+            : {
+                ok: false,
+                reason:
+                  firstFailure && firstFailure.reason
+                    ? firstFailure.reason
+                    : 'partial_failure',
+                count: okCount
+              }
+        const time = new Date().toLocaleTimeString()
+        lastCanvasAutoResult =
+          'concurrent ' +
+          okCount +
+          '/' +
+          results.length +
+          ' in ' +
+          (Math.round((performance.now() - startedAt) * 10) / 10) +
+          'ms'
+        if (okCount > 0) {
+          lastCanvasReplayEvent = buildCanvasReplayEventFromCanvas(replayCanvas)
+          setCanvasStatus(
+            replayCanvasEventStatus,
+            'concurrent:' + time + ' ok=' + okCount + '/' + results.length
+          )
+          renderLastCanvasReplayEvent()
+        }
+        setCanvasLog(
+          'Concurrent canvas snapshot completed at ' +
+            time +
+            ' with ' +
+            okCount +
+            '/' +
+            results.length +
+            ' successful requests' +
+            (firstFailure && firstFailure.reason
+              ? ' with reason: ' + firstFailure.reason
+              : '')
+        )
+      }
+
       async function snapshotDashboardCanvasScene(trigger) {
         if (!trigger) {
           trigger = 'dashboard-manual-button'
@@ -2924,10 +3669,17 @@
           refreshDashboardCanvasStatusPanel()
           return
         }
-        const results = await Promise.all(
-          replayDashboardCanvases.map((canvas) => window.DATAFLUX_RUM.snapshotCanvas(canvas))
-        )
+        const startedAt = performance.now()
+        const results = []
+        for (const canvas of replayDashboardCanvases) {
+          /* Keep dashboard snapshot deterministic for benchmarking.
+           * Concurrent manual snapshots mostly measure internal contention. */
+          results.push(await window.DATAFLUX_RUM.snapshotCanvas(canvas))
+        }
         const okCount = results.filter((result) => result && result.ok).length
+        lastDashboardCanvasSnapshotOkCount = okCount
+        lastDashboardCanvasSnapshotMs =
+          Math.round((performance.now() - startedAt) * 10) / 10
         const firstFailure = results.find((result) => !result || !result.ok)
         lastDashboardCanvasSnapshotResult =
           okCount === replayDashboardCanvases.length
@@ -2965,11 +3717,794 @@
         setDashboardCanvasLog(
           'Dashboard snapshot failed at ' +
             time +
+            ' with ' +
+            okCount +
+            '/' +
+            replayDashboardCanvases.length +
+            ' successful canvases' +
             (firstFailure && firstFailure.reason
               ? ' with reason: ' + firstFailure.reason
               : '')
         )
         refreshDashboardCanvasStatusPanel()
+      }
+
+      async function snapshotDashboardCanvasSceneConcurrently(trigger) {
+        if (!trigger) {
+          trigger = 'dashboard-concurrent-button'
+        }
+        lastDashboardCanvasTrigger = trigger
+        if (!window.DATAFLUX_RUM || !window.DATAFLUX_RUM.snapshotCanvas) {
+          lastDashboardCanvasSnapshotResult = {
+            ok: false,
+            reason: 'api_unavailable'
+          }
+          setDashboardCanvasLog('snapshotCanvas API is not available on DATAFLUX_RUM')
+          refreshDashboardCanvasStatusPanel()
+          return
+        }
+        const startedAt = performance.now()
+        const results = await Promise.all(
+          replayDashboardCanvases.map(function (canvas) {
+            return window.DATAFLUX_RUM.snapshotCanvas(canvas)
+          })
+        )
+        const okCount = results.filter(function (result) {
+          return result && result.ok
+        }).length
+        lastDashboardCanvasSnapshotOkCount = okCount
+        lastDashboardCanvasSnapshotMs =
+          Math.round((performance.now() - startedAt) * 10) / 10
+        const firstFailure = results.find(function (result) {
+          return !result || !result.ok
+        })
+        lastDashboardCanvasSnapshotResult =
+          okCount === replayDashboardCanvases.length
+            ? { ok: true, reason: 'all_canvas_snapshots_ok', count: okCount }
+            : {
+                ok: false,
+                reason:
+                  firstFailure && firstFailure.reason
+                    ? firstFailure.reason
+                    : 'partial_failure',
+                count: okCount
+              }
+        const time = new Date().toLocaleTimeString()
+        if (okCount > 0) {
+          lastDashboardCanvasReplayEvent = replayDashboardCanvases.map((canvas, index) => {
+            return {
+              panel: dashboardCanvasPanels[index].title,
+              event: buildCanvasReplayEventFromCanvas(canvas)
+            }
+          })
+          setCanvasStatus(
+            replayDashboardCanvasEventStatus,
+            'concurrent:' +
+              time +
+              ' ok=' +
+              okCount +
+              '/' +
+              replayDashboardCanvases.length
+          )
+          renderLastDashboardCanvasReplayEvent()
+        }
+        setDashboardCanvasLog(
+          'Concurrent dashboard snapshot completed at ' +
+            time +
+            ' with ' +
+            okCount +
+            '/' +
+            replayDashboardCanvases.length +
+            ' successful canvases' +
+            (firstFailure && firstFailure.reason
+              ? ' with reason: ' + firstFailure.reason
+              : '')
+        )
+        refreshDashboardCanvasStatusPanel()
+      }
+
+      async function runDashboardCanvasBenchmark(mode, scheduler) {
+        if (dashboardCanvasBenchmarkResult === 'running') {
+          setDashboardCanvasLog('Dashboard benchmark already running')
+          return
+        }
+        dashboardCanvasBenchmarkResult = 'running'
+        refreshDashboardCanvasStatusPanel()
+
+        if (
+          mode !== demoReplayCanvasMode ||
+          (mode === 'auto' && scheduler !== demoReplayCanvasScheduler)
+        ) {
+          dashboardCanvasBenchmarkResult = 'switching'
+          refreshDashboardCanvasStatusPanel()
+          switchReplayCanvasMode(mode, scheduler)
+          return
+        }
+
+        const runs = 3
+        const results = []
+        for (let runIndex = 0; runIndex < runs; runIndex += 1) {
+          const renderStart = performance.now()
+          drawDashboardCanvasChart('benchmark-' + (runIndex + 1))
+          const renderMs = Math.round((performance.now() - renderStart) * 10) / 10
+          await wait(80)
+          const snapshotStart = performance.now()
+          await snapshotDashboardCanvasScene('dashboard-benchmark-' + (runIndex + 1))
+          const snapshotMs = Math.round((performance.now() - snapshotStart) * 10) / 10
+          results.push({
+            renderMs: renderMs,
+            snapshotMs: snapshotMs,
+            okCount: lastDashboardCanvasSnapshotOkCount
+          })
+          await wait(120)
+        }
+
+        const totalRenderMs = results.reduce((sum, item) => sum + item.renderMs, 0)
+        const totalSnapshotMs = results.reduce((sum, item) => sum + item.snapshotMs, 0)
+        const totalOkCount = results.reduce((sum, item) => sum + item.okCount, 0)
+        dashboardCanvasBenchmarkResult = JSON.stringify({
+          mode: mode,
+          scheduler: mode === 'manual' ? 'manual' : scheduler,
+          kind: 'manual_snapshot',
+          runs: runs,
+          avgRenderMs: Math.round((totalRenderMs / runs) * 10) / 10,
+          avgSnapshotMs: Math.round((totalSnapshotMs / runs) * 10) / 10,
+          avgOkCount: Math.round((totalOkCount / runs) * 10) / 10
+        })
+        setDashboardCanvasLog('Dashboard benchmark finished: ' + dashboardCanvasBenchmarkResult)
+        refreshDashboardCanvasStatusPanel()
+      }
+
+      async function runDashboardCanvasAutoBenchmark(mode, scheduler) {
+        if (dashboardCanvasBenchmarkResult === 'running') {
+          setDashboardCanvasLog('Dashboard benchmark already running')
+          return
+        }
+
+        if (
+          mode !== demoReplayCanvasMode ||
+          (mode === 'auto' && scheduler !== demoReplayCanvasScheduler)
+        ) {
+          window.sessionStorage.setItem(
+            dashboardCanvasPendingBenchmarkStorageKey,
+            JSON.stringify({
+              mode: mode,
+              scheduler: scheduler,
+              kind: 'auto_continuity'
+            })
+          )
+          dashboardCanvasBenchmarkResult = 'switching'
+          refreshDashboardCanvasStatusPanel()
+          switchReplayCanvasMode(mode, scheduler)
+          return
+        }
+
+        dashboardCanvasBenchmarkResult = 'running'
+        refreshDashboardCanvasStatusPanel()
+
+        const durationMs = 5000
+        const drawIntervalMs = 120
+        const beforeHistory = getReplaySegmentFlushHistoryForBenchmark()
+        const beforeFlushTail = getReplayFlushTailIndex(beforeHistory)
+        const beforePerformance = getReplayPerformanceForBenchmark()
+        const benchmarkStartedAt = Date.now()
+        let stopped = false
+
+        const drawStart = performance.now()
+        let drawCount = 0
+
+        await new Promise((resolve) => {
+          function tick() {
+            if (stopped) {
+              resolve()
+              return
+            }
+            drawCount += 1
+            drawDashboardCanvasChart('auto-benchmark-' + drawCount)
+            if (performance.now() - drawStart >= durationMs) {
+              stopped = true
+              resolve()
+              return
+            }
+            window.setTimeout(() => {
+              window.requestAnimationFrame(tick)
+            }, drawIntervalMs)
+          }
+          tick()
+        })
+
+        await wait(250)
+
+        const afterHistory = getReplaySegmentFlushHistoryForBenchmark()
+        const afterFlushTail = getReplayFlushTailIndex(afterHistory)
+        const afterPerformance = getReplayPerformanceForBenchmark()
+        const rawCompletionRecords = getAutoCanvasSnapshotDebugHistoryForBenchmark().filter(
+          (entry) => {
+            return (
+              entry &&
+              entry.scheduler === scheduler &&
+              entry.status === 'completed' &&
+              typeof getAutoDebugCompletedAt(entry) === 'number' &&
+              getAutoDebugCompletedAt(entry) >= benchmarkStartedAt
+            )
+          }
+        )
+        const completionRecords =
+          scheduler === 'command_capture'
+            ? aggregateDashboardAutoCompletionRecords(rawCompletionRecords)
+            : rawCompletionRecords.map((record) => {
+                return {
+                  startedAt: getAutoDebugStartedAt(record),
+                  completedAt: getAutoDebugCompletedAt(record),
+                  selectedCanvasCount: record.selectedCanvasCount || 0,
+                  records: [record]
+                }
+              })
+        const fallbackRecords = getAutoCanvasSnapshotDebugHistoryForBenchmark().filter(
+          (entry) => {
+            return (
+              entry &&
+              entry.scheduler === scheduler &&
+              entry.status === 'fallback' &&
+              typeof getAutoDebugCompletedAt(entry) === 'number' &&
+              getAutoDebugCompletedAt(entry) >= benchmarkStartedAt
+            )
+          }
+        )
+        const completionTimestamps = completionRecords
+          .map((entry) => entry.completedAt)
+          .filter((value) => typeof value === 'number')
+        const canvasMutationBytes = getCanvasMutationHistoryForBenchmark()
+          .filter((entry) => {
+            return (
+              entry &&
+              typeof entry.timestamp === 'number' &&
+              entry.timestamp >= benchmarkStartedAt
+            )
+          })
+          .map((entry) => {
+            return entry.encodedBytesCount || entry.approxBytesCount || 0
+          })
+        const performanceDelta = diffReplayPerformanceStats(
+          beforePerformance,
+          afterPerformance
+        )
+        const intervals = []
+        for (let index = 1; index < completionTimestamps.length; index += 1) {
+          intervals.push(completionTimestamps[index] - completionTimestamps[index - 1])
+        }
+        const totalSelectedCanvasCount = completionRecords.reduce((sum, record) => {
+          return sum + (record.selectedCanvasCount || 0)
+        }, 0)
+        const newFlushHistory = afterHistory.filter((entry) => {
+          return typeof entry.indexInView === 'number' && entry.indexInView > beforeFlushTail
+        })
+        const bytesLimitFlushCount = newFlushHistory.filter((entry) => {
+          return entry.flushReason === 'segment_bytes_limit'
+        }).length
+        const durationLimitFlushCount = newFlushHistory.filter((entry) => {
+          return entry.flushReason === 'segment_duration_limit'
+        }).length
+        dashboardCanvasBenchmarkResult = JSON.stringify({
+          kind: 'auto_continuity',
+          mode: mode,
+          scheduler: scheduler,
+          durationMs: durationMs,
+          drawCount: drawCount,
+          completedSnapshots: completionRecords.length,
+          avgSnapshotGapMs:
+            intervals.length
+              ? Math.round(
+                  (intervals.reduce((sum, value) => sum + value, 0) / intervals.length) *
+                    10
+                ) / 10
+              : 0,
+          maxSnapshotGapMs: intervals.length ? Math.max.apply(null, intervals) : 0,
+          avgSelectedCanvasCount:
+            completionRecords.length
+              ? Math.round((totalSelectedCanvasCount / completionRecords.length) * 10) / 10
+              : 0,
+          fallbackCount: fallbackRecords.length,
+          fallbackReasonCounts: summarizeFallbackReasons(fallbackRecords),
+          flushDelta:
+            afterFlushTail >= beforeFlushTail && beforeFlushTail >= 0
+              ? afterFlushTail - beforeFlushTail
+              : afterHistory.length - beforeHistory.length,
+          bytesLimitFlushCount: bytesLimitFlushCount,
+          durationLimitFlushCount: durationLimitFlushCount,
+          avgCanvasMutationBytes:
+            canvasMutationBytes.length
+              ? Math.round(
+                  (canvasMutationBytes.reduce((sum, value) => sum + value, 0) /
+                    canvasMutationBytes.length) *
+                    10
+                ) / 10
+              : 0,
+          maxCanvasMutationBytes: canvasMutationBytes.length
+            ? Math.max.apply(null, canvasMutationBytes)
+            : 0,
+          processMutationsCount: performanceDelta.processMutationsCount,
+          processMutationsDuration: performanceDelta.processMutationsDuration,
+          mutationCallbackCount: performanceDelta.mutationCallbackCount,
+          mutationRecordCount: performanceDelta.mutationRecordCount,
+          replaySegmentFlushCount: performanceDelta.replaySegmentFlushCount
+        })
+        setDashboardCanvasLog(
+          'Dashboard auto benchmark finished: ' + dashboardCanvasBenchmarkResult
+        )
+        refreshDashboardCanvasStatusPanel()
+      }
+
+async function runDashboardCanvasVisibilityBenchmark(mode, scheduler) {
+        if (dashboardCanvasBenchmarkResult === 'running') {
+          setDashboardCanvasLog('Dashboard benchmark already running')
+          return
+        }
+
+        if (
+          mode !== demoReplayCanvasMode ||
+          (mode === 'auto' && scheduler !== demoReplayCanvasScheduler)
+        ) {
+          window.sessionStorage.setItem(
+            dashboardCanvasPendingBenchmarkStorageKey,
+            JSON.stringify({
+              mode: mode,
+              scheduler: scheduler,
+              kind: 'auto_visibility'
+            })
+          )
+          dashboardCanvasBenchmarkResult = 'switching'
+          refreshDashboardCanvasStatusPanel()
+          switchReplayCanvasMode(mode, scheduler)
+          return
+        }
+
+        dashboardCanvasBenchmarkResult = 'running'
+        refreshDashboardCanvasStatusPanel()
+
+        const durationMs = 5000
+        const drawIntervalMs = 120
+        const hideAtMs = 1500
+        const showAtMs = 3000
+        const beforeHistory = getReplaySegmentFlushHistoryForBenchmark()
+        const beforeFlushTail = getReplayFlushTailIndex(beforeHistory)
+        const beforePerformance = getReplayPerformanceForBenchmark()
+        const benchmarkStartedAt = Date.now()
+        let drawCount = 0
+        let stopped = false
+
+        await withMockedDocumentVisibility(async (visibility) => {
+          visibility.setState('visible')
+          const startedAt = Date.now()
+          const hiddenStartedAt = startedAt + hideAtMs
+          const visibleAgainAt = startedAt + showAtMs
+          const hideTimerId = window.setTimeout(() => {
+            visibility.setState('hidden')
+          }, hideAtMs)
+          const showTimerId = window.setTimeout(() => {
+            visibility.setState('visible')
+          }, showAtMs)
+
+          await new Promise((resolve) => {
+            function tick() {
+              if (stopped) {
+                resolve()
+                return
+              }
+              drawCount += 1
+              drawDashboardCanvasChart('visibility-board-' + drawCount)
+              if (Date.now() - startedAt >= durationMs) {
+                stopped = true
+                resolve()
+                return
+              }
+              window.setTimeout(() => {
+                window.requestAnimationFrame(tick)
+              }, drawIntervalMs)
+            }
+            tick()
+          })
+
+          window.clearTimeout(hideTimerId)
+          window.clearTimeout(showTimerId)
+          visibility.setState('visible')
+          await wait(250)
+
+          const rawCompletionRecords = getAutoCanvasSnapshotDebugHistoryForBenchmark()
+            .filter((entry) => {
+              return (
+                entry &&
+                entry.scheduler === scheduler &&
+                entry.status === 'completed' &&
+                typeof getAutoDebugCompletedAt(entry) === 'number' &&
+                getAutoDebugCompletedAt(entry) >= benchmarkStartedAt
+              )
+            })
+          const completionTimestamps =
+            scheduler === 'command_capture'
+              ? aggregateDashboardAutoCompletionRecords(rawCompletionRecords).map((entry) => {
+                  return {
+                    startedAt: entry.startedAt,
+                    completedAt: entry.completedAt
+                  }
+                })
+              : rawCompletionRecords.map((entry) => {
+                  const completedAt = getAutoDebugCompletedAt(entry)
+                  const startedAt = getAutoDebugStartedAt(entry)
+                  return {
+                    startedAt:
+                      typeof startedAt === 'number' ? startedAt : completedAt,
+                    completedAt: completedAt
+                  }
+                })
+          const fallbackRecords = getAutoCanvasSnapshotDebugHistoryForBenchmark().filter(
+            (entry) => {
+              return (
+                entry &&
+                entry.scheduler === scheduler &&
+                entry.status === 'fallback' &&
+                typeof getAutoDebugCompletedAt(entry) === 'number' &&
+                getAutoDebugCompletedAt(entry) >= benchmarkStartedAt
+              )
+            }
+          )
+          const canvasMutationBytes = getCanvasMutationHistoryForBenchmark()
+            .filter((entry) => {
+              return (
+                entry &&
+                typeof entry.timestamp === 'number' &&
+                entry.timestamp >= benchmarkStartedAt
+              )
+            })
+            .map((entry) => {
+              return entry.encodedBytesCount || entry.approxBytesCount || 0
+            })
+
+          dashboardCanvasBenchmarkResult = summarizeAutoVisibilityBenchmark(
+            'auto_visibility',
+            mode,
+            scheduler,
+            durationMs,
+            drawCount,
+            beforePerformance,
+            beforeHistory,
+            beforeFlushTail,
+            completionTimestamps,
+            fallbackRecords,
+            hiddenStartedAt,
+            visibleAgainAt
+          )
+          if (canvasMutationBytes.length) {
+            const parsed = JSON.parse(dashboardCanvasBenchmarkResult)
+            parsed.avgCanvasMutationBytes =
+              Math.round(
+                (canvasMutationBytes.reduce((sum, value) => sum + value, 0) /
+                  canvasMutationBytes.length) *
+                  10
+              ) / 10
+            parsed.maxCanvasMutationBytes = Math.max.apply(null, canvasMutationBytes)
+            dashboardCanvasBenchmarkResult = JSON.stringify(parsed)
+          }
+        })
+        setDashboardCanvasLog(
+          'Dashboard visibility benchmark finished: ' + dashboardCanvasBenchmarkResult
+        )
+        refreshDashboardCanvasStatusPanel()
+      }
+
+      async function runMainCanvasAutoBenchmark(mode, scheduler) {
+        if (canvasBenchmarkResult === 'running') {
+          setCanvasLog('Canvas benchmark already running')
+          return
+        }
+
+        if (
+          mode !== demoReplayCanvasMode ||
+          (mode === 'auto' && scheduler !== demoReplayCanvasScheduler)
+        ) {
+          window.sessionStorage.setItem(
+            canvasPendingBenchmarkStorageKey,
+            JSON.stringify({
+              mode: mode,
+              scheduler: scheduler,
+              kind: 'auto_continuity_main'
+            })
+          )
+          canvasBenchmarkResult = 'switching'
+          refreshCanvasStatusPanel()
+          switchReplayCanvasMode(mode, scheduler)
+          return
+        }
+
+        canvasBenchmarkResult = 'running'
+        refreshCanvasStatusPanel()
+
+        const durationMs = 5000
+        const drawIntervalMs = 120
+        const beforeHistory = getReplaySegmentFlushHistoryForBenchmark()
+        const beforeFlushTail = getReplayFlushTailIndex(beforeHistory)
+        const beforePerformance = getReplayPerformanceForBenchmark()
+        const benchmarkStartedAt = Date.now()
+        let stopped = false
+
+        const drawStart = performance.now()
+        let drawCount = 0
+
+        await new Promise((resolve) => {
+          function tick() {
+            if (stopped) {
+              resolve()
+              return
+            }
+            drawCount += 1
+            drawMainCanvasBenchmarkFrame(drawCount)
+            if (performance.now() - drawStart >= durationMs) {
+              stopped = true
+              resolve()
+              return
+            }
+            window.setTimeout(() => {
+              window.requestAnimationFrame(tick)
+            }, drawIntervalMs)
+          }
+          tick()
+        })
+
+        await wait(250)
+
+        const afterHistory = getReplaySegmentFlushHistoryForBenchmark()
+        const afterFlushTail = getReplayFlushTailIndex(afterHistory)
+        const afterPerformance = getReplayPerformanceForBenchmark()
+        const completionRecords = getAutoCanvasSnapshotDebugHistoryForBenchmark().filter(
+          (entry) => {
+            return (
+              entry &&
+              entry.scheduler === scheduler &&
+              entry.status === 'completed' &&
+              typeof getAutoDebugCompletedAt(entry) === 'number' &&
+              getAutoDebugCompletedAt(entry) >= benchmarkStartedAt
+            )
+          }
+        )
+        const fallbackRecords = getAutoCanvasSnapshotDebugHistoryForBenchmark().filter(
+          (entry) => {
+            return (
+              entry &&
+              entry.scheduler === scheduler &&
+              entry.status === 'fallback' &&
+              typeof getAutoDebugCompletedAt(entry) === 'number' &&
+              getAutoDebugCompletedAt(entry) >= benchmarkStartedAt
+            )
+          }
+        )
+        const completionTimestamps = completionRecords.map((entry) =>
+          getAutoDebugCompletedAt(entry)
+        )
+        const canvasMutationBytes = getCanvasMutationHistoryForBenchmark()
+          .filter((entry) => {
+            return (
+              entry &&
+              typeof entry.timestamp === 'number' &&
+              entry.timestamp >= benchmarkStartedAt
+            )
+          })
+          .map((entry) => {
+            return entry.encodedBytesCount || entry.approxBytesCount || 0
+          })
+        const performanceDelta = diffReplayPerformanceStats(
+          beforePerformance,
+          afterPerformance
+        )
+        const intervals = []
+        for (let index = 1; index < completionTimestamps.length; index += 1) {
+          intervals.push(completionTimestamps[index] - completionTimestamps[index - 1])
+        }
+        const totalSelectedCanvasCount = completionRecords.reduce((sum, record) => {
+          return sum + (record.selectedCanvasCount || 0)
+        }, 0)
+        const newFlushHistory = afterHistory.filter((entry) => {
+          return typeof entry.indexInView === 'number' && entry.indexInView > beforeFlushTail
+        })
+        const bytesLimitFlushCount = newFlushHistory.filter((entry) => {
+          return entry.flushReason === 'segment_bytes_limit'
+        }).length
+        const durationLimitFlushCount = newFlushHistory.filter((entry) => {
+          return entry.flushReason === 'segment_duration_limit'
+        }).length
+
+        canvasBenchmarkResult = JSON.stringify({
+          kind: 'auto_continuity_main',
+          mode: mode,
+          scheduler: scheduler,
+          durationMs: durationMs,
+          drawCount: drawCount,
+          completedSnapshots: completionTimestamps.length,
+          avgSnapshotGapMs:
+            intervals.length
+              ? Math.round(
+                  (intervals.reduce((sum, value) => sum + value, 0) / intervals.length) *
+                    10
+                ) / 10
+              : 0,
+          maxSnapshotGapMs: intervals.length ? Math.max.apply(null, intervals) : 0,
+          avgSelectedCanvasCount:
+            completionRecords.length
+              ? Math.round((totalSelectedCanvasCount / completionRecords.length) * 10) / 10
+              : 0,
+          fallbackCount: fallbackRecords.length,
+          fallbackReasonCounts: summarizeFallbackReasons(fallbackRecords),
+          flushDelta:
+            afterFlushTail >= beforeFlushTail && beforeFlushTail >= 0
+              ? afterFlushTail - beforeFlushTail
+              : afterHistory.length - beforeHistory.length,
+          bytesLimitFlushCount: bytesLimitFlushCount,
+          durationLimitFlushCount: durationLimitFlushCount,
+          avgCanvasMutationBytes:
+            canvasMutationBytes.length
+              ? Math.round(
+                  (canvasMutationBytes.reduce((sum, value) => sum + value, 0) /
+                    canvasMutationBytes.length) *
+                    10
+                ) / 10
+              : 0,
+          maxCanvasMutationBytes: canvasMutationBytes.length
+            ? Math.max.apply(null, canvasMutationBytes)
+            : 0,
+          processMutationsCount: performanceDelta.processMutationsCount,
+          processMutationsDuration: performanceDelta.processMutationsDuration,
+          mutationCallbackCount: performanceDelta.mutationCallbackCount,
+          mutationRecordCount: performanceDelta.mutationRecordCount,
+          replaySegmentFlushCount: performanceDelta.replaySegmentFlushCount
+        })
+        setCanvasLog('Canvas auto benchmark finished: ' + canvasBenchmarkResult)
+        refreshCanvasStatusPanel()
+      }
+
+async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
+        if (canvasBenchmarkResult === 'running') {
+          setCanvasLog('Canvas benchmark already running')
+          return
+        }
+
+        if (
+          mode !== demoReplayCanvasMode ||
+          (mode === 'auto' && scheduler !== demoReplayCanvasScheduler)
+        ) {
+          window.sessionStorage.setItem(
+            canvasPendingBenchmarkStorageKey,
+            JSON.stringify({
+              mode: mode,
+              scheduler: scheduler,
+              kind: 'auto_visibility_main'
+            })
+          )
+          canvasBenchmarkResult = 'switching'
+          refreshCanvasStatusPanel()
+          switchReplayCanvasMode(mode, scheduler)
+          return
+        }
+
+        canvasBenchmarkResult = 'running'
+        refreshCanvasStatusPanel()
+
+        const durationMs = 5000
+        const drawIntervalMs = 120
+        const hideAtMs = 1500
+        const showAtMs = 3000
+        const beforeHistory = getReplaySegmentFlushHistoryForBenchmark()
+        const beforeFlushTail = getReplayFlushTailIndex(beforeHistory)
+        const beforePerformance = getReplayPerformanceForBenchmark()
+        const benchmarkStartedAt = Date.now()
+        let drawCount = 0
+        let stopped = false
+
+        await withMockedDocumentVisibility(async (visibility) => {
+          visibility.setState('visible')
+          const startedAt = Date.now()
+          const hiddenStartedAt = startedAt + hideAtMs
+          const visibleAgainAt = startedAt + showAtMs
+          const hideTimerId = window.setTimeout(() => {
+            visibility.setState('hidden')
+          }, hideAtMs)
+          const showTimerId = window.setTimeout(() => {
+            visibility.setState('visible')
+          }, showAtMs)
+
+          await new Promise((resolve) => {
+            function tick() {
+              if (stopped) {
+                resolve()
+                return
+              }
+              drawCount += 1
+              drawMainCanvasBenchmarkFrame(drawCount)
+              if (Date.now() - startedAt >= durationMs) {
+                stopped = true
+                resolve()
+                return
+              }
+              window.setTimeout(() => {
+                window.requestAnimationFrame(tick)
+              }, drawIntervalMs)
+            }
+            tick()
+          })
+
+          window.clearTimeout(hideTimerId)
+          window.clearTimeout(showTimerId)
+          visibility.setState('visible')
+          await wait(250)
+
+          const completionTimestamps = getAutoCanvasSnapshotDebugHistoryForBenchmark()
+            .filter((entry) => {
+              return (
+                entry &&
+                entry.scheduler === scheduler &&
+                entry.status === 'completed' &&
+                typeof getAutoDebugCompletedAt(entry) === 'number' &&
+                getAutoDebugCompletedAt(entry) >= benchmarkStartedAt
+              )
+            })
+            .map((entry) => {
+              const completedAt = getAutoDebugCompletedAt(entry)
+              const startedAt = getAutoDebugStartedAt(entry)
+              return {
+                startedAt:
+                  typeof startedAt === 'number' ? startedAt : completedAt,
+                completedAt: completedAt
+              }
+            })
+          const fallbackRecords = getAutoCanvasSnapshotDebugHistoryForBenchmark().filter(
+            (entry) => {
+              return (
+                entry &&
+                entry.scheduler === scheduler &&
+                entry.status === 'fallback' &&
+                typeof getAutoDebugCompletedAt(entry) === 'number' &&
+                getAutoDebugCompletedAt(entry) >= benchmarkStartedAt
+              )
+            }
+          )
+          const canvasMutationBytes = getCanvasMutationHistoryForBenchmark()
+            .filter((entry) => {
+              return (
+                entry &&
+                typeof entry.timestamp === 'number' &&
+                entry.timestamp >= benchmarkStartedAt
+              )
+            })
+            .map((entry) => {
+              return entry.encodedBytesCount || entry.approxBytesCount || 0
+            })
+
+          canvasBenchmarkResult = summarizeAutoVisibilityBenchmark(
+            'auto_visibility_main',
+            mode,
+            scheduler,
+            durationMs,
+            drawCount,
+            beforePerformance,
+            beforeHistory,
+            beforeFlushTail,
+            completionTimestamps,
+            fallbackRecords,
+            hiddenStartedAt,
+            visibleAgainAt
+          )
+          if (canvasMutationBytes.length) {
+            const parsed = JSON.parse(canvasBenchmarkResult)
+            parsed.avgCanvasMutationBytes =
+              Math.round(
+                (canvasMutationBytes.reduce((sum, value) => sum + value, 0) /
+                  canvasMutationBytes.length) *
+                  10
+              ) / 10
+            parsed.maxCanvasMutationBytes = Math.max.apply(null, canvasMutationBytes)
+            canvasBenchmarkResult = JSON.stringify(parsed)
+          }
+        })
+        setCanvasLog('Canvas visibility benchmark finished: ' + canvasBenchmarkResult)
+        refreshCanvasStatusPanel()
       }
 
       function animateCanvasAndSnapshot() {
@@ -3021,7 +4556,7 @@
         let frame = 0
         const tick = () => {
           frame += 1
-          drawDashboardCanvasChart('animate-board')
+          drawDashboardCanvasChart('animate-board-' + frame)
           if (frame === 8) {
             snapshotDashboardCanvasScene('dashboard-animation-end')
             dashboardCanvasAnimationFrameId = null
@@ -3073,6 +4608,67 @@
       window.setInterval(refreshDashboardCanvasStatusPanel, 1000)
       window.setInterval(refreshLargeDomStatus, 1000)
       window.setInterval(renderResourceHookSnapshot, 1000)
+      ;(function maybeResumeDashboardCanvasBenchmark() {
+        const pendingCanvasBenchmark = window.sessionStorage.getItem(
+          canvasPendingBenchmarkStorageKey
+        )
+        if (pendingCanvasBenchmark) {
+          try {
+            const parsedCanvasBenchmark = JSON.parse(pendingCanvasBenchmark)
+            if (
+              parsedCanvasBenchmark &&
+              (parsedCanvasBenchmark.kind === 'auto_continuity_main' ||
+                parsedCanvasBenchmark.kind === 'auto_visibility_main') &&
+              parsedCanvasBenchmark.mode === demoReplayCanvasMode &&
+              parsedCanvasBenchmark.scheduler === demoReplayCanvasScheduler
+            ) {
+              window.sessionStorage.removeItem(canvasPendingBenchmarkStorageKey)
+              window.setTimeout(() => {
+                if (parsedCanvasBenchmark.kind === 'auto_visibility_main') {
+                  runMainCanvasVisibilityBenchmark(
+                    parsedCanvasBenchmark.mode,
+                    parsedCanvasBenchmark.scheduler
+                  )
+                } else {
+                  runMainCanvasAutoBenchmark(
+                    parsedCanvasBenchmark.mode,
+                    parsedCanvasBenchmark.scheduler
+                  )
+                }
+              }, 250)
+              return
+            }
+          } catch (_) {}
+          window.sessionStorage.removeItem(canvasPendingBenchmarkStorageKey)
+        }
+
+        const pending = window.sessionStorage.getItem(
+          dashboardCanvasPendingBenchmarkStorageKey
+        )
+        if (!pending) {
+          return
+        }
+        try {
+          const parsed = JSON.parse(pending)
+          if (
+            parsed &&
+            (parsed.kind === 'auto_continuity' || parsed.kind === 'auto_visibility') &&
+            parsed.mode === demoReplayCanvasMode &&
+            parsed.scheduler === demoReplayCanvasScheduler
+          ) {
+            window.sessionStorage.removeItem(dashboardCanvasPendingBenchmarkStorageKey)
+            window.setTimeout(() => {
+              if (parsed.kind === 'auto_visibility') {
+                runDashboardCanvasVisibilityBenchmark(parsed.mode, parsed.scheduler)
+              } else {
+                runDashboardCanvasAutoBenchmark(parsed.mode, parsed.scheduler)
+              }
+            }, 250)
+            return
+          }
+        } catch (_) {}
+        window.sessionStorage.removeItem(dashboardCanvasPendingBenchmarkStorageKey)
+      })()
       let right = 10
       function buttonsClickHandle(event) {
         const target = event.target
@@ -3166,9 +4762,15 @@
         } else if (delay === 'triggerCls') {
           triggerCls()
         } else if (delay === 'canvasModeManual') {
-          switchReplayCanvasMode('manual')
-        } else if (delay === 'canvasModeAuto') {
-          switchReplayCanvasMode('auto')
+          switchReplayCanvasMode('manual', 'continuous_snapshot')
+        } else if (delay === 'canvasModeAutoContinuous') {
+          switchReplayCanvasMode('auto', 'continuous_snapshot')
+        } else if (delay === 'canvasModeAutoCommand') {
+          switchReplayCanvasMode('auto', 'command_capture')
+        } else if (delay === 'canvasWorkerInline') {
+          switchReplayCanvasWorkerMode('inline')
+        } else if (delay === 'canvasWorkerExternal') {
+          switchReplayCanvasWorkerMode('external')
         } else if (delay === 'canvasDraw') {
           drawCanvasScene('manual')
         } else if (delay === 'canvasDrawLineChart') {
@@ -3177,18 +4779,30 @@
           drawCanvasBarChart('manual-bar')
         } else if (delay === 'canvasDrawDashboard') {
           drawCanvasDashboardChart('manual-board')
+        } else if (delay === 'canvasDrawComplexFidelity') {
+          drawCanvasComplexFidelityScene('manual-complex')
         } else if (delay === 'canvasAnimateCharts') {
           animateCanvasCharts()
         } else if (delay === 'canvasAutoDrawToggle') {
           toggleAutoDraw()
         } else if (delay === 'canvasSnapshot') {
           snapshotCanvasScene()
+        } else if (delay === 'canvasSnapshotConcurrent') {
+          snapshotCanvasSceneConcurrently()
         } else if (delay === 'canvasAnimateAndSnapshot') {
           animateCanvasAndSnapshot()
         } else if (delay === 'canvasClear') {
           clearCanvasScene()
         } else if (delay === 'canvasExportEvent') {
           exportLastCanvasReplayEvent()
+        } else if (delay === 'canvasAutoBenchmarkContinuous') {
+          runMainCanvasAutoBenchmark('auto', 'continuous_snapshot')
+        } else if (delay === 'canvasAutoBenchmarkCommand') {
+          runMainCanvasAutoBenchmark('auto', 'command_capture')
+        } else if (delay === 'canvasVisibilityBenchmarkContinuous') {
+          runMainCanvasVisibilityBenchmark('auto', 'continuous_snapshot')
+        } else if (delay === 'canvasVisibilityBenchmarkCommand') {
+          runMainCanvasVisibilityBenchmark('auto', 'command_capture')
         } else if (delay === 'dashboardCanvasDraw') {
           drawDashboardCanvasChart('manual-board')
         } else if (delay === 'dashboardCanvasAnimate') {
@@ -3197,8 +4811,20 @@
           clearDashboardCanvasScene()
         } else if (delay === 'dashboardCanvasSnapshot') {
           snapshotDashboardCanvasScene()
+        } else if (delay === 'dashboardCanvasSnapshotConcurrent') {
+          snapshotDashboardCanvasSceneConcurrently()
         } else if (delay === 'dashboardCanvasExportEvent') {
           exportLastDashboardCanvasReplayEvent()
+        } else if (delay === 'dashboardCanvasBenchmarkContinuous') {
+          runDashboardCanvasBenchmark('auto', 'continuous_snapshot')
+        } else if (delay === 'dashboardCanvasAutoBenchmarkContinuous') {
+          runDashboardCanvasAutoBenchmark('auto', 'continuous_snapshot')
+        } else if (delay === 'dashboardCanvasAutoBenchmarkCommand') {
+          runDashboardCanvasAutoBenchmark('auto', 'command_capture')
+        } else if (delay === 'dashboardCanvasVisibilityBenchmarkContinuous') {
+          runDashboardCanvasVisibilityBenchmark('auto', 'continuous_snapshot')
+        } else if (delay === 'dashboardCanvasVisibilityBenchmarkCommand') {
+          runDashboardCanvasVisibilityBenchmark('auto', 'command_capture')
         } else if (delay === 'largeDomReplayOn') {
           setLargeDomReplayRecording(true)
         } else if (delay === 'largeDomReplayOff') {

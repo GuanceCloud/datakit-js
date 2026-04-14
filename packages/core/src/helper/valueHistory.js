@@ -20,7 +20,7 @@ export function createValueHistory(params) {
   var maxEntries = params.maxEntries
 
   var entries = []
-  if (cleanupHistoriesInterval) {
+  if (cleanupHistoriesInterval === null) {
     cleanupHistoriesInterval = setInterval(function () {
       return clearExpiredValues()
     }, CLEAR_OLD_VALUES_INTERVAL)

@@ -258,7 +258,13 @@ After initializing the SDK, call the `startSessionReplayRecording()` method to e
 ## Important Notes
 
 - Session replay still does not fully support elements like iframes, videos, and audio.
-- 2D canvas now supports snapshot-based replay recording in `manual` and `auto` modes. For details, refer to [Canvas Replay Recording Guide](./replay-canvas.md).
+- 2D canvas recording requires more than just turning on Session Replay. To make it work, you should explicitly configure:
+  - `sessionReplaySampleRate`
+  - `replayCanvasEnabled: true`
+  - `replayCanvasMode`
+  - and in `auto` mode, also explicitly configure `replayCanvasSampling`
+- The current default `replayCanvasMode` is `auto`.
+- For the full canvas setup, refer to [Canvas Replay Recording Guide](./replay-canvas.md).
 - Ensure static resources (such as fonts, images) remain accessible during replay, which may require setting up CORS policies.
 - For CSS styles and mouse hover events, ensure CSS rules can be accessed via the CSSStyleSheet interface.
 

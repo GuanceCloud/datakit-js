@@ -42,7 +42,7 @@ API 语义：
 - `appendResourceContext(resourceId, context)`
   追加更多字段到当前 tracker 的上下文
 - `finishResource(resourceId)`
-  如果请求已经完成，则立即触发该 tracked resource 上报
+  表示这条 tracked resource 已准备好结束。如果请求已经完成，会立即触发上报；如果请求还没完成，SDK 会等到请求完成后再上报
 - `getResource(resourceId)`
   返回当前 tracker 快照，主要用于调试
 
@@ -198,7 +198,26 @@ console.log(snapshot)
 
 如果业务没有调用 `finishResource()`，SDK 会在 `30s` 后自动 flush 这条 tracked resource。
 
-这样可以避免 tracked request 长期处于 pending 状态。
+这里最容易误解的一点是：
+
+- 这个 `30s` 是从**请求完成之后**开始算
+- 不是从**请求开始时**开始算
+
+实际时序是：
+
+1. 请求开始
+2. 请求完成
+3. SDK 通过 `x-rum-resource-id` 关联到这条 resource
+4. 如果这时还没调用 `finishResource()`，SDK 最多再等 `30s`
+5. 到时后自动以 `timeout_flushed` 状态上报
+
+这样可以避免 tracked request 长期处于 pending 状态，同时也给业务代码保留一段“请求完成后再补充响应上下文”的窗口。
+
+## 时序说明
+
+- 如果在**请求完成前**调用 `finishResource()`，SDK 不会立刻上报，而是先把 tracker 标记为 `finished`，等请求真正完成后再 flush。
+- 如果在**请求完成后**调用 `finishResource()`，SDK 会立即 flush。
+- 如果始终不调用 `finishResource()`，就走上面的“请求完成后等待 `30s` 再自动 flush”的逻辑。
 
 ## 注意事项
 

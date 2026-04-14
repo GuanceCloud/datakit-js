@@ -215,6 +215,17 @@ describe('rumPublicApi', () => {
       status: 'completed',
       selectedCanvasCount: 1
     }
+    const canvasMutationDebugResult = {
+      canvasId: 42,
+      encodedBytesCount: 2048
+    }
+    const autoSnapshotHistoryResult = [
+      {
+        status: 'completed',
+        selectedCanvasCount: 1
+      }
+    ]
+    const canvasMutationHistoryResult = [canvasMutationDebugResult]
     const replaySegmentFlushResult = {
       creationReason: 'init',
       flushReason: 'segment_duration_limit',
@@ -260,6 +271,15 @@ describe('rumPublicApi', () => {
       getLastAutoCanvasSnapshotResultForDebug: jasmine
         .createSpy('getLastAutoCanvasSnapshotResultForDebug')
         .and.returnValue(autoSnapshotResult),
+      getAutoCanvasSnapshotDebugHistoryForDebug: jasmine
+        .createSpy('getAutoCanvasSnapshotDebugHistoryForDebug')
+        .and.returnValue(autoSnapshotHistoryResult),
+      getLastCanvasMutationForDebug: jasmine
+        .createSpy('getLastCanvasMutationForDebug')
+        .and.returnValue(canvasMutationDebugResult),
+      getCanvasMutationHistoryForDebug: jasmine
+        .createSpy('getCanvasMutationHistoryForDebug')
+        .and.returnValue(canvasMutationHistoryResult),
       getLastReplaySegmentFlushForDebug: jasmine
         .createSpy('getLastReplaySegmentFlushForDebug')
         .and.returnValue(replaySegmentFlushResult),
@@ -297,6 +317,7 @@ describe('rumPublicApi', () => {
     )
 
     rumPublicApi.startSessionReplayRecording({ force: true })
+    expect(rumPublicApi.isRecording()).toBeFalse()
     rumPublicApi.stopSessionReplayRecording()
     rumPublicApi.takeSubsequentFullSnapshot()
     expect(
@@ -304,6 +325,15 @@ describe('rumPublicApi', () => {
     ).toBe(42)
     expect(rumPublicApi.getLastAutoCanvasSnapshotResultForDebug()).toEqual(
       autoSnapshotResult
+    )
+    expect(rumPublicApi.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual(
+      autoSnapshotHistoryResult
+    )
+    expect(rumPublicApi.getLastCanvasMutationForDebug()).toEqual(
+      canvasMutationDebugResult
+    )
+    expect(rumPublicApi.getCanvasMutationHistoryForDebug()).toEqual(
+      canvasMutationHistoryResult
     )
     expect(rumPublicApi.getLastReplaySegmentFlushForDebug()).toEqual(
       replaySegmentFlushResult
@@ -319,10 +349,15 @@ describe('rumPublicApi', () => {
     )
 
     expect(recorderApi.start).toHaveBeenCalledWith({ force: true })
+    expect(recorderApi.isRecording).toHaveBeenCalled()
     expect(recorderApi.stop).toHaveBeenCalled()
     expect(recorderApi.takeSubsequentFullSnapshot).toHaveBeenCalled()
     expect(recorderApi.getSerializedNodeIdForDebug).toHaveBeenCalled()
     expect(recorderApi.getLastAutoCanvasSnapshotResultForDebug).toHaveBeenCalled()
+    expect(
+      recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug
+    ).toHaveBeenCalled()
+    expect(recorderApi.getCanvasMutationHistoryForDebug).toHaveBeenCalled()
     expect(recorderApi.getLastReplaySegmentFlushForDebug).toHaveBeenCalled()
     expect(recorderApi.snapshotCanvas).toHaveBeenCalled()
   })

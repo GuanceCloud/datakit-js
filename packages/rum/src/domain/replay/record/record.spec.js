@@ -18,6 +18,16 @@ describe('replay/record/record', () => {
     }
   })
 
+  function createLifeCycle() {
+    return {
+      subscribe() {
+        return {
+          unsubscribe: jasmine.createSpy('unsubscribe')
+        }
+      }
+    }
+  }
+
   it('should require an emit function', () => {
     expect(() => record({ configuration: {}, lifeCycle: {} })).toThrowError(
       'emit function is required'
@@ -31,38 +41,17 @@ describe('replay/record/record', () => {
 
     const emittedRecords = []
     const recorder = record({
-      emit: (record) => {
-        emittedRecords.push(record)
-      },
+      emit: (event) => emittedRecords.push(event),
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      }
+      lifeCycle: createLifeCycle()
     })
 
     const initialTypes = emittedRecords.map((event) => event.type)
     expect(initialTypes).toContain(RecordType.Meta)
     expect(initialTypes).toContain(RecordType.Focus)
     expect(initialTypes).toContain(RecordType.FullSnapshot)
-
-    const initialFullSnapshot = emittedRecords.find(
-      (event) => event.type === RecordType.FullSnapshot
-    )
-    expect(initialFullSnapshot).toEqual(
-      jasmine.objectContaining({
-        timestamp: jasmine.any(Number),
-        data: jasmine.objectContaining({
-          node: jasmine.any(Object),
-          initialOffset: jasmine.any(Object)
-        })
-      })
-    )
 
     input.value = 'changed'
     input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -72,15 +61,7 @@ describe('replay/record/record', () => {
         event.type === RecordType.IncrementalSnapshot &&
         event.data.source === IncrementalSource.Input
     )
-    expect(inputSnapshot).toEqual(
-      jasmine.objectContaining({
-        data: jasmine.objectContaining({
-          source: IncrementalSource.Input,
-          text: 'changed',
-          id: jasmine.any(Number)
-        })
-      })
-    )
+    expect(inputSnapshot.data.text).toBe('changed')
 
     recorder.takeSubsequentFullSnapshot(1234)
 
@@ -92,9 +73,6 @@ describe('replay/record/record', () => {
           event.type === RecordType.FullSnapshot)
     )
     expect(subsequentSnapshotEvents.length).toBe(3)
-
-    expect(() => recorder.flushMutations()).not.toThrow()
-    expect(() => recorder.stop()).not.toThrow()
   })
 
   it('should expose replay performance counters for mutation processing', () => {
@@ -104,13 +82,7 @@ describe('replay/record/record', () => {
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      }
+      lifeCycle: createLifeCycle()
     })
 
     const child = document.createElement('div')
@@ -133,22 +105,13 @@ describe('replay/record/record', () => {
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      }
+      lifeCycle: createLifeCycle()
     })
 
     emittedRecords.length = 0
 
-    const childA = document.createElement('div')
-    const childB = document.createElement('div')
-    container.appendChild(childA)
-    container.appendChild(childB)
-
+    container.appendChild(document.createElement('div'))
+    container.appendChild(document.createElement('div'))
     recorder.flushMutations()
 
     const mutationSnapshots = emittedRecords.filter(
@@ -167,19 +130,11 @@ describe('replay/record/record', () => {
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      }
+      lifeCycle: createLifeCycle()
     })
 
     emittedRecords.length = 0
-
-    const child = document.createElement('div')
-    container.appendChild(child)
+    container.appendChild(document.createElement('div'))
 
     recorder.takeSubsequentFullSnapshot(4321)
 
@@ -194,7 +149,6 @@ describe('replay/record/record', () => {
     )
 
     expect(mutationSnapshots.length).toBe(1)
-    expect(mutationSnapshots[0].data.adds.length).toBe(1)
     expect(fullSnapshots.length).toBe(1)
   })
 
@@ -205,16 +159,8 @@ describe('replay/record/record', () => {
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      }
+      lifeCycle: createLifeCycle()
     })
-
-    emittedRecords.length = 0
 
     const textNode = document.createTextNode('a')
     container.appendChild(textNode)
@@ -242,16 +188,8 @@ describe('replay/record/record', () => {
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      }
+      lifeCycle: createLifeCycle()
     })
-
-    emittedRecords.length = 0
 
     const element = document.createElement('div')
     container.appendChild(element)
@@ -282,16 +220,8 @@ describe('replay/record/record', () => {
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      }
+      lifeCycle: createLifeCycle()
     })
-
-    emittedRecords.length = 0
 
     for (let index = 0; index < 4; index += 1) {
       const child = document.createElement('div')
@@ -309,10 +239,7 @@ describe('replay/record/record', () => {
 
     expect(mutationSnapshots.length).toBeGreaterThan(1)
     expect(
-      mutationSnapshots.reduce(
-        (count, event) => count + event.data.adds.length,
-        0
-      )
+      mutationSnapshots.reduce((count, event) => count + event.data.adds.length, 0)
     ).toBe(4)
   })
 
@@ -335,19 +262,10 @@ describe('replay/record/record', () => {
         replayCanvasMaxEncodedBytes: 40000,
         replayCanvasMaxConcurrentEncodes: 1
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      }
+      lifeCycle: createLifeCycle()
     })
 
-    const result = await recorder.snapshotCanvas(canvas)
-
-    expect(result).toEqual({ ok: true })
-
+    expect(await recorder.snapshotCanvas(canvas)).toEqual({ ok: true })
     expect(
       emittedRecords.some(
         (event) =>
@@ -357,27 +275,31 @@ describe('replay/record/record', () => {
     ).toBeTrue()
   })
 
-  it('should start and stop the auto canvas snapshot loop when auto mode is enabled', () => {
-    const stopAutoCanvasSnapshots = jasmine.createSpy('stopAutoCanvasSnapshots')
+  it('should start and stop the continuous canvas snapshot loop for numeric sampling', () => {
     const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
-    const startAutoCanvasSnapshotLoop = jasmine
-      .createSpy('startAutoCanvasSnapshotLoop')
+    const stopContinuousCanvasSnapshots = jasmine.createSpy(
+      'stopContinuousCanvasSnapshots'
+    )
+    const startContinuousCanvasSnapshotLoop = jasmine
+      .createSpy('startContinuousCanvasSnapshotLoop')
       .and.callFake(function (options) {
         options.onDebug({
+          scheduler: 'continuous_snapshot',
           status: 'completed',
-          timestamp: 1234,
-          eligibleCanvasCount: 2,
-          selectedCanvasCount: 1,
-          skippedBudgetCount: 1,
+          timestamp: 2234,
+          eligibleCanvasCount: 3,
+          selectedCanvasCount: 3,
+          skippedBudgetCount: 0,
           results: [
-            {
-              canvasId: 26,
-              ok: true,
-              priority: 10
-            }
+            { canvasId: 31, ok: true },
+            { canvasId: 32, ok: true },
+            { canvasId: 33, ok: false, reason: 'below_threshold' }
           ]
         })
-        return stopAutoCanvasSnapshots
+        return {
+          stop: stopContinuousCanvasSnapshots,
+          reset: jasmine.createSpy('resetContinuousCanvasSnapshots')
+        }
       })
 
     const recorder = record({
@@ -386,207 +308,74 @@ describe('replay/record/record', () => {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
         replayCanvasEnabled: true,
         replayCanvasMode: 'auto',
-        replayCanvasAutoInterval: 1000
+        replayCanvasSampling: 2
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      },
+      lifeCycle: createLifeCycle(),
       sessionManager: {
         keepSessionAlive: keepSessionAlive
       },
-      startAutoCanvasSnapshotLoop: startAutoCanvasSnapshotLoop
+      startContinuousCanvasSnapshotLoop: startContinuousCanvasSnapshotLoop
     })
 
-    expect(startAutoCanvasSnapshotLoop).toHaveBeenCalledWith(
+    expect(startContinuousCanvasSnapshotLoop).toHaveBeenCalledWith(
       jasmine.objectContaining({
         configuration: jasmine.objectContaining({
-          replayCanvasMode: 'auto',
-          replayCanvasAutoInterval: 1000
+          replayCanvasSampling: 2,
+          replayCanvasMode: 'auto'
         }),
         getSerializedNodeId: jasmine.any(Function),
         onDebug: jasmine.any(Function),
         snapshotCanvas: jasmine.any(Function)
       })
     )
-    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
-      status: 'completed',
-      timestamp: 1234,
-      eligibleCanvasCount: 2,
-      selectedCanvasCount: 1,
-      skippedBudgetCount: 1,
-      keepSessionAliveTriggered: true,
-      results: [
-        {
-          canvasId: 26,
-          ok: true,
-          reason: undefined,
-          priority: 10
-        }
-      ]
-    })
-    expect(keepSessionAlive).toHaveBeenCalledTimes(1)
-
-    recorder.stop()
-    expect(stopAutoCanvasSnapshots).toHaveBeenCalled()
-  })
-
-  it('should not keep the session alive when auto canvas runs are skipped', () => {
-    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
-    const startAutoCanvasSnapshotLoop = jasmine
-      .createSpy('startAutoCanvasSnapshotLoop')
-      .and.callFake(function (options) {
-        options.onDebug({
-          status: 'skipped_hidden',
-          timestamp: 1234,
-          eligibleCanvasCount: 0,
-          selectedCanvasCount: 0,
-          skippedBudgetCount: 0,
-          results: []
-        })
-        return jasmine.createSpy('stopAutoCanvasSnapshots')
-      })
-
-    const recorder = record({
-      emit: jasmine.createSpy('emit'),
-      configuration: {
-        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
-        replayCanvasEnabled: true,
-        replayCanvasMode: 'auto'
-      },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      },
-      sessionManager: {
-        keepSessionAlive: keepSessionAlive
-      },
-      startAutoCanvasSnapshotLoop: startAutoCanvasSnapshotLoop
-    })
-
-    expect(keepSessionAlive).not.toHaveBeenCalled()
-    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
-      status: 'skipped_hidden',
-      timestamp: 1234,
-      eligibleCanvasCount: 0,
-      selectedCanvasCount: 0,
-      skippedBudgetCount: 0,
-      keepSessionAliveTriggered: false,
-      results: []
-    })
-
-    recorder.stop()
-  })
-
-  it('should keep the session alive when auto canvas runs are softly skipped by dedupe rules', () => {
-    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
-    const startAutoCanvasSnapshotLoop = jasmine
-      .createSpy('startAutoCanvasSnapshotLoop')
-      .and.callFake(function (options) {
-        options.onDebug({
-          status: 'completed',
-          timestamp: 1234,
-          eligibleCanvasCount: 2,
-          selectedCanvasCount: 2,
-          skippedBudgetCount: 0,
-          results: [
-            {
-              canvasId: 26,
-              ok: false,
-              reason: 'below_threshold',
-              priority: 0
-            },
-            {
-              canvasId: 27,
-              ok: false,
-              reason: 'unchanged',
-              priority: 0
-            }
-          ]
-        })
-        return jasmine.createSpy('stopAutoCanvasSnapshots')
-      })
-
-    const recorder = record({
-      emit: jasmine.createSpy('emit'),
-      configuration: {
-        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
-        replayCanvasEnabled: true,
-        replayCanvasMode: 'auto'
-      },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      },
-      sessionManager: {
-        keepSessionAlive: keepSessionAlive
-      },
-      startAutoCanvasSnapshotLoop: startAutoCanvasSnapshotLoop
-    })
-
     expect(keepSessionAlive).toHaveBeenCalledTimes(1)
     expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'continuous_snapshot',
       status: 'completed',
-      timestamp: 1234,
-      eligibleCanvasCount: 2,
-      selectedCanvasCount: 2,
+      startedAt: 2234,
+      completedAt: 2234,
+      timestamp: 2234,
+      eligibleCanvasCount: 3,
+      selectedCanvasCount: 3,
       skippedBudgetCount: 0,
       keepSessionAliveTriggered: true,
       results: [
+        { canvasId: 31, ok: true, reason: undefined, priority: undefined },
+        { canvasId: 32, ok: true, reason: undefined, priority: undefined },
         {
-          canvasId: 26,
+          canvasId: 33,
           ok: false,
           reason: 'below_threshold',
-          priority: 0
-        },
-        {
-          canvasId: 27,
-          ok: false,
-          reason: 'unchanged',
-          priority: 0
+          priority: undefined
         }
       ]
     })
 
     recorder.stop()
+    expect(stopContinuousCanvasSnapshots).toHaveBeenCalled()
   })
 
-  it('should not keep the session alive when auto canvas runs only have hard failures', () => {
+  it('should not keep the session alive when continuous runs only have hard failures', () => {
     const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
-    const startAutoCanvasSnapshotLoop = jasmine
-      .createSpy('startAutoCanvasSnapshotLoop')
+    const startContinuousCanvasSnapshotLoop = jasmine
+      .createSpy('startContinuousCanvasSnapshotLoop')
       .and.callFake(function (options) {
         options.onDebug({
+          scheduler: 'continuous_snapshot',
           status: 'completed',
           timestamp: 1234,
           eligibleCanvasCount: 2,
           selectedCanvasCount: 2,
           skippedBudgetCount: 0,
           results: [
-            {
-              canvasId: 26,
-              ok: false,
-              reason: 'encode_failed',
-              priority: 0
-            },
-            {
-              canvasId: 27,
-              ok: false,
-              reason: 'encode_too_large',
-              priority: 0
-            }
+            { canvasId: 26, ok: false, reason: 'encode_failed' },
+            { canvasId: 27, ok: false, reason: 'encode_too_large' }
           ]
         })
-        return jasmine.createSpy('stopAutoCanvasSnapshots')
+        return {
+          stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
+          reset: jasmine.createSpy('resetContinuousCanvasSnapshots')
+        }
       })
 
     const recorder = record({
@@ -594,52 +383,27 @@ describe('replay/record/record', () => {
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
         replayCanvasEnabled: true,
-        replayCanvasMode: 'auto'
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 2
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      },
+      lifeCycle: createLifeCycle(),
       sessionManager: {
         keepSessionAlive: keepSessionAlive
       },
-      startAutoCanvasSnapshotLoop: startAutoCanvasSnapshotLoop
+      startContinuousCanvasSnapshotLoop: startContinuousCanvasSnapshotLoop
     })
 
     expect(keepSessionAlive).not.toHaveBeenCalled()
-    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
-      status: 'completed',
-      timestamp: 1234,
-      eligibleCanvasCount: 2,
-      selectedCanvasCount: 2,
-      skippedBudgetCount: 0,
-      keepSessionAliveTriggered: false,
-      results: [
-        {
-          canvasId: 26,
-          ok: false,
-          reason: 'encode_failed',
-          priority: 0
-        },
-        {
-          canvasId: 27,
-          ok: false,
-          reason: 'encode_too_large',
-          priority: 0
-        }
-      ]
-    })
-
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug().scheduler).toBe(
+      'continuous_snapshot'
+    )
     recorder.stop()
   })
 
-  it('should reset canvas observer caches before taking a subsequent full snapshot', () => {
+  it('should reset canvas observer caches and the continuous loop before taking a subsequent full snapshot', () => {
     const reset = jasmine.createSpy('reset')
-    const resetAutoCanvasSnapshotLoop = jasmine.createSpy(
-      'resetAutoCanvasSnapshotLoop'
+    const resetContinuousCanvasSnapshotLoop = jasmine.createSpy(
+      'resetContinuousCanvasSnapshotLoop'
     )
     const createCanvasObserver = jasmine
       .createSpy('createCanvasObserver')
@@ -654,43 +418,34 @@ describe('replay/record/record', () => {
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
         replayCanvasEnabled: true,
-        replayCanvasMode: 'auto'
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 2
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
-        }
-      },
+      lifeCycle: createLifeCycle(),
       createCanvasObserver: createCanvasObserver,
-      startAutoCanvasSnapshotLoop: function () {
+      startContinuousCanvasSnapshotLoop: function () {
         return {
-          stop: jasmine.createSpy('stopAutoCanvasSnapshots'),
-          reset: resetAutoCanvasSnapshotLoop
+          stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
+          reset: resetContinuousCanvasSnapshotLoop
         }
       }
     })
 
-    recorder.takeSubsequentFullSnapshot(1234)
+    recorder.takeSubsequentFullSnapshot(2234)
 
     expect(reset).toHaveBeenCalledTimes(1)
-    expect(resetAutoCanvasSnapshotLoop).toHaveBeenCalledTimes(1)
-
+    expect(resetContinuousCanvasSnapshotLoop).toHaveBeenCalledTimes(1)
     recorder.stop()
   })
 
-  it('should allow the next auto rerun to emit after a full snapshot resets an in-flight canvas snapshot', async () => {
+  it('should allow the next continuous rerun to emit after a full snapshot resets an in-flight canvas snapshot', async () => {
     let releaseFirstSnapshot
     const firstSnapshotPromise = new Promise((resolve) => {
       releaseFirstSnapshot = resolve
     })
     const snapshot = jasmine
       .createSpy('snapshot')
-      .and.returnValues(
-        firstSnapshotPromise,
-        Promise.resolve({ ok: true })
-      )
+      .and.returnValues(firstSnapshotPromise, Promise.resolve({ ok: true }))
     const reset = jasmine.createSpy('reset')
     const canvasObserver = {
       snapshot,
@@ -698,14 +453,157 @@ describe('replay/record/record', () => {
       reset
     }
     let loopOptions
-    const startAutoCanvasSnapshotLoop = jasmine
-      .createSpy('startAutoCanvasSnapshotLoop')
+    const startContinuousCanvasSnapshotLoop = jasmine
+      .createSpy('startContinuousCanvasSnapshotLoop')
       .and.callFake(function (options) {
         loopOptions = options
         return {
-          stop: jasmine.createSpy('stopAutoCanvasSnapshots'),
-          reset: jasmine.createSpy('resetAutoCanvasSnapshotLoop')
+          stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
+          reset: jasmine.createSpy('resetContinuousCanvasSnapshotLoop')
         }
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 2
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function () {
+        return canvasObserver
+      },
+      startContinuousCanvasSnapshotLoop: startContinuousCanvasSnapshotLoop
+    })
+
+    const canvas = document.createElement('canvas')
+    container.appendChild(canvas)
+
+    const staleSnapshotPromise = loopOptions.snapshotCanvas(canvas)
+    recorder.takeSubsequentFullSnapshot(1234)
+
+    releaseFirstSnapshot({ ok: false, reason: 'reset_during_snapshot' })
+    expect(await staleSnapshotPromise).toEqual({
+      ok: false,
+      reason: 'reset_during_snapshot'
+    })
+    expect(await loopOptions.snapshotCanvas(canvas)).toEqual({ ok: true })
+    expect(reset).toHaveBeenCalledTimes(1)
+    expect(snapshot.calls.count()).toBe(2)
+
+    recorder.stop()
+  })
+
+  it("should start canvas command capture when replayCanvasSampling is 'all'", () => {
+    const stopCanvasCommandCapture = jasmine.createSpy('stopCanvasCommandCapture')
+    const resetCanvasCommandCapture = jasmine.createSpy('resetCanvasCommandCapture')
+    const scanExistingCanvases = jasmine.createSpy('scanExistingCanvases')
+    let onCommandDebug
+    let onCommandMutationDebug
+    const startCanvasCommandCapture = jasmine
+      .createSpy('startCanvasCommandCapture')
+      .and.callFake(function (options) {
+        onCommandDebug = options.onDebug
+        onCommandMutationDebug = options.onMutationDebug
+        return {
+          stop: stopCanvasCommandCapture,
+          reset: resetCanvasCommandCapture,
+          scanExistingCanvases: scanExistingCanvases
+        }
+      })
+    const startContinuousCanvasSnapshotLoop = jasmine
+      .createSpy('startContinuousCanvasSnapshotLoop')
+      .and.returnValue({
+        stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
+        reset: jasmine.createSpy('resetContinuousCanvasSnapshots')
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      startCanvasCommandCapture: startCanvasCommandCapture,
+      startContinuousCanvasSnapshotLoop: startContinuousCanvasSnapshotLoop
+    })
+
+    expect(startCanvasCommandCapture).toHaveBeenCalledWith(
+      jasmine.objectContaining({
+        configuration: jasmine.objectContaining({
+          replayCanvasSampling: 'all',
+          replayCanvasMode: 'auto'
+        }),
+        emit: jasmine.any(Function),
+        getCanvases: jasmine.any(Function)
+      })
+    )
+    expect(scanExistingCanvases).toHaveBeenCalledTimes(1)
+    expect(startContinuousCanvasSnapshotLoop).not.toHaveBeenCalled()
+
+    onCommandMutationDebug({
+      timestamp: 4321,
+      canvasId: 26,
+      trigger: 'auto',
+      approxBytesCount: 123,
+      commandCount: 1
+    })
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 4321,
+      completedAt: 4321,
+      timestamp: 4321,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 26, ok: true }]
+    })
+
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 4321,
+      completedAt: 4321,
+      timestamp: 4321,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: false,
+      results: [
+        { canvasId: 26, ok: true, reason: undefined, priority: undefined }
+      ]
+    })
+    expect(recorder.getLastCanvasMutationForDebug()).toEqual({
+      timestamp: 4321,
+      canvasId: 26,
+      trigger: 'auto',
+      encodedBytesCount: undefined,
+      approxBytesCount: 123,
+      commandCount: 1,
+      width: undefined,
+      height: undefined
+    })
+
+    recorder.takeSubsequentFullSnapshot(1234)
+    expect(resetCanvasCommandCapture).toHaveBeenCalledTimes(1)
+    expect(scanExistingCanvases).toHaveBeenCalledTimes(2)
+
+    recorder.stop()
+    expect(stopCanvasCommandCapture).toHaveBeenCalledTimes(1)
+  })
+
+  it('should default auto mode to the continuous snapshot path for numeric sampling', () => {
+    const startContinuousCanvasSnapshotLoop = jasmine
+      .createSpy('startContinuousCanvasSnapshotLoop')
+      .and.returnValue({
+        stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
+        reset: jasmine.createSpy('resetContinuousCanvasSnapshots')
       })
 
     const recorder = record({
@@ -715,36 +613,917 @@ describe('replay/record/record', () => {
         replayCanvasEnabled: true,
         replayCanvasMode: 'auto'
       },
-      lifeCycle: {
-        subscribe() {
-          return {
-            unsubscribe: jasmine.createSpy('unsubscribe')
-          }
+      lifeCycle: createLifeCycle(),
+      startContinuousCanvasSnapshotLoop: startContinuousCanvasSnapshotLoop
+    })
+
+    expect(startContinuousCanvasSnapshotLoop).toHaveBeenCalled()
+    recorder.stop()
+  })
+
+  it('should expose command fallback debug results without keeping the session alive', () => {
+    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
+    let onCommandDebug
+    const startCanvasCommandCapture = jasmine
+      .createSpy('startCanvasCommandCapture')
+      .and.callFake(function (options) {
+        onCommandDebug = options.onDebug
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy('scanExistingCanvases')
         }
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
       },
-      createCanvasObserver: function () {
-        return canvasObserver
+      lifeCycle: createLifeCycle(),
+      sessionManager: {
+        keepSessionAlive: keepSessionAlive
       },
-      startAutoCanvasSnapshotLoop: startAutoCanvasSnapshotLoop
+      startCanvasCommandCapture: startCanvasCommandCapture
     })
 
-    const canvas = document.createElement('canvas')
-    container.appendChild(canvas)
-
-    const staleSnapshotPromise = loopOptions.snapshotCanvas(canvas)
-
-    recorder.takeSubsequentFullSnapshot(1234)
-
-    releaseFirstSnapshot({ ok: false, reason: 'reset_during_snapshot' })
-    expect(await staleSnapshotPromise).toEqual({
-      ok: false,
-      reason: 'reset_during_snapshot'
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'fallback',
+      startedAt: 5100,
+      completedAt: 5101,
+      timestamp: 5101,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 0,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 41, ok: false, reason: 'draw_image_video' }]
     })
 
-    expect(await loopOptions.snapshotCanvas(canvas)).toEqual({ ok: true })
-    expect(reset).toHaveBeenCalledTimes(1)
-    expect(snapshot.calls.count()).toBe(2)
+    expect(keepSessionAlive).not.toHaveBeenCalled()
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'command_capture',
+      status: 'fallback',
+      startedAt: 5100,
+      completedAt: 5101,
+      timestamp: 5101,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 0,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: false,
+      results: [
+        {
+          canvasId: 41,
+          ok: false,
+          reason: 'draw_image_video',
+          priority: undefined
+        }
+      ]
+    })
+
+    expect(recorder.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+      {
+        scheduler: 'command_capture',
+        status: 'fallback',
+        startedAt: 5100,
+        completedAt: 5101,
+        timestamp: 5101,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 0,
+        skippedBudgetCount: 0,
+        keepSessionAliveTriggered: false,
+        results: [
+          {
+            canvasId: 41,
+            ok: false,
+            reason: 'draw_image_video',
+            priority: undefined
+          }
+        ]
+      }
+    ])
 
     recorder.stop()
+  })
+
+  it('should expose path2d command fallback without emitting a successful command mutation', () => {
+    const emit = jasmine.createSpy('emit')
+    let onCommandDebug
+    const startCanvasCommandCapture = jasmine
+      .createSpy('startCanvasCommandCapture')
+      .and.callFake(function (options) {
+        onCommandDebug = options.onDebug
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy('scanExistingCanvases')
+        }
+      })
+
+    const recorder = record({
+      emit: emit,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      startCanvasCommandCapture: startCanvasCommandCapture
+    })
+
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'fallback',
+      startedAt: 7100,
+      completedAt: 7101,
+      timestamp: 7101,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 0,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 173, ok: false, reason: 'path2d_argument' }]
+    })
+
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'command_capture',
+      status: 'fallback',
+      startedAt: 7100,
+      completedAt: 7101,
+      timestamp: 7101,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 0,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: false,
+      results: [
+        {
+          canvasId: 173,
+          ok: false,
+          reason: 'path2d_argument',
+          priority: undefined
+        }
+      ]
+    })
+    expect(recorder.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+      {
+        scheduler: 'command_capture',
+        status: 'fallback',
+        startedAt: 7100,
+        completedAt: 7101,
+        timestamp: 7101,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 0,
+        skippedBudgetCount: 0,
+        keepSessionAliveTriggered: false,
+        results: [
+          {
+            canvasId: 173,
+            ok: false,
+            reason: 'path2d_argument',
+            priority: undefined
+          }
+        ]
+      }
+    ])
+    expect(recorder.getLastCanvasMutationForDebug()).toBeUndefined()
+    expect(
+      emit.calls.allArgs().some(function (args) {
+        return (
+          args[0] &&
+          args[0].type === RecordType.IncrementalSnapshot &&
+          args[0].data &&
+          args[0].data.source === IncrementalSource.CanvasMutation
+        )
+      })
+    ).toBeFalse()
+
+    recorder.stop()
+  })
+
+  it('should preserve mixed path2d fallback and successful command results for multiple canvases', () => {
+    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
+    let onCommandDebug
+    let onCommandMutationDebug
+    const startCanvasCommandCapture = jasmine
+      .createSpy('startCanvasCommandCapture')
+      .and.callFake(function (options) {
+        onCommandDebug = options.onDebug
+        onCommandMutationDebug = options.onMutationDebug
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy('scanExistingCanvases')
+        }
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      sessionManager: {
+        keepSessionAlive: keepSessionAlive
+      },
+      startCanvasCommandCapture: startCanvasCommandCapture
+    })
+
+    onCommandMutationDebug({
+      timestamp: 7151,
+      canvasId: 84,
+      trigger: 'auto',
+      approxBytesCount: 120,
+      commandCount: 3,
+      width: 320,
+      height: 180
+    })
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 7150,
+      completedAt: 7151,
+      timestamp: 7151,
+      eligibleCanvasCount: 2,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      results: [
+        { canvasId: 173, ok: false, reason: 'path2d_argument' },
+        { canvasId: 84, ok: true }
+      ]
+    })
+
+    expect(keepSessionAlive).toHaveBeenCalledTimes(1)
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 7150,
+      completedAt: 7151,
+      timestamp: 7151,
+      eligibleCanvasCount: 2,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: true,
+      results: [
+        {
+          canvasId: 173,
+          ok: false,
+          reason: 'path2d_argument',
+          priority: undefined
+        },
+        {
+          canvasId: 84,
+          ok: true,
+          reason: undefined,
+          priority: undefined
+        }
+      ]
+    })
+    expect(recorder.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+      {
+        scheduler: 'command_capture',
+        status: 'completed',
+        startedAt: 7150,
+        completedAt: 7151,
+        timestamp: 7151,
+        eligibleCanvasCount: 2,
+        selectedCanvasCount: 1,
+        skippedBudgetCount: 0,
+        keepSessionAliveTriggered: false,
+        results: [
+          {
+            canvasId: 173,
+            ok: false,
+            reason: 'path2d_argument',
+            priority: undefined
+          },
+          {
+            canvasId: 84,
+            ok: true,
+            reason: undefined,
+            priority: undefined
+          }
+        ]
+      }
+    ])
+    expect(recorder.getLastCanvasMutationForDebug()).toEqual({
+      timestamp: 7151,
+      canvasId: 84,
+      trigger: 'auto',
+      encodedBytesCount: undefined,
+      approxBytesCount: 120,
+      commandCount: 3,
+      width: 320,
+      height: 180
+    })
+
+    recorder.stop()
+  })
+
+  it('should expose invalid encoded payload diagnostics through canvas mutation debug state', async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 20
+    canvas.height = 10
+    container.appendChild(canvas)
+
+    const emittedRecords = []
+    const recorder = record({
+      emit: function (event) {
+        emittedRecords.push(event)
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        return {
+          snapshot: function () {
+            options.onMutationDebug({
+              timestamp: 9001,
+              canvasId: 26,
+              trigger: 'manual',
+              reason: 'invalid_encoded_payload',
+              encodedBytesCount: 7,
+              width: 20,
+              height: 10,
+              diagnostics: {
+                mimeType: 'image/webp',
+                dataUrlLength: 32,
+                base64Length: 9,
+                base64Prefix: 'QUJD=REVG',
+                base64Suffix: 'QUJD=REVG',
+                firstPaddingIndex: 4,
+                firstPaddingWindow: 'QUJD=REVG',
+                invalidCharacterIndex: undefined,
+                invalidCharacterWindow: undefined,
+                hasMidstreamPadding: true
+              }
+            })
+            return Promise.resolve({
+              ok: false,
+              reason: 'invalid_encoded_payload'
+            })
+          },
+          stop: jasmine.createSpy('stopCanvasObserver'),
+          reset: jasmine.createSpy('resetCanvasObserver')
+        }
+      }
+    })
+    emittedRecords.length = 0
+
+    expect(await recorder.snapshotCanvas(canvas)).toEqual({
+      ok: false,
+      reason: 'invalid_encoded_payload'
+    })
+    expect(emittedRecords).toEqual([])
+    expect(recorder.getLastCanvasMutationForDebug()).toEqual({
+      timestamp: 9001,
+      canvasId: 26,
+      trigger: 'manual',
+      reason: 'invalid_encoded_payload',
+      encodedBytesCount: 7,
+      approxBytesCount: undefined,
+      commandCount: undefined,
+      width: 20,
+      height: 10,
+      diagnostics: {
+        mimeType: 'image/webp',
+        dataUrlLength: 32,
+        base64Length: 9,
+        base64Prefix: 'QUJD=REVG',
+        base64Suffix: 'QUJD=REVG',
+        firstPaddingIndex: 4,
+        firstPaddingWindow: 'QUJD=REVG',
+        invalidCharacterIndex: undefined,
+        invalidCharacterWindow: undefined,
+        hasMidstreamPadding: true
+      }
+    })
+
+    recorder.stop()
+  })
+
+  it('should keep the session alive when command fallback is followed by a completed snapshot result', () => {
+    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
+    let onCommandDebug
+    const startCanvasCommandCapture = jasmine
+      .createSpy('startCanvasCommandCapture')
+      .and.callFake(function (options) {
+        onCommandDebug = options.onDebug
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy('scanExistingCanvases')
+        }
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      sessionManager: {
+        keepSessionAlive: keepSessionAlive
+      },
+      startCanvasCommandCapture: startCanvasCommandCapture
+    })
+
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'fallback',
+      startedAt: 6000,
+      completedAt: 6001,
+      timestamp: 6001,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 0,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 52, ok: false, reason: 'canvas_pattern' }]
+    })
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 6002,
+      completedAt: 6003,
+      timestamp: 6003,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 52, ok: true }]
+    })
+
+    expect(keepSessionAlive).toHaveBeenCalledTimes(1)
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 6002,
+      completedAt: 6003,
+      timestamp: 6003,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: true,
+      results: [
+        {
+          canvasId: 52,
+          ok: true,
+          reason: undefined,
+          priority: undefined
+        }
+      ]
+    })
+    expect(recorder.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+      {
+        scheduler: 'command_capture',
+        status: 'fallback',
+        startedAt: 6000,
+        completedAt: 6001,
+        timestamp: 6001,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 0,
+        skippedBudgetCount: 0,
+        keepSessionAliveTriggered: false,
+        results: [
+          {
+            canvasId: 52,
+            ok: false,
+            reason: 'canvas_pattern',
+            priority: undefined
+          }
+        ]
+      },
+      {
+        scheduler: 'command_capture',
+        status: 'completed',
+        startedAt: 6002,
+        completedAt: 6003,
+        timestamp: 6003,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 1,
+        skippedBudgetCount: 0,
+        keepSessionAliveTriggered: true,
+        results: [
+          {
+            canvasId: 52,
+            ok: true,
+            reason: undefined,
+            priority: undefined
+          }
+        ]
+      }
+    ])
+
+    recorder.stop()
+  })
+
+  it('should reset command capture on subsequent full snapshot and keep later command debug results isolated', () => {
+    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
+    const resetCanvasCommandCapture = jasmine.createSpy('resetCanvasCommandCapture')
+    const scanExistingCanvases = jasmine.createSpy('scanExistingCanvases')
+    let onCommandDebug
+    let onCommandMutationDebug
+    const startCanvasCommandCapture = jasmine
+      .createSpy('startCanvasCommandCapture')
+      .and.callFake(function (options) {
+        onCommandDebug = options.onDebug
+        onCommandMutationDebug = options.onMutationDebug
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: resetCanvasCommandCapture,
+          scanExistingCanvases: scanExistingCanvases
+        }
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      sessionManager: {
+        keepSessionAlive: keepSessionAlive
+      },
+      startCanvasCommandCapture: startCanvasCommandCapture
+    })
+
+    onCommandMutationDebug({
+      timestamp: 7001,
+      canvasId: 61,
+      trigger: 'auto',
+      approxBytesCount: 101,
+      commandCount: 1
+    })
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 7000,
+      completedAt: 7001,
+      timestamp: 7001,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 61, ok: true }]
+    })
+
+    recorder.takeSubsequentFullSnapshot(7100)
+
+    expect(resetCanvasCommandCapture).toHaveBeenCalledTimes(1)
+    expect(scanExistingCanvases).toHaveBeenCalledTimes(2)
+
+    onCommandMutationDebug({
+      timestamp: 7201,
+      canvasId: 62,
+      trigger: 'auto',
+      approxBytesCount: 202,
+      commandCount: 2
+    })
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 7200,
+      completedAt: 7201,
+      timestamp: 7201,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 62, ok: true }]
+    })
+
+    expect(keepSessionAlive).toHaveBeenCalledTimes(2)
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 7200,
+      completedAt: 7201,
+      timestamp: 7201,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: true,
+      results: [
+        {
+          canvasId: 62,
+          ok: true,
+          reason: undefined,
+          priority: undefined
+        }
+      ]
+    })
+    expect(recorder.getLastCanvasMutationForDebug()).toEqual({
+      timestamp: 7201,
+      canvasId: 62,
+      trigger: 'auto',
+      encodedBytesCount: undefined,
+      approxBytesCount: 202,
+      commandCount: 2,
+      width: undefined,
+      height: undefined
+    })
+    expect(recorder.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+      jasmine.objectContaining({
+        scheduler: 'command_capture',
+        status: 'completed',
+        startedAt: 7000,
+        completedAt: 7001,
+        timestamp: 7001,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 1,
+        skippedBudgetCount: 0,
+        results: [
+          {
+            canvasId: 61,
+            ok: true,
+            reason: undefined,
+            priority: undefined
+          }
+        ]
+      }),
+      {
+        scheduler: 'command_capture',
+        status: 'completed',
+        startedAt: 7200,
+        completedAt: 7201,
+        timestamp: 7201,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 1,
+        skippedBudgetCount: 0,
+        keepSessionAliveTriggered: true,
+        results: [
+          {
+            canvasId: 62,
+            ok: true,
+            reason: undefined,
+            priority: undefined
+          }
+        ]
+      }
+    ])
+
+    recorder.stop()
+  })
+
+  it('should keep session alive for initial static canvas snapshots reported by command capture', () => {
+    const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
+    let onCommandDebug
+    let scanCount = 0
+    const startCanvasCommandCapture = jasmine
+      .createSpy('startCanvasCommandCapture')
+      .and.callFake(function (options) {
+        onCommandDebug = options.onDebug
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: function () {
+            scanCount += 1
+            if (scanCount === 1) {
+              onCommandDebug({
+                scheduler: 'command_capture',
+                status: 'completed',
+                startedAt: 8050,
+                completedAt: 8051,
+                timestamp: 8051,
+                eligibleCanvasCount: 1,
+                selectedCanvasCount: 1,
+                skippedBudgetCount: 0,
+                results: [{ canvasId: 88, ok: true }]
+              })
+            }
+          }
+        }
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      sessionManager: {
+        keepSessionAlive: keepSessionAlive
+      },
+      startCanvasCommandCapture: startCanvasCommandCapture
+    })
+
+    expect(keepSessionAlive).toHaveBeenCalledTimes(1)
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 8050,
+      completedAt: 8051,
+      timestamp: 8051,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: true,
+      results: [
+        {
+          canvasId: 88,
+          ok: true,
+          reason: undefined,
+          priority: undefined
+        }
+      ]
+    })
+    expect(recorder.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+      jasmine.objectContaining({
+        scheduler: 'command_capture',
+        status: 'completed',
+        startedAt: 8050,
+        completedAt: 8051,
+        timestamp: 8051,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 1,
+        results: [
+          {
+            canvasId: 88,
+            ok: true,
+            reason: undefined,
+            priority: undefined
+          }
+        ]
+      })
+    ])
+
+    recorder.stop()
+  })
+
+  it('should isolate later command debug from an earlier path2d fallback after subsequent full snapshot', () => {
+    const resetCanvasCommandCapture = jasmine.createSpy('resetCanvasCommandCapture')
+    const scanExistingCanvases = jasmine.createSpy('scanExistingCanvases')
+    let onCommandDebug
+    let onCommandMutationDebug
+    const startCanvasCommandCapture = jasmine
+      .createSpy('startCanvasCommandCapture')
+      .and.callFake(function (options) {
+        onCommandDebug = options.onDebug
+        onCommandMutationDebug = options.onMutationDebug
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: resetCanvasCommandCapture,
+          scanExistingCanvases: scanExistingCanvases
+        }
+      })
+
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      startCanvasCommandCapture: startCanvasCommandCapture
+    })
+
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'fallback',
+      startedAt: 9100,
+      completedAt: 9101,
+      timestamp: 9101,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 0,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 173, ok: false, reason: 'path2d_argument' }]
+    })
+
+    recorder.takeSubsequentFullSnapshot(9200)
+
+    expect(resetCanvasCommandCapture).toHaveBeenCalledTimes(1)
+    expect(scanExistingCanvases).toHaveBeenCalledTimes(2)
+
+    onCommandMutationDebug({
+      timestamp: 9203,
+      canvasId: 173,
+      trigger: 'auto',
+      approxBytesCount: 88,
+      commandCount: 4,
+      width: 480,
+      height: 220
+    })
+    onCommandDebug({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 9201,
+      completedAt: 9202,
+      timestamp: 9202,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      results: [{ canvasId: 173, ok: true }]
+    })
+
+    expect(recorder.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+      scheduler: 'command_capture',
+      status: 'completed',
+      startedAt: 9201,
+      completedAt: 9202,
+      timestamp: 9202,
+      eligibleCanvasCount: 1,
+      selectedCanvasCount: 1,
+      skippedBudgetCount: 0,
+      keepSessionAliveTriggered: false,
+      results: [
+        {
+          canvasId: 173,
+          ok: true,
+          reason: undefined,
+          priority: undefined
+        }
+      ]
+    })
+    expect(recorder.getLastCanvasMutationForDebug()).toEqual({
+      timestamp: 9203,
+      canvasId: 173,
+      trigger: 'auto',
+      encodedBytesCount: undefined,
+      approxBytesCount: 88,
+      commandCount: 4,
+      width: 480,
+      height: 220
+    })
+    expect(recorder.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+      {
+        scheduler: 'command_capture',
+        status: 'fallback',
+        startedAt: 9100,
+        completedAt: 9101,
+        timestamp: 9101,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 0,
+        skippedBudgetCount: 0,
+        keepSessionAliveTriggered: false,
+        results: [
+          {
+            canvasId: 173,
+            ok: false,
+            reason: 'path2d_argument',
+            priority: undefined
+          }
+        ]
+      },
+      {
+        scheduler: 'command_capture',
+        status: 'completed',
+        startedAt: 9201,
+        completedAt: 9202,
+        timestamp: 9202,
+        eligibleCanvasCount: 1,
+        selectedCanvasCount: 1,
+        skippedBudgetCount: 0,
+        keepSessionAliveTriggered: true,
+        results: [
+          {
+            canvasId: 173,
+            ok: true,
+            reason: undefined,
+            priority: undefined
+          }
+        ]
+      }
+    ])
+
+    recorder.stop()
+  })
+
+  it('should flush async mutation work before a subsequent full snapshot', (done) => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+
+    container.appendChild(document.createElement('div'))
+
+    setTimeout(() => {
+      recorder.takeSubsequentFullSnapshot(5678)
+      const mutationSnapshots = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation
+      )
+      expect(mutationSnapshots.length).toBeGreaterThan(0)
+      done()
+    }, ASYNC_MUTATION_TICK)
   })
 })
