@@ -143,7 +143,7 @@ Web application integration can be done in three ways: NPM integration, asynchro
 | `replayCanvasWorkerUrl`                | String                           | No       |               | Self-hosted URL for the dedicated canvas encode worker (`canvas-worker.js`). This only affects canvas snapshot encoding and does not replace `workerUrl` or the existing deflate worker. Use this in stricter CSP/security environments where blob workers are blocked.                                                                                                                                 |
 | `replayCanvasEnabled`                  | Boolean                          | No       | `false`       | Whether to enable canvas recording for Session Replay. This is the primary switch for all canvas recording behavior. If this is not set to `true`, no canvas recording will occur.                                                                                                                                                                                     |
 | `replayCanvasMode`                     | `'manual' \| 'auto'`             | No       | `auto`        | Canvas recording mode. `manual` requires calling `snapshotCanvas(canvas)` explicitly. `auto` enables automatic canvas recording, and is the default when `replayCanvasEnabled` is turned on. You should still explicitly configure `replayCanvasSampling` for predictable behavior.                                                                             |
-| `replayCanvasSampling`                 | Number / `'all'`                 | No       |               | Canvas replay sampling strategy. A number enables snapshot sampling. `'all'` enables a higher-fidelity auto recording strategy. In some complex scenes, the SDK may automatically fall back to snapshot recording.                                                                                                                                                  |
+| `replayCanvasSampling`                 | Number / `'all'`                 | No       |               | Only applies when `replayCanvasMode: 'auto'` is used.<br>Use a number for automatic snapshot sampling. Smaller numbers sample more often and cost more to encode and upload; starting with `2` is recommended.<br>Use `'all'` for higher-fidelity automatic recording that tries to preserve more of the drawing process. In complex scenes, the SDK may still fall back to snapshot recording.                                                                                                                                                  |
 
 ### Canvas Replay Notes
 
@@ -156,7 +156,8 @@ Web application integration can be done in three ways: NPM integration, asynchro
 - In `manual` mode, business code must also call `snapshotCanvas(canvas)`.
 - `replayCanvasMode` controls whether canvas replay is `manual` or `auto`.
 - `replayCanvasSampling` controls the recording strategy used by `auto` mode:
-  - a number: snapshot sampling
+  - `2`: recommended starting point, safer automatic snapshot sampling
+  - `1`: more frequent automatic snapshots, with higher cost
   - `'all'`: higher-fidelity auto recording
 - `replayCanvasWorkerUrl` only affects snapshot encoding. It does not replace `workerUrl`.
 - In `replayCanvasSampling: 'all'` mode, some complex scenes may still fall back to snapshot recording.
@@ -225,3 +226,6 @@ For canvas recording, the parameters you should treat as required in practice ar
 And in `auto` mode, also explicitly set:
 
 - `replayCanvasSampling`
+  - `2`: recommended starting value
+  - `1`: more frequent automatic snapshots
+  - `'all'`: higher-fidelity auto recording

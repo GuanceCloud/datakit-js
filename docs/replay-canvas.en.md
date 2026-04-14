@@ -131,7 +131,8 @@ datafluxRum.startSessionReplayRecording()
 - `replayCanvasEnabled: true`
 - `replayCanvasMode: 'auto'`
 - strongly recommended to set `replayCanvasSampling` explicitly
-  - number: snapshot sampling
+  - `2`: recommended starting value, safer automatic snapshot sampling
+  - `1`: more frequent automatic snapshots, with higher cost
   - `'all'`: higher-fidelity auto recording
 
 ### When to configure `replayCanvasWorkerUrl`

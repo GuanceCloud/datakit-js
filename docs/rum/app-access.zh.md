@@ -150,7 +150,7 @@ Web 应用接入支持三种方式：
 | `replayCanvasWorkerUrl` | `string` | 否 |  | canvas snapshot 编码专用 worker 地址，不替代 `workerUrl`。 |
 | `replayCanvasEnabled` | `boolean` | 否 | `false` | 是否开启 canvas 录制。不开启则不会采集 canvas。 |
 | `replayCanvasMode` | `'manual' \| 'auto'` | 否 | `auto` | canvas 录制模式。`manual` 需要手动调用 `snapshotCanvas(canvas)`；`auto` 为自动录制。 |
-| `replayCanvasSampling` | `number \| 'all'` | 否 |  | canvas 自动录制策略。数值表示 snapshot sampling，`'all'` 表示更高还原度的自动录制。 |
+| `replayCanvasSampling` | `number \| 'all'` | 否 |  | 仅在 `replayCanvasMode: 'auto'` 下生效。<br>填 `number`：走自动 snapshot 采样，数值越小采样越频繁，编码和上报成本也越高；建议从 `2` 开始。<br>填 `'all'`：走更高还原度的自动录制，尽量保留绘制过程；复杂场景下仍可能自动回退为 snapshot。 |
 | `replayCanvasQuality` | `'low' \| 'medium' \| 'high' \| number` | 否 |  | canvas snapshot 编码质量。 |
 | `trackBfcacheViews` | `boolean` | 否 |  | 是否采集浏览器前进后退缓存（BFCache）恢复的页面访问。 |
 | `silentMultipleInit` | `boolean` | 否 |  | 是否静默忽略重复初始化。 |
@@ -182,6 +182,9 @@ datafluxRum.snapshotCanvas(canvas)
 如果 `replayCanvasMode === 'auto'`，再显式配置：
 
 - `replayCanvasSampling`
+  - `2`：推荐默认值，适合作为大多数页面的自动 snapshot 起点
+  - `1`：更频繁的自动 snapshot，成本更高
+  - `'all'`：更高还原度的自动录制，适合更看重绘制过程还原的页面
 
 ### 三套推荐最小配置
 

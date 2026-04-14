@@ -37,7 +37,7 @@ datafluxRum.startSessionReplayRecording()
 | --- | --- | --- |
 | `replayCanvasEnabled` | `false` | canvas 录制总开关。不设为 `true` 就不会录制 canvas。 |
 | `replayCanvasMode` | `auto` | `manual` 或 `auto`。`manual` 需要主动调用 `snapshotCanvas(canvas)`。 |
-| `replayCanvasSampling` |  | `auto` 模式下的录制策略。数值表示 snapshot sampling，`'all'` 表示更高还原度的自动录制。建议显式配置，不要依赖默认行为。 |
+| `replayCanvasSampling` |  | 仅在 `auto` 模式下生效。填 `2`：推荐起始值，自动 snapshot 更稳。填更小的数字：采样更频繁、成本更高。填 `'all'`：更高还原度的自动录制，复杂场景下仍可能回退为 snapshot。建议显式配置，不要依赖默认行为。 |
 | `replayCanvasWorkerUrl` |  | canvas snapshot 编码专用 worker 地址，只影响 canvas 编码，不替代原 `workerUrl`。 |
 
 ## 实际上应视为必填的项
@@ -49,6 +49,9 @@ datafluxRum.startSessionReplayRecording()
 如果是 `auto` 模式，还应显式配置：
 
 - `replayCanvasSampling`
+  - `2`：推荐默认值
+  - `1`：更频繁的自动 snapshot
+  - `'all'`：更高还原度的自动录制
 
 ## 推荐最小配置
 
