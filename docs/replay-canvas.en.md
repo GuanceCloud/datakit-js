@@ -190,3 +190,63 @@ This is a current product boundary, not a separate user configuration.
 - Use `manual` if you only need stable checkpoints.
 - Use `auto + replayCanvasSampling: number` if you want the safer default.
 - Use `auto + replayCanvasSampling: 'all'` only when higher fidelity is worth the extra complexity.
+
+## FAQ
+
+### 1. Why are some charts recorded on a dashboard page while others are missing?
+
+This usually happens on pages that render many canvas charts at the same time. When some charts are missing, the most common reason is not that a single chart failed, but that:
+
+- auto mode does not guarantee every chart is captured in every round
+- there are too many visible charts for the current capture budget
+- some charts render very early and never redraw again
+- some complex charts fall back to snapshot in higher-fidelity auto mode, which costs more
+
+The recommended approach is:
+
+1. If the page priority is “do not miss important charts”, prefer:
+
+```js
+replayCanvasEnabled: true,
+replayCanvasMode: 'auto',
+replayCanvasSampling: 'all'
+```
+
+2. For critical above-the-fold charts, capture an explicit frame after rendering completes:
+
+```js
+await datafluxRum.snapshotCanvas(canvas)
+```
+
+3. Let non-critical charts remain on auto mode
+
+4. Use `shouldRecordCanvas()` to prioritize important charts or skip low-value mini charts:
+
+```js
+shouldRecordCanvas(canvas) {
+  if (canvas.dataset.miniChart === 'true') {
+    return false
+  }
+
+  if (canvas.id === 'main-trend' || canvas.id === 'conversion-funnel') {
+    return 10
+  }
+
+  return 1
+}
+```
+
+If you care more about stability and cost than full dashboard coverage:
+
+- keep `replayCanvasSampling: 2`
+- use manual `snapshotCanvas(canvas)` for key charts only
+
+If you care more about coverage:
+
+- try `replayCanvasSampling: 'all'`
+- combine it with manual snapshots for the most important charts
+
+In practice:
+
+- auto mode is responsible for “capture as much as possible”
+- manual `snapshotCanvas(canvas)` is responsible for “make sure this chart is definitely recorded”

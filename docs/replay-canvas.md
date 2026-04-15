@@ -639,6 +639,64 @@ WebGL / WebGL2 的上下文状态更复杂，自动录制和回放都需要额�
 
 当前版本中，canvas 快照会被编码为 replay 事件的一部分，并与普通 replay 共用同一个上传链路。
 
+### 5. 为什么仪表板页面里有些图表录到了，有些没有录到？
+
+这类页面通常会同时存在很多个 `canvas` 图表。出现“部分图表没有录到”时，最常见的原因不是单个图表报错，而是：
+
+- 自动模式每一轮不一定会录所有图表
+- 同屏图表太多，自动录制预算不够
+- 某些图表初始绘制太早，后面又没有重绘
+- 某些复杂图表在自动高还原度模式下会回退到 snapshot，成本更高
+
+优先建议这样处理：
+
+1. 如果页面核心诉求是“图表尽量别漏”，优先使用：
+
+```js
+replayCanvasEnabled: true,
+replayCanvasMode: 'auto',
+replayCanvasSampling: 'all'
+```
+
+2. 对首屏关键图表，在图表渲染完成后主动补一帧：
+
+```js
+await datafluxRum.snapshotCanvas(canvas)
+```
+
+3. 对非关键图表继续交给自动模式处理
+
+4. 使用 `shouldRecordCanvas()` 提高关键图表优先级，或跳过不重要的小图：
+
+```js
+shouldRecordCanvas(canvas) {
+  if (canvas.dataset.miniChart === 'true') {
+    return false
+  }
+
+  if (canvas.id === 'main-trend' || canvas.id === 'conversion-funnel') {
+    return 10
+  }
+
+  return 1
+}
+```
+
+如果你更看重稳定和成本，而不是覆盖所有图表：
+
+- 保持 `replayCanvasSampling: 2`
+- 只对关键图表手动 `snapshotCanvas(canvas)`
+
+如果你更看重覆盖率：
+
+- 尝试 `replayCanvasSampling: 'all'`
+- 再配合关键图表手动补帧
+
+简单理解就是：
+
+- 自动模式负责“尽量录”
+- 手动 `snapshotCanvas(canvas)` 负责“保证关键图一定录到”
+
 ## 示例场景
 
 适合直接接入的业务场景：
