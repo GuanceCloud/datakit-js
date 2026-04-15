@@ -85,6 +85,7 @@ export interface CanvasMutationDebugHistoryResult
   extends CanvasMutationDebugResult {}
 
 export interface ReplaySegmentFlushDebugResult {
+  sequence: number
   creationReason: string
   flushReason: string
   recordsCount: number

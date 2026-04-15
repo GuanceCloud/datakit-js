@@ -11,7 +11,7 @@
     "description": "Guance Browser SDK RUM Package",
     "scripts": {
         "dev": "webpack serve --open --mode=development",
-        "build": "run-p build:cjs build:esm build:bundle",
+        "build": "run-s build:cjs build:esm build:bundle",
         "build:cjs": "rm -rf cjs && babel --config-file ./babel.cjs.json --out-dir cjs ./src && npm run replace-build-env cjs",
         "build:esm": "rm -rf esm && babel --config-file ./babel.esm.json --out-dir esm ./src && npm run replace-build-env esm",
         "build:bundle": "rm -rf bundle && webpack  --mode=production",

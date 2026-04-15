@@ -28,6 +28,50 @@ describe('replay/record/record', () => {
     }
   }
 
+  function expectReplayCompatibleCanvasMutation(event, canvasId, width, height) {
+    expect(event).toEqual(
+      jasmine.objectContaining({
+        type: RecordType.IncrementalSnapshot,
+        data: jasmine.objectContaining({
+          source: IncrementalSource.CanvasMutation,
+          id: canvasId,
+          type: '2D',
+          commands: [
+            jasmine.objectContaining({
+              property: 'clearRect',
+              args: [0, 0, width, height]
+            }),
+            jasmine.objectContaining({
+              property: 'drawImage',
+              args: [
+                jasmine.objectContaining({
+                  rr_type: 'ImageBitmap',
+                  args: [
+                    jasmine.objectContaining({
+                      rr_type: 'Blob',
+                      data: [
+                        jasmine.objectContaining({
+                          rr_type: 'ArrayBuffer',
+                          base64: jasmine.any(String)
+                        })
+                      ],
+                      type: jasmine.any(String)
+                    })
+                  ]
+                }),
+                0,
+                0,
+                width,
+                height
+              ]
+            })
+          ],
+          encodedBytesCount: jasmine.any(Number)
+        })
+      })
+    )
+  }
+
   it('should require an emit function', () => {
     expect(() => record({ configuration: {}, lifeCycle: {} })).toThrowError(
       'emit function is required'
@@ -266,13 +310,109 @@ describe('replay/record/record', () => {
     })
 
     expect(await recorder.snapshotCanvas(canvas)).toEqual({ ok: true })
+    const canvasMutation = emittedRecords.find(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation
+    )
+    expect(canvasMutation).toBeDefined()
+    expectReplayCompatibleCanvasMutation(canvasMutation, jasmine.any(Number), 20, 10)
+  })
+
+  it('should emit replay-compatible canvas snapshot records from the continuous auto path', async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 20
+    canvas.height = 10
+    container.appendChild(canvas)
+
+    const emittedRecords = []
+    let loopOptions
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 2,
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasQuality: 0.4,
+        replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxEncodedBytes: 40000,
+        replayCanvasMaxConcurrentEncodes: 1
+      },
+      lifeCycle: createLifeCycle(),
+      startContinuousCanvasSnapshotLoop: function (options) {
+        loopOptions = options
+        return {
+          stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
+          reset: jasmine.createSpy('resetContinuousCanvasSnapshots')
+        }
+      }
+    })
+
+    emittedRecords.length = 0
+    expect(await loopOptions.snapshotCanvas(canvas)).toEqual({ ok: true })
+
+    const canvasMutation = emittedRecords.find(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation
+    )
+    expect(canvasMutation).toBeDefined()
+    expectReplayCompatibleCanvasMutation(canvasMutation, jasmine.any(Number), 20, 10)
+
+    recorder.stop()
+  })
+
+  it("should emit replay-compatible canvas snapshot records from the command capture fallback path", async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 20
+    canvas.height = 10
+    container.appendChild(canvas)
+
+    const emittedRecords = []
+    let commandCaptureOptions
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasQuality: 0.4,
+        replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxEncodedBytes: 40000,
+        replayCanvasMaxConcurrentEncodes: 1
+      },
+      lifeCycle: createLifeCycle(),
+      startCanvasCommandCapture: function (options) {
+        commandCaptureOptions = options
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy('scanExistingCanvases')
+        }
+      }
+    })
+
+    emittedRecords.length = 0
     expect(
-      emittedRecords.some(
-        (event) =>
-          event.type === RecordType.IncrementalSnapshot &&
-          event.data.source === IncrementalSource.CanvasMutation
-      )
-    ).toBeTrue()
+      await commandCaptureOptions.snapshotCanvas(canvas, {
+        trigger: 'auto',
+        scheduler: 'command_capture'
+      })
+    ).toEqual({ ok: true })
+
+    const canvasMutation = emittedRecords.find(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation
+    )
+    expect(canvasMutation).toBeDefined()
+    expectReplayCompatibleCanvasMutation(canvasMutation, jasmine.any(Number), 20, 10)
+
+    recorder.stop()
   })
 
   it('should start and stop the continuous canvas snapshot loop for numeric sampling', () => {

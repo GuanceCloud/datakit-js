@@ -6,6 +6,30 @@ import { setSerializedNodeId } from '../domain/replay/record/serializationUtils'
 describe('startRecording', () => {
   let originalBridge
 
+  function createEncoder() {
+    const encoder = {
+      empty: true,
+      isAsync: false,
+      isEmpty() {
+        return this.empty
+      },
+      write: jasmine.createSpy('write').and.callFake((data, callback) => {
+        encoder.empty = false
+        if (callback) {
+          callback(data.length)
+        }
+      }),
+      finish: jasmine.createSpy('finish').and.callFake((callback) => {
+        callback({
+          rawBytesCount: 100,
+          output: new Uint8Array([1, 2, 3]),
+          outputBytesCount: 3
+        })
+      })
+    }
+    return encoder
+  }
+
   function parseBridgePayloads(sendEvent) {
     return sendEvent.calls.allArgs().map((args) => JSON.parse(args[0]))
   }
@@ -167,5 +191,48 @@ describe('startRecording', () => {
 
     recording.stop()
     canvas.remove()
+  })
+
+  it('should expose monotonic sequence numbers in replay segment flush debug history', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    const httpRequest = {
+      send: jasmine.createSpy('send'),
+      sendOnExit: jasmine.createSpy('sendOnExit')
+    }
+
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      httpRequest
+    )
+
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
+      startClocks: { timeStamp: 1000 }
+    })
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
+      startClocks: { timeStamp: 2000 }
+    })
+
+    const flushHistory = recording.getReplaySegmentFlushHistoryForDebug()
+
+    expect(flushHistory.length).toBeGreaterThan(0)
+    flushHistory.forEach((entry, index) => {
+      expect(entry.sequence).toBe(index + 1)
+    })
+
+    recording.stop()
   })
 })

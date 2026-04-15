@@ -63,7 +63,10 @@ export function startRecording(
         onSegmentFlushed: function (segmentFlush) {
           replaySegmentFlushCount += 1
           lastReplaySegmentFlushForDebug =
-            cloneReplaySegmentFlushForDebug(segmentFlush)
+            cloneReplaySegmentFlushForDebug(
+              segmentFlush,
+              replaySegmentFlushCount
+            )
           replaySegmentFlushHistoryForDebug.push(lastReplaySegmentFlushForDebug)
           if (
             replaySegmentFlushHistoryForDebug.length >
@@ -192,12 +195,13 @@ export function startRecording(
   }
 }
 
-function cloneReplaySegmentFlushForDebug(segmentFlush) {
+function cloneReplaySegmentFlushForDebug(segmentFlush, sequence) {
   if (!segmentFlush) {
     return segmentFlush
   }
 
   return {
+    sequence: typeof sequence === 'number' ? sequence : segmentFlush.sequence,
     creationReason: segmentFlush.creationReason,
     flushReason: segmentFlush.flushReason,
     recordsCount: segmentFlush.recordsCount,

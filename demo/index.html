@@ -483,6 +483,11 @@
         flex-wrap: wrap;
         gap: 8px;
       }
+      .demo-helper-log {
+        min-height: 20px;
+        font-size: 12px;
+        color: var(--demo-muted);
+      }
       @media (max-width: 980px) {
         body {
           padding: 16px;
@@ -1480,16 +1485,20 @@
               <button delay="1000">1</button>
             </div>
           </div>
-          <div class="demo-toolbar-group">
-            <div class="demo-toolbar-group__title">Misc</div>
-            <div class="demo-toolbar-group__actions">
-              <button delay="append">append window</button>
-              <button delay="open">window.open</button>
+        <div class="demo-toolbar-group">
+          <div class="demo-toolbar-group__title">Misc</div>
+          <div class="demo-toolbar-group__actions">
+            <button delay="append">append window</button>
+            <button delay="open">window.open</button>
               <button delay="dataclone">data clone</button>
               <button delay="longtask">longtask</button>
               <button delay="triggerCls">trigger CLS</button>
-              <button delay="remoteConfiguration">remoteConfiguration</button>
-            </div>
+            <button delay="remoteConfiguration">remoteConfiguration</button>
+          </div>
+        </div>
+          <div class="demo-toolbar-group">
+            <div class="demo-toolbar-group__title">Activity</div>
+            <div id="legacy-action-log" class="demo-helper-log">idle</div>
           </div>
         </div>
         <div class="demo-sandbox">
@@ -1522,25 +1531,26 @@
             <button onclick="getSessionReplyData()">getSessionReplyData</button>
           </div>
           <div id="session_replay_content"></div>
+          <div id="utility-panels-log" class="demo-helper-log">idle</div>
         </div>
         <div class="demo-toolbar-group" id="longtask">
           <div class="demo-toolbar-group__title">Longtask Hooks</div>
           <div class="demo-toolbar-group__actions">
-            <button id="longtask_button">longtask</button>
-            <button id="longtask_button_func_name">longtask_button_func_name</button>
+            <button delay="utilityLongtask" id="longtask_button">longtask</button>
+            <button delay="utilityLongtaskNamed" id="longtask_button_func_name">longtask_button_func_name</button>
           </div>
         </div>
         <div class="demo-toolbar-group">
           <div class="demo-toolbar-group__title">Loose Buttons</div>
           <div class="demo-copy-row">
-            <button>C. find /tmp/ -type f -exec ls -l {} \</button>
-            <button>500ms</button>
-            <button>500ms</button>
-            <button>500ms</button>
-            <button>500ms</button>
-            <button>500ms</button>
-            <button>500ms</button>
-            <button>500ms</button>
+            <button delay="utilityLooseCommand">C. find /tmp/ -type f -exec ls -l {} \</button>
+            <button delay="500">500ms</button>
+            <button delay="500">500ms</button>
+            <button delay="500">500ms</button>
+            <button delay="500">500ms</button>
+            <button delay="500">500ms</button>
+            <button delay="500">500ms</button>
+            <button delay="500">500ms</button>
           </div>
           <div>测试时是对方</div>
         </div>
@@ -1739,6 +1749,20 @@
       let largeDomBenchmarkResult = 'idle'
       let resourceHookTrackerId = ''
       let resourceHookPendingFetch = false
+      const legacyActionLog = document.getElementById('legacy-action-log')
+      const utilityPanelsLog = document.getElementById('utility-panels-log')
+
+      function setLegacyActionLog(message) {
+        if (legacyActionLog) {
+          legacyActionLog.textContent = message
+        }
+      }
+
+      function setUtilityPanelsLog(message) {
+        if (utilityPanelsLog) {
+          utilityPanelsLog.textContent = message
+        }
+      }
 
       function setResourceHookStatus(element, value) {
         if (element) {
@@ -2278,7 +2302,11 @@
         if (!history || !history.length) {
           return -1
         }
-        return history[history.length - 1].indexInView
+        const lastEntry = history[history.length - 1]
+        if (typeof lastEntry.sequence === 'number') {
+          return lastEntry.sequence
+        }
+        return lastEntry.indexInView
       }
 
       function summarizeFallbackReasons(records) {
@@ -2489,7 +2517,9 @@
           ? resumedSnapshots[0].startedAt
           : 0
         const newFlushHistory = afterHistory.filter((entry) => {
-          return typeof entry.indexInView === 'number' && entry.indexInView > beforeFlushTail
+          const tailValue =
+            typeof entry.sequence === 'number' ? entry.sequence : entry.indexInView
+          return typeof tailValue === 'number' && tailValue > beforeFlushTail
         })
         const fallbackReasonCounts = summarizeFallbackReasons(fallbackRecords || [])
 
@@ -3977,7 +4007,9 @@
           return sum + (record.selectedCanvasCount || 0)
         }, 0)
         const newFlushHistory = afterHistory.filter((entry) => {
-          return typeof entry.indexInView === 'number' && entry.indexInView > beforeFlushTail
+          const tailValue =
+            typeof entry.sequence === 'number' ? entry.sequence : entry.indexInView
+          return typeof tailValue === 'number' && tailValue > beforeFlushTail
         })
         const bytesLimitFlushCount = newFlushHistory.filter((entry) => {
           return entry.flushReason === 'segment_bytes_limit'
@@ -4303,7 +4335,9 @@ async function runDashboardCanvasVisibilityBenchmark(mode, scheduler) {
           return sum + (record.selectedCanvasCount || 0)
         }, 0)
         const newFlushHistory = afterHistory.filter((entry) => {
-          return typeof entry.indexInView === 'number' && entry.indexInView > beforeFlushTail
+          const tailValue =
+            typeof entry.sequence === 'number' ? entry.sequence : entry.indexInView
+          return typeof tailValue === 'number' && tailValue > beforeFlushTail
         })
         const bytesLimitFlushCount = newFlushHistory.filter((entry) => {
           return entry.flushReason === 'segment_bytes_limit'
@@ -4693,9 +4727,13 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
         } else if (delay === 'displayDate') {
           displayDate()
         } else if (delay === 'remoteConfiguration') {
+          setLegacyActionLog('requesting remote configuration...')
           window.DATAFLUX_RUM.onReady(() => {
             window.DATAFLUX_RUM.getRemoteConfiguration((res) => {
               console.log('===getRemoteConfiguration', res)
+              setLegacyActionLog(
+                'remote configuration loaded at ' + new Date().toLocaleTimeString()
+              )
             })
           })
         } else if (delay === 'testError') {
@@ -4713,8 +4751,10 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
           div.setAttribute('class', 'open-window')
           div.setAttribute('style', 'right: ' + right + 'px')
           document.body.append(div)
+          setLegacyActionLog('append window created at right=' + right + 'px')
         } else if (delay === 'open') {
-          window.open('https://guance.com', '_blank')
+          const popup = window.open('https://guance.com', '_blank')
+          setLegacyActionLog(popup ? 'window.open triggered' : 'window.open blocked')
         } else if (delay === 'testSourceMap') {
           window.test()
         } else if (delay === 'testLog') {
@@ -4746,7 +4786,15 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
             id: Symbol('unique') // ❌ Symbol 也不能被克隆
           }
 
-          worker.postMessage(uncloneable) // 会抛 DataCloneError
+          try {
+            worker.postMessage(uncloneable) // 会抛 DataCloneError
+            setLegacyActionLog('data clone sent unexpectedly')
+          } catch (error) {
+            setLegacyActionLog(
+              'data clone failed as expected: ' +
+                (error && error.name ? error.name : 'unknown')
+            )
+          }
         } else if (delay === 'addView') {
           window.DATAFLUX_RUM.startView({
             name: 'test view',
@@ -4759,8 +4807,10 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
             // block main thread for 100ms
           }
           console.log('long task done')
+          setLegacyActionLog('longtask blocked main thread for ~200ms')
         } else if (delay === 'triggerCls') {
           triggerCls()
+          setLegacyActionLog('CLS injection scheduled in 700ms')
         } else if (delay === 'canvasModeManual') {
           switchReplayCanvasMode('manual', 'continuous_snapshot')
         } else if (delay === 'canvasModeAutoContinuous') {
@@ -4855,9 +4905,25 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
           takeLargeDomFullSnapshot()
         } else if (delay === 'largeDomClear') {
           clearLargeDom()
+        } else if (delay === 'utilityLongtask') {
+          let start = Date.now()
+          while (Date.now() - start < 200) {}
+          setUtilityPanelsLog('utility longtask blocked main thread for ~200ms')
+        } else if (delay === 'utilityLongtaskNamed') {
+          function longtaskButtonFuncName() {
+            const start = Date.now()
+            while (Date.now() - start < 200) {}
+          }
+          longtaskButtonFuncName()
+          setUtilityPanelsLog('longtask_button_func_name executed for ~200ms')
+        } else if (delay === 'utilityLooseCommand') {
+          setUtilityPanelsLog('loose button clicked: command sample only, no shell execution')
         } else {
           sleep(Number(delay) - 5)
           switchColor()
+          if (!Number.isNaN(Number(delay))) {
+            setUtilityPanelsLog('utility delay button blocked for ~' + Number(delay) + 'ms')
+          }
         }
       }
       function getSessionReplyData() {
@@ -4865,17 +4931,26 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
         // <button onclick="getSessionReplyData">getSessionReplyData</button>
         // <div id="session_replay_content"></div>
         const fileid = document.getElementById('session_replay_input').value
-        if (!fileid) return
+        if (!fileid) {
+          setUtilityPanelsLog('getSessionReplyData requires a file id')
+          return
+        }
         var xhr = new XMLHttpRequest()
         xhr.timeout = 2000
         xhr.open('get', 'http://localhost:3002/filedata/' + fileid)
         xhr.withCredentials = true
         xhr.send()
+        setUtilityPanelsLog('requesting session replay data for ' + fileid)
 
         xhr.onreadystatechange = function () {
           if (xhr.readyState == 4 && xhr.status == 200) {
             document.getElementById('session_replay_content').innerHTML =
               xhr.responseText
+            setUtilityPanelsLog('session replay data loaded for ' + fileid)
+          } else if (xhr.readyState == 4) {
+            setUtilityPanelsLog(
+              'getSessionReplyData failed with status ' + xhr.status
+            )
           }
         }
       }
@@ -4891,12 +4966,17 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
         document.getElementById('demo').value = Date()
       }
       function displayDate() {
-        document.getElementById('demo').innerHTML = Date()
+        document.getElementById('demo').value = Date()
+        setLegacyActionLog('displayDate wrote current time to input')
       }
       function init() {
-        const operation = document.querySelector('#operation')
-        if (operation) {
-          operation.addEventListener('click', buttonsClickHandle, false)
+        const legacyActionLab = document.querySelector('.demo-lab__actions')
+        if (legacyActionLab) {
+          legacyActionLab.addEventListener('click', buttonsClickHandle, false)
+        }
+        const utilityPanels = document.querySelector('.demo-utility-grid')
+        if (utilityPanels) {
+          utilityPanels.addEventListener('click', buttonsClickHandle, false)
         }
         document.querySelectorAll('.canvas-demo__toolbar').forEach((toolbar) => {
           toolbar.addEventListener('click', buttonsClickHandle, false)
@@ -4918,7 +4998,5 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
       init()
       renderLastCanvasReplayEvent()
     </script>
-    <script src="./build/runtime.js"></script>
-    <script src="./build/main.js"></script>
   </body>
 </html>
