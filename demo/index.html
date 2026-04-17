@@ -154,6 +154,13 @@
         font-size: 12px;
         white-space: nowrap;
       }
+      .demo-flow__step--highlight {
+        border-color: #f59e0b;
+        background: linear-gradient(180deg, #fff4d6 0%, #ffe7a8 100%);
+        color: #8a4b00;
+        font-weight: 700;
+        box-shadow: 0 8px 18px rgba(245, 158, 11, 0.22);
+      }
       .demo-status-grid {
         display: grid;
         grid-template-columns: minmax(96px, 120px) minmax(0, 1fr);
@@ -266,9 +273,13 @@
         font-weight: 600;
         margin: 0;
       }
+      .canvas-demo__title--alert {
+        color: #d93025;
+      }
       .canvas-demo__desc {
-        margin: 0;
+        margin: 10px 0 4px;
         color: var(--demo-muted);
+        line-height: 1.7;
       }
       .canvas-demo__board {
         display: block;
@@ -1099,13 +1110,13 @@
         <div class="demo-section demo-section--canvas canvas-demo">
           <div class="demo-section__head">
             <div>
-              <div class="canvas-demo__title demo-section__title">Canvas Replay Inspector</div>
+              <div class="canvas-demo__title canvas-demo__title--alert demo-section__title">Canvas Replay Inspector</div>
               <div class="canvas-demo__desc demo-section__desc">
                 用来验证 2D canvas 的手动采样、自动采样和导出事件。先看状态，再操作画布，最后检查导出的 replay event。
               </div>
               <div class="demo-flow">
                 <div class="demo-flow__step">1. choose mode</div>
-                <div class="demo-flow__step">2. draw or auto draw</div>
+                <div class="demo-flow__step demo-flow__step--highlight">2. draw or auto draw</div>
                 <div class="demo-flow__step">3. snapshot</div>
                 <div class="demo-flow__step">4. inspect export</div>
               </div>
