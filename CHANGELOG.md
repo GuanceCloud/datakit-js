@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.3.0
+
+- fix: add docs
+- fix: update docs
+- fix: update docs
+- feat: add doc
+- fix: add canvas record
+- fix: add resource tracker
+- fix: larget mutaion
+- fix: add replay canvas
+- fix: add canvas replay
+- fix: add replay unit
+- chore: update cls demo setup
+- test: expand core and rum unit coverage
+- fix: add md
+- fix: add sourcemap demo
+
 ## v3.2.51
 
 - feat: add monitorError
