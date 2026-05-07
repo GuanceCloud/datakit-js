@@ -1,20 +1,29 @@
-import { TraceIdentifier, getCrypto } from './traceIdentifier'
+import {
+  createRandomHexIdentifier,
+  getCrypto,
+  normalizeHexIdentifier
+} from './traceIdentifier'
 import { getType } from '@cloudcare/browser-core'
 /**
  *
  * @param {*} configuration
  */
 export function JaegerTracer(configuration, traceSampled) {
-  this._traceId = new TraceIdentifier()
-  this._spanId = new TraceIdentifier()
+  this._traceId = configuration.traceId128Bit
+    ? createRandomHexIdentifier(16)
+    : createRandomHexIdentifier(8)
+  this._spanId = createRandomHexIdentifier(8)
   this._traceSampled = traceSampled
   this.is128Bit = configuration.traceId128Bit
   if (
     configuration.generateTraceId &&
     getType(configuration.generateTraceId) === 'function'
   ) {
-    const customTraceId = configuration.generateTraceId()
-    if (getType(customTraceId) === 'string') {
+    const customTraceId = normalizeHexIdentifier(
+      configuration.generateTraceId(),
+      [16, 32]
+    )
+    if (customTraceId) {
       this.customTraceId = customTraceId
     }
   }
@@ -24,15 +33,13 @@ JaegerTracer.prototype = {
     return getCrypto() !== undefined
   },
   getSpanId: function () {
-    return this._spanId.toPaddedHexadecimalString()
+    return this._spanId
   },
   getTraceId: function () {
     if (this.customTraceId) {
       return this.customTraceId
     }
-    return this.is128Bit
-      ? '0000000000000000' + this._traceId.toPaddedHexadecimalString()
-      : this._traceId.toPaddedHexadecimalString()
+    return this._traceId
   },
   getUberTraceId: function () {
     //{trace-id}:{span-id}:{parent-span-id}:{flags}

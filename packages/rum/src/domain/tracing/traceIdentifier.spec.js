@@ -1,4 +1,9 @@
-import { getCrypto, TraceIdentifier } from './traceIdentifier'
+import {
+  createRandomHexIdentifier,
+  getCrypto,
+  normalizeHexIdentifier,
+  TraceIdentifier
+} from './traceIdentifier'
 
 describe('traceIdentifier', () => {
   let originalCryptoDescriptor
@@ -34,6 +39,7 @@ describe('traceIdentifier', () => {
     expect(identifier.readInt32(0)).toBeGreaterThanOrEqual(0)
     expect(identifier.toDecimalString()).toEqual(jasmine.any(String))
     expect(identifier.toPaddedHexadecimalString()).toMatch(/^[0-9a-f]{16}$/)
+    expect(identifier.toPaddedHexadecimalString().startsWith('7f')).toBeTrue()
   })
 
   it('should fallback to msCrypto when crypto is unavailable', () => {
@@ -53,5 +59,24 @@ describe('traceIdentifier', () => {
 
     expect(getCrypto()).toBe(window.msCrypto)
     expect(new TraceIdentifier().toString(16)).toBe('100000002')
+  })
+
+  it('should create full-width random hexadecimal identifiers', () => {
+    const getRandomValues = jasmine.createSpy('getRandomValues').and.callFake((buffer) => {
+      buffer.set([255, 254, 253, 252, 1, 2, 3, 4])
+      return buffer
+    })
+    Object.defineProperty(window, 'crypto', {
+      configurable: true,
+      value: { getRandomValues }
+    })
+
+    expect(createRandomHexIdentifier(8)).toBe('fffefdfc01020304')
+  })
+
+  it('should normalize valid hexadecimal identifiers and reject invalid ones', () => {
+    expect(normalizeHexIdentifier('ABCDEF1234567890', [16, 32])).toBe('abcdef1234567890')
+    expect(normalizeHexIdentifier('abc-def', [16, 32])).toBeUndefined()
+    expect(normalizeHexIdentifier('xyz', [16, 32])).toBeUndefined()
   })
 })

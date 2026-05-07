@@ -589,6 +589,11 @@ function createMutationTasksController(
     }
 
     var parentNode = getParentNode(task.rootNode)
+    var parentPendingRootTask = findPendingRootTask(parentNode)
+    if (parentPendingRootTask && parentPendingRootTask !== task) {
+      cancelPendingRootTask(task)
+      return
+    }
     var parentNodePrivacyLevel = getNodePrivacyLevel(
       parentNode,
       configuration.defaultPrivacyLevel
@@ -625,7 +630,15 @@ function createMutationTasksController(
     if (!task || task.generation !== generation) {
       return
     }
-    if (node === task.rootNode || !task.rootNode.isConnected) {
+    if (node === task.rootNode) {
+      if (task.rootNode.isConnected) {
+        refreshPendingRootTask(task)
+        return
+      }
+      cancelPendingRootTask(task)
+      return
+    }
+    if (!task.rootNode.isConnected) {
       cancelPendingRootTask(task)
       return
     }

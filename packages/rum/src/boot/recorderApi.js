@@ -58,6 +58,12 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       getCanvasMutationHistoryForDebug: function () {
         return undefined
       },
+      getLastDomMutationForDebug: function () {
+        return undefined
+      },
+      getDomMutationHistoryForDebug: function () {
+        return undefined
+      },
       getLastReplaySegmentFlushForDebug: function () {
         return undefined
       },
@@ -67,6 +73,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       getReplayPerformanceForDebug: function () {
         return undefined
       },
+      flushReplayMutationsForDebug: noop,
       getReplayStats: function () {
         return undefined
       },
@@ -109,6 +116,12 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
   var getCanvasMutationHistoryForDebug = function () {
     return undefined
   }
+  var getLastDomMutationForDebug = function () {
+    return undefined
+  }
+  var getDomMutationHistoryForDebug = function () {
+    return undefined
+  }
   var getLastReplaySegmentFlushForDebug = function () {
     return undefined
   }
@@ -118,6 +131,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
   var getReplayPerformanceForDebug = function () {
     return undefined
   }
+  var flushReplayMutationsForDebug = noop
   return {
     start: function (options) {
       startStrategy(options)
@@ -226,12 +240,18 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
               recordingImpl.getLastCanvasMutationForDebug || noop,
             getCanvasMutationHistoryForDebug:
               recordingImpl.getCanvasMutationHistoryForDebug || noop,
+            getLastDomMutationForDebug:
+              recordingImpl.getLastDomMutationForDebug || noop,
+            getDomMutationHistoryForDebug:
+              recordingImpl.getDomMutationHistoryForDebug || noop,
             getLastReplaySegmentFlushForDebug:
               recordingImpl.getLastReplaySegmentFlushForDebug || noop,
             getReplaySegmentFlushHistoryForDebug:
               recordingImpl.getReplaySegmentFlushHistoryForDebug || noop,
             getReplayPerformanceForDebug:
-              recordingImpl.getReplayPerformanceForDebug || noop
+              recordingImpl.getReplayPerformanceForDebug || noop,
+            flushReplayMutationsForDebug:
+              recordingImpl.flushReplayMutationsForDebug || noop
           }
         })
       }
@@ -291,6 +311,18 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
         }
         return undefined
       }
+      getLastDomMutationForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getLastDomMutationForDebug()
+        }
+        return undefined
+      }
+      getDomMutationHistoryForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          return state.getDomMutationHistoryForDebug()
+        }
+        return undefined
+      }
       getLastReplaySegmentFlushForDebug = function () {
         if (state.status === RecorderStatus.Started) {
           return state.getLastReplaySegmentFlushForDebug()
@@ -308,6 +340,11 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
           return state.getReplayPerformanceForDebug()
         }
         return undefined
+      }
+      flushReplayMutationsForDebug = function () {
+        if (state.status === RecorderStatus.Started) {
+          state.flushReplayMutationsForDebug()
+        }
       }
       if (state.status === RecorderStatus.IntentToStart) {
         startStrategy()
@@ -337,11 +374,20 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     getCanvasMutationHistoryForDebug: function () {
       return getCanvasMutationHistoryForDebug()
     },
+    getLastDomMutationForDebug: function () {
+      return getLastDomMutationForDebug()
+    },
+    getDomMutationHistoryForDebug: function () {
+      return getDomMutationHistoryForDebug()
+    },
     getReplaySegmentFlushHistoryForDebug: function () {
       return getReplaySegmentFlushHistoryForDebug()
     },
     getReplayPerformanceForDebug: function () {
       return getReplayPerformanceForDebug()
+    },
+    flushReplayMutationsForDebug: function () {
+      flushReplayMutationsForDebug()
     },
     isRecording: function () {
       return (

@@ -167,6 +167,79 @@ describe('replay/record/record', () => {
     expect(mutationSnapshots[0].data.adds.length).toBe(2)
   })
 
+  it('should expose dynamic div add mutations after flushMutations', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+
+    emittedRecords.length = 0
+
+    const dynamicDialog = document.createElement('div')
+    dynamicDialog.setAttribute('data-testid', 'dynamic-replay-dialog')
+    dynamicDialog.textContent = 'dynamic dialog'
+    container.appendChild(dynamicDialog)
+
+    recorder.flushMutations()
+
+    const lastDomMutation = recorder.getLastDomMutationForDebug()
+    expect(lastDomMutation).toBeDefined()
+    expect(lastDomMutation.addsCount).toBeGreaterThan(0)
+    expect(
+      lastDomMutation.adds.some(function (add) {
+        return (
+          add &&
+          add.node &&
+          add.node.type === 2 &&
+          add.node.attributes &&
+          add.node.attributes['data-testid'] === 'dynamic-replay-dialog'
+        )
+      })
+    ).toBeTrue()
+  })
+
+  it('should capture dynamically created div nodes after flushMutations', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+
+    emittedRecords.length = 0
+
+    const modal = document.createElement('div')
+    modal.setAttribute('data-testid', 'dynamic-modal')
+    modal.textContent = 'dynamic dialog'
+    container.appendChild(modal)
+
+    recorder.flushMutations()
+
+    const mutationSnapshots = emittedRecords.filter(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation
+    )
+    const dynamicModalMutation = mutationSnapshots.some((event) =>
+      event.data.adds.some(
+        (add) =>
+          add.node &&
+          add.node.type === 2 &&
+          add.node.tagName === 'div' &&
+          add.node.attributes &&
+          add.node.attributes['data-testid'] === 'dynamic-modal'
+      )
+    )
+
+    expect(dynamicModalMutation).toBeTrue()
+  })
+
   it('should flush pending mutation payloads before taking a subsequent full snapshot', () => {
     const emittedRecords = []
     const recorder = record({

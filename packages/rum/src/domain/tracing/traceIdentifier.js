@@ -41,3 +41,27 @@ TraceIdentifier.prototype = {
 export function getCrypto() {
   return window.crypto || window.msCrypto
 }
+
+export function createRandomHexIdentifier(byteLength) {
+  var buffer = new Uint8Array(byteLength)
+  getCrypto().getRandomValues(buffer)
+  var parts = []
+  for (var i = 0; i < buffer.length; i += 1) {
+    var hex = buffer[i].toString(16)
+    parts.push(hex.length === 1 ? '0' + hex : hex)
+  }
+  return parts.join('')
+}
+
+export function normalizeHexIdentifier(value, allowedLengths) {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  var normalized = value.toLowerCase()
+  if (allowedLengths.indexOf(normalized.length) === -1) {
+    return undefined
+  }
+
+  return /^[0-9a-f]+$/.test(normalized) ? normalized : undefined
+}

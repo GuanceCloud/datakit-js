@@ -316,6 +316,12 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     getCanvasMutationHistoryForDebug: monitor(function () {
       return recorderApi.getCanvasMutationHistoryForDebug()
     }),
+    getLastDomMutationForDebug: monitor(function () {
+      return recorderApi.getLastDomMutationForDebug()
+    }),
+    getDomMutationHistoryForDebug: monitor(function () {
+      return recorderApi.getDomMutationHistoryForDebug()
+    }),
     getLastReplaySegmentFlushForDebug: monitor(function () {
       return recorderApi.getLastReplaySegmentFlushForDebug()
     }),
@@ -324,6 +330,11 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     }),
     getReplayPerformanceForDebug: monitor(function () {
       return recorderApi.getReplayPerformanceForDebug()
+    }),
+    flushReplayMutationsForDebug: monitor(function () {
+      if (recorderApi.flushReplayMutationsForDebug) {
+        recorderApi.flushReplayMutationsForDebug()
+      }
     }),
     createResourceTrackerId: monitor(function () {
       return resourceTrackerManager.createTrackerId()

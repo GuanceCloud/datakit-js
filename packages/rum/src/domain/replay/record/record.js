@@ -119,6 +119,11 @@ function flushPendingMutations() {
       )
     )
     mutationPayloads.forEach(function (mutationPayload) {
+      lastDomMutationForDebug = cloneDomMutationDebugResult(mutationPayload)
+      pushCanvasDebugHistoryEntry(
+        domMutationHistoryForDebug,
+        lastDomMutationForDebug
+      )
       emit(
         assembleIncrementalSnapshot(IncrementalSource.Mutation, mutationPayload)
       )
@@ -136,6 +141,8 @@ function flushPendingMutations() {
   var autoCanvasSnapshotDebugHistoryForDebug = []
   var lastCanvasMutationForDebug
   var canvasMutationHistoryForDebug = []
+  var lastDomMutationForDebug
+  var domMutationHistoryForDebug = []
   var shouldUseCanvasCommandCapture = shouldUseCommandCapture(
     options.configuration
   )
@@ -380,6 +387,12 @@ function flushPendingMutations() {
     },
     getCanvasMutationHistoryForDebug: function () {
       return canvasMutationHistoryForDebug.map(cloneCanvasMutationDebugResult)
+    },
+    getLastDomMutationForDebug: function () {
+      return cloneDomMutationDebugResult(lastDomMutationForDebug)
+    },
+    getDomMutationHistoryForDebug: function () {
+      return domMutationHistoryForDebug.map(cloneDomMutationDebugResult)
     },
     getReplayPerformanceForDebug: function () {
       return cloneReplayPerformanceStats(replayPerformanceStats)
@@ -811,4 +824,37 @@ function cloneCanvasMutationDebugResult(result) {
   }
 
   return clonedResult
+}
+
+function cloneDomMutationDebugResult(result) {
+  if (!result) {
+    return result
+  }
+
+  return {
+    timestamp:
+      typeof result.timestamp === 'number' ? result.timestamp : timeStampNow(),
+    adds: (result.adds || []).map(cloneDebugValue),
+    removes: (result.removes || []).map(cloneDebugValue),
+    texts: (result.texts || []).map(cloneDebugValue),
+    attributes: (result.attributes || []).map(cloneDebugValue),
+    addsCount: (result.adds || []).length,
+    removesCount: (result.removes || []).length,
+    textsCount: (result.texts || []).length,
+    attributesCount: (result.attributes || []).length
+  }
+}
+
+function cloneDebugValue(value) {
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map(cloneDebugValue)
+  }
+
+  return Object.keys(value).reduce(function (accumulator, key) {
+    accumulator[key] = cloneDebugValue(value[key])
+    return accumulator
+  }, {})
 }

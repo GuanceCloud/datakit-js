@@ -361,6 +361,141 @@ describe('replay/record/mutationObserver', () => {
     expect(mutationCallback).not.toHaveBeenCalled()
   })
 
+  it('should preserve a pending root add when the root is moved to another parent before the async slice runs', () => {
+    jasmine.clock().install()
+    window.requestIdleCallback = undefined
+    window.cancelIdleCallback = undefined
+
+    const firstParent = document.createElement('div')
+    const secondParent = document.createElement('div')
+    document.body.appendChild(firstParent)
+    document.body.appendChild(secondParent)
+    setSerializedNodeId(firstParent, 510)
+    setSerializedNodeId(secondParent, 520)
+    markSerializedAncestors(document.body, 530)
+
+    const child = document.createElement('div')
+    child.appendChild(document.createElement('span'))
+    firstParent.appendChild(child)
+
+    const mutationCallback = jasmine.createSpy('mutationCallback')
+    startMutationObserver(
+      mutationCallback,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      { removeShadowRoot: jasmine.createSpy('removeShadowRoot') },
+      document.body
+    )
+
+    observedCallback([
+      {
+        type: 'childList',
+        target: firstParent,
+        addedNodes: [child],
+        removedNodes: []
+      }
+    ])
+
+    firstParent.removeChild(child)
+    secondParent.appendChild(child)
+    observedCallback([
+      {
+        type: 'childList',
+        target: firstParent,
+        addedNodes: [],
+        removedNodes: [child]
+      },
+      {
+        type: 'childList',
+        target: secondParent,
+        addedNodes: [child],
+        removedNodes: []
+      }
+    ])
+
+    jasmine.clock().tick(ASYNC_MUTATION_TICK)
+
+    expect(mutationCallback).toHaveBeenCalled()
+    expect(mutationCallback.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        adds: [
+          jasmine.objectContaining({
+            parentId: 520,
+            node: jasmine.objectContaining({
+              tagName: 'div'
+            })
+          })
+        ]
+      })
+    )
+  })
+
+  it('should not emit a moved pending root twice when it is reparented under another pending root', () => {
+    jasmine.clock().install()
+    window.requestIdleCallback = undefined
+    window.cancelIdleCallback = undefined
+
+    const parent = document.createElement('div')
+    const nextSibling = document.createElement('div')
+    document.body.appendChild(parent)
+    document.body.appendChild(nextSibling)
+    setSerializedNodeId(parent, 610)
+    setSerializedNodeId(nextSibling, 620)
+
+    const childRoot = document.createElement('section')
+    childRoot.appendChild(document.createElement('span'))
+    parent.appendChild(childRoot)
+
+    const newParentRoot = document.createElement('article')
+    newParentRoot.appendChild(document.createElement('em'))
+    parent.appendChild(newParentRoot)
+
+    const mutationCallback = jasmine.createSpy('mutationCallback')
+    startMutationObserver(
+      mutationCallback,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      { removeShadowRoot: jasmine.createSpy('removeShadowRoot') },
+      document.body
+    )
+
+    observedCallback([
+      {
+        type: 'childList',
+        target: parent,
+        addedNodes: [childRoot, newParentRoot],
+        removedNodes: []
+      }
+    ])
+
+    parent.removeChild(childRoot)
+    newParentRoot.appendChild(childRoot)
+    observedCallback([
+      {
+        type: 'childList',
+        target: parent,
+        addedNodes: [],
+        removedNodes: [childRoot]
+      },
+      {
+        type: 'childList',
+        target: newParentRoot,
+        addedNodes: [childRoot],
+        removedNodes: []
+      }
+    ])
+
+    jasmine.clock().tick(ASYNC_MUTATION_TICK * 2)
+
+    const emittedAdds = mutationCallback.calls
+      .allArgs()
+      .map((args) => args[0])
+      .flatMap((payload) => payload.adds)
+
+    expect(emittedAdds.length).toBe(1)
+    expect(emittedAdds[0].node.tagName).toBe('article')
+    expect(emittedAdds[0].parentId).toBe(610)
+    expect(emittedAdds[0].node.childNodes[1].tagName).toBe('section')
+  })
+
   it('should eventually emit all pending roots in a mixed tree scenario', () => {
     jasmine.clock().install()
     window.requestIdleCallback = undefined

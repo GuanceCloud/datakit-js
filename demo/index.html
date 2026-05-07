@@ -1544,6 +1544,18 @@
           <div id="session_replay_content"></div>
           <div id="utility-panels-log" class="demo-helper-log">idle</div>
         </div>
+        <div class="demo-toolbar-group">
+          <div class="demo-toolbar-group__title">Replay DOM Mutation</div>
+          <div class="demo-toolbar-group__actions">
+            <button delay="utilityOpenReplayDialog">open dynamic div</button>
+            <button delay="utilityOpenReplayDialogStaged">open staged dialog</button>
+            <button delay="utilityOpenReplayDialogMoved">open moved dialog</button>
+            <button delay="utilityInspectReplayDialog">flush + inspect mutation</button>
+            <button delay="utilityCompareReplayDialog">compare last vs history</button>
+            <button delay="utilityCloseReplayDialog">close dynamic div</button>
+          </div>
+          <pre id="utility-dom-mutation-output" class="demo-output">No DOM replay mutation inspected yet.</pre>
+        </div>
         <div class="demo-toolbar-group" id="longtask">
           <div class="demo-toolbar-group__title">Longtask Hooks</div>
           <div class="demo-toolbar-group__actions">
@@ -1762,6 +1774,10 @@
       let resourceHookPendingFetch = false
       const legacyActionLog = document.getElementById('legacy-action-log')
       const utilityPanelsLog = document.getElementById('utility-panels-log')
+      const utilityDomMutationOutput = document.getElementById(
+        'utility-dom-mutation-output'
+      )
+      let utilityReplayDialog = null
 
       function setLegacyActionLog(message) {
         if (legacyActionLog) {
@@ -1773,6 +1789,15 @@
         if (utilityPanelsLog) {
           utilityPanelsLog.textContent = message
         }
+      }
+
+      function renderUtilityDomMutationOutput(result) {
+        if (!utilityDomMutationOutput) {
+          return
+        }
+        utilityDomMutationOutput.textContent = result
+          ? JSON.stringify(result, null, 2)
+          : 'No DOM replay mutation inspected yet.'
       }
 
       function setResourceHookStatus(element, value) {
@@ -2281,6 +2306,320 @@
           return undefined
         }
         return rum.getLastCanvasMutationForDebug()
+      }
+
+      function getLastDomMutationDebugForDemo() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.getLastDomMutationForDebug !== 'function') {
+          return undefined
+        }
+        return rum.getLastDomMutationForDebug()
+      }
+
+      function getDomMutationHistoryForDemo() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.getDomMutationHistoryForDebug !== 'function') {
+          return []
+        }
+        return rum.getDomMutationHistoryForDebug() || []
+      }
+
+      function flushReplayMutationsForDemo() {
+        const rum = window.DATAFLUX_RUM
+        if (!rum || typeof rum.flushReplayMutationsForDebug !== 'function') {
+          return false
+        }
+        rum.flushReplayMutationsForDebug()
+        return true
+      }
+
+      function isUtilityReplayDialogNode(node) {
+        if (!node || node.type !== 2 || !node.attributes) {
+          return false
+        }
+
+        const className = node.attributes.class || ''
+        if (className.indexOf('el-dialog__wrapper') !== -1) {
+          return true
+        }
+        if (
+          node.attributes['data-testid'] === 'dynamic-replay-dialog' ||
+          node.attributes['data-testid'] === 'business-role-dialog-wrapper'
+        ) {
+          return true
+        }
+        if (
+          node.attributes.role === 'dialog' &&
+          node.attributes['aria-label'] === '添加角色'
+        ) {
+          return true
+        }
+
+        const childNodes = node.childNodes || []
+        return childNodes.some(function (child) {
+          return isUtilityReplayDialogNode(child)
+        })
+      }
+
+      function mutationEntryHasUtilityReplayDialog(entry) {
+        return !!(
+          entry &&
+          entry.adds &&
+          entry.adds.some(function (addEntry) {
+            return (
+              addEntry &&
+              addEntry.node &&
+              addEntry.node.type === 2 &&
+              isUtilityReplayDialogNode(addEntry.node)
+            )
+          })
+        )
+      }
+
+      function getBusinessRoleDialogInnerHtml() {
+        return (
+          '<div role="dialog" aria-modal="true" aria-label="添加角色" class="el-dialog" style="margin-top: 15vh; width: 500px;">' +
+          '<div class="el-dialog__header"><span class="el-dialog__title">添加角色</span><button type="button" aria-label="Close" class="el-dialog__headerbtn"><i class="el-dialog__close el-icon el-icon-close"></i></button></div>' +
+          '<div class="el-dialog__body"><form class="el-form">' +
+          '<div class="el-form-item is-required el-form-item--medium"><label for="roleName" class="el-form-item__label" style="width: 100px;">角色名称</label><div class="el-form-item__content" style="margin-left: 100px;"><div class="el-input el-input--medium"><input type="text" autocomplete="off" placeholder="请输入角色名称" class="el-input__inner"></div></div></div>' +
+          '<div class="el-form-item is-required el-form-item--medium"><label for="roleKey" class="el-form-item__label" style="width: 100px;"><span><i class="el-tooltip el-icon-question" tabindex="0"></i> 权限字符 </span></label><div class="el-form-item__content" style="margin-left: 100px;"><div class="el-input el-input--medium"><input type="text" autocomplete="off" placeholder="请输入权限字符" class="el-input__inner"></div></div></div>' +
+          '<div class="el-form-item is-required el-form-item--medium"><label for="roleSort" class="el-form-item__label" style="width: 100px;">角色顺序</label><div class="el-form-item__content" style="margin-left: 100px;"><div class="el-input-number el-input-number--medium is-controls-right"><span role="button" class="el-input-number__decrease is-disabled"><i class="el-icon-arrow-down"></i></span><span role="button" class="el-input-number__increase"><i class="el-icon-arrow-up"></i></span><div class="el-input el-input--medium"><input type="text" autocomplete="off" max="Infinity" min="0" class="el-input__inner" role="spinbutton" aria-valuemax="Infinity" aria-valuemin="0" aria-valuenow="0" aria-disabled="false"></div></div></div></div>' +
+          '<div class="el-form-item el-form-item--medium"><label class="el-form-item__label" style="width: 100px;">状态</label><div class="el-form-item__content" style="margin-left: 100px;"><div role="radiogroup" class="el-radio-group"><label role="radio" aria-checked="true" tabindex="0" class="el-radio is-checked"><span class="el-radio__input is-checked"><span class="el-radio__inner"></span><input type="radio" aria-hidden="true" tabindex="-1" autocomplete="off" class="el-radio__original" value="0"></span><span class="el-radio__label">正常</span></label><label role="radio" tabindex="-1" class="el-radio"><span class="el-radio__input"><span class="el-radio__inner"></span><input type="radio" aria-hidden="true" tabindex="-1" autocomplete="off" class="el-radio__original" value="1"></span><span class="el-radio__label">停用</span></label></div></div></div>' +
+          '<div class="el-form-item el-form-item--medium"><label class="el-form-item__label" style="width: 100px;">菜单权限</label><div class="el-form-item__content" style="margin-left: 100px;"><label class="el-checkbox"><span class="el-checkbox__input"><span class="el-checkbox__inner"></span><input type="checkbox" aria-hidden="false" class="el-checkbox__original" value=""></span><span class="el-checkbox__label">展开/折叠</span></label><label class="el-checkbox"><span class="el-checkbox__input"><span class="el-checkbox__inner"></span><input type="checkbox" aria-hidden="false" class="el-checkbox__original" value=""></span><span class="el-checkbox__label">全选/全不选</span></label><label class="el-checkbox is-checked"><span class="el-checkbox__input is-checked"><span class="el-checkbox__inner"></span><input type="checkbox" aria-hidden="false" class="el-checkbox__original" value=""></span><span class="el-checkbox__label">父子联动</span></label><div role="tree" class="el-tree tree-border"><div role="treeitem" tabindex="-1" aria-disabled="" draggable="false" class="el-tree-node is-focusable"><div class="el-tree-node__content" style="padding-left: 0px;"><span class="el-tree-node__expand-icon el-icon-caret-right"></span><label class="el-checkbox"><span class="el-checkbox__input"><span class="el-checkbox__inner"></span><input type="checkbox" aria-hidden="false" class="el-checkbox__original" value="" tabindex="-1"></span></label><span class="el-tree-node__label">系统管理</span></div></div><div role="treeitem" tabindex="-1" aria-disabled="" draggable="false" class="el-tree-node is-focusable"><div class="el-tree-node__content" style="padding-left: 0px;"><span class="el-tree-node__expand-icon el-icon-caret-right"></span><label class="el-checkbox"><span class="el-checkbox__input"><span class="el-checkbox__inner"></span><input type="checkbox" aria-hidden="false" class="el-checkbox__original" value="" tabindex="-1"></span></label><span class="el-tree-node__label">系统监控</span></div></div><div role="treeitem" tabindex="-1" aria-disabled="" draggable="false" class="el-tree-node is-focusable"><div class="el-tree-node__content" style="padding-left: 0px;"><span class="el-tree-node__expand-icon el-icon-caret-right"></span><label class="el-checkbox"><span class="el-checkbox__input"><span class="el-checkbox__inner"></span><input type="checkbox" aria-hidden="false" class="el-checkbox__original" value="" tabindex="-1"></span></label><span class="el-tree-node__label">系统工具</span></div></div><div role="treeitem" tabindex="-1" aria-disabled="" draggable="false" class="el-tree-node is-focusable"><div class="el-tree-node__content" style="padding-left: 0px;"><span class="is-leaf el-tree-node__expand-icon el-icon-caret-right"></span><label class="el-checkbox"><span class="el-checkbox__input"><span class="el-checkbox__inner"></span><input type="checkbox" aria-hidden="false" class="el-checkbox__original" value="" tabindex="-1"></span></label><span class="el-tree-node__label">若依官网</span></div></div><div class="el-tree__drop-indicator" style="display: none;"></div></div></div></div>' +
+          '<div class="el-form-item el-form-item--medium"><label class="el-form-item__label" style="width: 100px;">备注</label><div class="el-form-item__content" style="margin-left: 100px;"><div class="el-textarea el-input--medium"><textarea autocomplete="off" placeholder="请输入内容" class="el-textarea__inner" style="min-height: 33px;"></textarea></div></div></div>' +
+          '</form></div>' +
+          '<div class="el-dialog__footer"><div class="dialog-footer"><button type="button" class="el-button el-button--primary el-button--medium"><span>确 定</span></button><button type="button" class="el-button el-button--default el-button--medium"><span>取 消</span></button></div></div>' +
+          '</div>'
+        )
+      }
+
+      function openUtilityReplayDialog() {
+        if (
+          utilityReplayDialog &&
+          utilityReplayDialog.wrapper &&
+          utilityReplayDialog.wrapper.isConnected
+        ) {
+          setUtilityPanelsLog('business replay dialog already open')
+          return utilityReplayDialog
+        }
+
+        const wrapper = document.createElement('div')
+        wrapper.className = 'el-dialog__wrapper'
+        wrapper.setAttribute('data-testid', 'business-role-dialog-wrapper')
+        wrapper.style.zIndex = '2001'
+        wrapper.innerHTML = getBusinessRoleDialogInnerHtml()
+
+        const mask = document.createElement('div')
+        mask.className = 'v-modal'
+        mask.setAttribute('data-testid', 'business-role-dialog-mask')
+        mask.setAttribute('tabindex', '0')
+        mask.style.position = 'fixed'
+        mask.style.inset = '0'
+        mask.style.zIndex = '2000'
+        mask.style.background = 'rgba(0, 0, 0, 0.55)'
+        mask.style.pointerEvents = 'none'
+
+        document.body.appendChild(wrapper)
+        document.body.appendChild(mask)
+        utilityReplayDialog = { wrapper: wrapper, mask: mask }
+        setUtilityPanelsLog('business replay dialog created (append-to-body)')
+        return utilityReplayDialog
+      }
+
+      function openUtilityReplayDialogStaged() {
+        if (
+          utilityReplayDialog &&
+          utilityReplayDialog.wrapper &&
+          utilityReplayDialog.wrapper.isConnected
+        ) {
+          setUtilityPanelsLog('business replay dialog already open')
+          return utilityReplayDialog
+        }
+
+        const wrapper = document.createElement('div')
+        wrapper.className = 'el-dialog__wrapper'
+        wrapper.setAttribute('data-testid', 'business-role-dialog-wrapper')
+        wrapper.style.zIndex = '2001'
+
+        const mask = document.createElement('div')
+        mask.className = 'v-modal'
+        mask.setAttribute('data-testid', 'business-role-dialog-mask')
+        mask.setAttribute('tabindex', '0')
+        mask.style.position = 'fixed'
+        mask.style.inset = '0'
+        mask.style.zIndex = '2000'
+        mask.style.background = 'rgba(0, 0, 0, 0.55)'
+        mask.style.pointerEvents = 'none'
+
+        document.body.appendChild(wrapper)
+        document.body.appendChild(mask)
+        utilityReplayDialog = { wrapper: wrapper, mask: mask }
+        setUtilityPanelsLog('business replay dialog wrapper created, subtree mounts async')
+
+        setTimeout(function () {
+          if (
+            !utilityReplayDialog ||
+            utilityReplayDialog.wrapper !== wrapper ||
+            !wrapper.isConnected
+          ) {
+            return
+          }
+          wrapper.innerHTML = getBusinessRoleDialogInnerHtml()
+          setUtilityPanelsLog('business replay dialog subtree mounted asynchronously')
+        }, 0)
+
+        return utilityReplayDialog
+      }
+
+      function openUtilityReplayDialogMoved() {
+        if (
+          utilityReplayDialog &&
+          utilityReplayDialog.wrapper &&
+          utilityReplayDialog.wrapper.isConnected
+        ) {
+          setUtilityPanelsLog('business replay dialog already open')
+          return utilityReplayDialog
+        }
+
+        const stagingRoot = document.createElement('div')
+        stagingRoot.setAttribute(
+          'data-testid',
+          'business-role-dialog-staging-root'
+        )
+        stagingRoot.style.display = 'contents'
+        document.body.appendChild(stagingRoot)
+
+        const wrapper = document.createElement('div')
+        wrapper.className = 'el-dialog__wrapper'
+        wrapper.setAttribute('data-testid', 'business-role-dialog-wrapper')
+        wrapper.style.zIndex = '2001'
+        wrapper.innerHTML = getBusinessRoleDialogInnerHtml()
+
+        const mask = document.createElement('div')
+        mask.className = 'v-modal'
+        mask.setAttribute('data-testid', 'business-role-dialog-mask')
+        mask.setAttribute('tabindex', '0')
+        mask.style.position = 'fixed'
+        mask.style.inset = '0'
+        mask.style.zIndex = '2000'
+        mask.style.background = 'rgba(0, 0, 0, 0.55)'
+        mask.style.pointerEvents = 'none'
+
+        stagingRoot.appendChild(wrapper)
+        stagingRoot.appendChild(mask)
+        utilityReplayDialog = {
+          wrapper: wrapper,
+          mask: mask,
+          stagingRoot: stagingRoot
+        }
+        setUtilityPanelsLog('business replay dialog created in staging root')
+
+        setTimeout(function () {
+          if (
+            !utilityReplayDialog ||
+            utilityReplayDialog.wrapper !== wrapper ||
+            !wrapper.isConnected
+          ) {
+            return
+          }
+          document.body.appendChild(wrapper)
+          document.body.appendChild(mask)
+          if (stagingRoot.isConnected) {
+            stagingRoot.remove()
+          }
+          utilityReplayDialog.stagingRoot = null
+          setUtilityPanelsLog(
+            'business replay dialog moved from staging root to body'
+          )
+        }, 0)
+
+        return utilityReplayDialog
+      }
+
+      function closeUtilityReplayDialog() {
+        if (utilityReplayDialog) {
+          if (
+            utilityReplayDialog.wrapper &&
+            utilityReplayDialog.wrapper.isConnected
+          ) {
+            utilityReplayDialog.wrapper.remove()
+          }
+          if (utilityReplayDialog.mask && utilityReplayDialog.mask.isConnected) {
+            utilityReplayDialog.mask.remove()
+          }
+          if (
+            utilityReplayDialog.stagingRoot &&
+            utilityReplayDialog.stagingRoot.isConnected
+          ) {
+            utilityReplayDialog.stagingRoot.remove()
+          }
+          setUtilityPanelsLog('business replay dialog removed')
+        } else {
+          setUtilityPanelsLog('no business replay dialog to remove')
+        }
+        utilityReplayDialog = null
+      }
+
+      function inspectUtilityReplayDialogMutation() {
+        if (!flushReplayMutationsForDemo()) {
+          setUtilityPanelsLog('replay mutation flush api unavailable')
+          return
+        }
+        const history = getDomMutationHistoryForDemo()
+        const result =
+          history
+            .slice()
+            .reverse()
+            .find(function (entry) {
+              return mutationEntryHasUtilityReplayDialog(entry)
+            }) || getLastDomMutationDebugForDemo()
+        renderUtilityDomMutationOutput(result)
+        const foundDynamicDialog = mutationEntryHasUtilityReplayDialog(result)
+        setUtilityPanelsLog(
+          foundDynamicDialog
+            ? 'flush finished, replay mutation captured business dialog add'
+            : 'flush finished, business dialog add not found in mutation history'
+        )
+      }
+
+      function compareUtilityReplayDialogMutation() {
+        const lastBeforeFlush = getLastDomMutationDebugForDemo()
+        const historyBeforeFlush = getDomMutationHistoryForDemo()
+        const immediateLastHasDialog = mutationEntryHasUtilityReplayDialog(
+          lastBeforeFlush
+        )
+        const immediateHistoryHasDialog = historyBeforeFlush.some(function (
+          entry
+        ) {
+          return mutationEntryHasUtilityReplayDialog(entry)
+        })
+
+        const flushed = flushReplayMutationsForDemo()
+        const lastAfterFlush = getLastDomMutationDebugForDemo()
+        const historyAfterFlush = getDomMutationHistoryForDemo()
+        const flushedLastHasDialog = mutationEntryHasUtilityReplayDialog(
+          lastAfterFlush
+        )
+        const flushedHistoryHasDialog = historyAfterFlush.some(function (entry) {
+          return mutationEntryHasUtilityReplayDialog(entry)
+        })
+
+        const result = {
+          flushed: flushed,
+          immediateLastHasDialog: immediateLastHasDialog,
+          immediateHistoryHasDialog: immediateHistoryHasDialog,
+          flushedLastHasDialog: flushedLastHasDialog,
+          flushedHistoryHasDialog: flushedHistoryHasDialog,
+          historyLengthBeforeFlush: historyBeforeFlush.length,
+          historyLengthAfterFlush: historyAfterFlush.length,
+        }
+
+        renderUtilityDomMutationOutput(result)
+        setUtilityPanelsLog(
+          flushedHistoryHasDialog
+            ? 'comparison finished: history contains business dialog mutation, last may still miss it'
+            : 'comparison finished: business dialog mutation still not found in history'
+        )
       }
 
       function getCanvasMutationHistoryForBenchmark() {
@@ -4920,6 +5259,18 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
           let start = Date.now()
           while (Date.now() - start < 200) {}
           setUtilityPanelsLog('utility longtask blocked main thread for ~200ms')
+        } else if (delay === 'utilityOpenReplayDialog') {
+          openUtilityReplayDialog()
+        } else if (delay === 'utilityOpenReplayDialogStaged') {
+          openUtilityReplayDialogStaged()
+        } else if (delay === 'utilityOpenReplayDialogMoved') {
+          openUtilityReplayDialogMoved()
+        } else if (delay === 'utilityInspectReplayDialog') {
+          inspectUtilityReplayDialogMutation()
+        } else if (delay === 'utilityCompareReplayDialog') {
+          compareUtilityReplayDialogMutation()
+        } else if (delay === 'utilityCloseReplayDialog') {
+          closeUtilityReplayDialog()
         } else if (delay === 'utilityLongtaskNamed') {
           function longtaskButtonFuncName() {
             const start = Date.now()

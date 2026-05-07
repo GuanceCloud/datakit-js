@@ -15,12 +15,20 @@ describe('zipkinSingleTracer', () => {
   it('should use a custom trace id when provided', () => {
     const tracer = new ZipkinSingleTracer(
       {
+        generateTraceId: () => 'ABCDEF1234567890'
+      },
+      false
+    )
+
+    const invalidTracer = new ZipkinSingleTracer(
+      {
         generateTraceId: () => 'zipkin-single-custom-id'
       },
       false
     )
 
-    expect(tracer.getTraceId()).toBe('zipkin-single-custom-id')
+    expect(tracer.getTraceId()).toBe('abcdef1234567890')
+    expect(invalidTracer.getTraceId()).toMatch(/^[0-9a-f]{16}$/)
     expect(tracer.getB3Str().endsWith('-0')).toBeTrue()
   })
 })

@@ -280,6 +280,24 @@ describe('rumPublicApi', () => {
       getCanvasMutationHistoryForDebug: jasmine
         .createSpy('getCanvasMutationHistoryForDebug')
         .and.returnValue(canvasMutationHistoryResult),
+      getLastDomMutationForDebug: jasmine
+        .createSpy('getLastDomMutationForDebug')
+        .and.returnValue({
+          addsCount: 1,
+          removesCount: 0,
+          textsCount: 0,
+          attributesCount: 0
+        }),
+      getDomMutationHistoryForDebug: jasmine
+        .createSpy('getDomMutationHistoryForDebug')
+        .and.returnValue([
+          {
+            addsCount: 1,
+            removesCount: 0,
+            textsCount: 0,
+            attributesCount: 0
+          }
+        ]),
       getLastReplaySegmentFlushForDebug: jasmine
         .createSpy('getLastReplaySegmentFlushForDebug')
         .and.returnValue(replaySegmentFlushResult),
@@ -289,6 +307,9 @@ describe('rumPublicApi', () => {
       getReplayPerformanceForDebug: jasmine
         .createSpy('getReplayPerformanceForDebug')
         .and.returnValue(replayPerformanceResult),
+      flushReplayMutationsForDebug: jasmine.createSpy(
+        'flushReplayMutationsForDebug'
+      ),
       getSerializedNodeIdForDebug: jasmine
         .createSpy('getSerializedNodeIdForDebug')
         .and.returnValue(42),
@@ -335,6 +356,20 @@ describe('rumPublicApi', () => {
     expect(rumPublicApi.getCanvasMutationHistoryForDebug()).toEqual(
       canvasMutationHistoryResult
     )
+    expect(rumPublicApi.getLastDomMutationForDebug()).toEqual({
+      addsCount: 1,
+      removesCount: 0,
+      textsCount: 0,
+      attributesCount: 0
+    })
+    expect(rumPublicApi.getDomMutationHistoryForDebug()).toEqual([
+      {
+        addsCount: 1,
+        removesCount: 0,
+        textsCount: 0,
+        attributesCount: 0
+      }
+    ])
     expect(rumPublicApi.getLastReplaySegmentFlushForDebug()).toEqual(
       replaySegmentFlushResult
     )
@@ -344,6 +379,7 @@ describe('rumPublicApi', () => {
     expect(rumPublicApi.getReplayPerformanceForDebug()).toEqual(
       replayPerformanceResult
     )
+    rumPublicApi.flushReplayMutationsForDebug()
     expect(rumPublicApi.snapshotCanvas(document.createElement('canvas'))).toBe(
       snapshotCanvasResult
     )
@@ -358,7 +394,10 @@ describe('rumPublicApi', () => {
       recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug
     ).toHaveBeenCalled()
     expect(recorderApi.getCanvasMutationHistoryForDebug).toHaveBeenCalled()
+    expect(recorderApi.getLastDomMutationForDebug).toHaveBeenCalled()
+    expect(recorderApi.getDomMutationHistoryForDebug).toHaveBeenCalled()
     expect(recorderApi.getLastReplaySegmentFlushForDebug).toHaveBeenCalled()
+    expect(recorderApi.flushReplayMutationsForDebug).toHaveBeenCalled()
     expect(recorderApi.snapshotCanvas).toHaveBeenCalled()
   })
 

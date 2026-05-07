@@ -168,11 +168,13 @@ describe('startRecording', () => {
     const replaySegmentFlushHistory =
       recording.getReplaySegmentFlushHistoryForDebug()
     const replayPerformance = recording.getReplayPerformanceForDebug()
+    const lastDomMutation = recording.getLastDomMutationForDebug()
 
     expect(result).toEqual({ ok: true })
     expect(serializedNodeId).toBe(42)
     expect(autoSnapshotResult).toBeUndefined()
     expect(replaySegmentFlushHistory).toEqual([])
+    expect(lastDomMutation).toBeUndefined()
     expect(replayPerformance).toEqual(
       jasmine.objectContaining({
         processMutationsCount: jasmine.any(Number),
@@ -232,6 +234,39 @@ describe('startRecording', () => {
     flushHistory.forEach((entry, index) => {
       expect(entry.sequence).toBe(index + 1)
     })
+
+    recording.stop()
+  })
+
+  it('should expose flushReplayMutationsForDebug from the underlying recorder', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    const httpRequest = {
+      send: jasmine.createSpy('send'),
+      sendOnExit: jasmine.createSpy('sendOnExit')
+    }
+
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      httpRequest
+    )
+
+    expect(function () {
+      recording.flushReplayMutationsForDebug()
+    }).not.toThrow()
 
     recording.stop()
   })

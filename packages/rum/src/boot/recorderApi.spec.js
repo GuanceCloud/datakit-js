@@ -74,6 +74,24 @@ describe('recorderApi', () => {
     const getCanvasMutationHistoryForDebug = jasmine
       .createSpy('getCanvasMutationHistoryForDebug')
       .and.returnValue([{ canvasId: 42, encodedBytesCount: 2048 }])
+    const getLastDomMutationForDebug = jasmine
+      .createSpy('getLastDomMutationForDebug')
+      .and.returnValue({
+        addsCount: 1,
+        removesCount: 0,
+        textsCount: 0,
+        attributesCount: 0
+      })
+    const getDomMutationHistoryForDebug = jasmine
+      .createSpy('getDomMutationHistoryForDebug')
+      .and.returnValue([
+        {
+          addsCount: 1,
+          removesCount: 0,
+          textsCount: 0,
+          attributesCount: 0
+        }
+      ])
     const getLastReplaySegmentFlushForDebug = jasmine
       .createSpy('getLastReplaySegmentFlushForDebug')
       .and.returnValue({
@@ -113,6 +131,8 @@ describe('recorderApi', () => {
         getAutoCanvasSnapshotDebugHistoryForDebug,
         getLastCanvasMutationForDebug,
         getCanvasMutationHistoryForDebug,
+        getLastDomMutationForDebug,
+        getDomMutationHistoryForDebug,
         getLastReplaySegmentFlushForDebug,
         getReplaySegmentFlushHistoryForDebug,
         getReplayPerformanceForDebug
@@ -174,6 +194,22 @@ describe('recorderApi', () => {
       { canvasId: 42, encodedBytesCount: 2048 }
     ])
     expect(getCanvasMutationHistoryForDebug).toHaveBeenCalled()
+    expect(recorderApi.getLastDomMutationForDebug()).toEqual({
+      addsCount: 1,
+      removesCount: 0,
+      textsCount: 0,
+      attributesCount: 0
+    })
+    expect(getLastDomMutationForDebug).toHaveBeenCalled()
+    expect(recorderApi.getDomMutationHistoryForDebug()).toEqual([
+      {
+        addsCount: 1,
+        removesCount: 0,
+        textsCount: 0,
+        attributesCount: 0
+      }
+    ])
+    expect(getDomMutationHistoryForDebug).toHaveBeenCalled()
     expect(recorderApi.getLastReplaySegmentFlushForDebug()).toEqual({
       creationReason: 'init',
       flushReason: 'segment_duration_limit',
@@ -224,6 +260,10 @@ describe('recorderApi', () => {
           .createSpy('getLastCanvasMutationForDebug'),
         getCanvasMutationHistoryForDebug: jasmine
           .createSpy('getCanvasMutationHistoryForDebug'),
+        getLastDomMutationForDebug: jasmine
+          .createSpy('getLastDomMutationForDebug'),
+        getDomMutationHistoryForDebug: jasmine
+          .createSpy('getDomMutationHistoryForDebug'),
         getLastReplaySegmentFlushForDebug: jasmine
           .createSpy('getLastReplaySegmentFlushForDebug'),
         getReplaySegmentFlushHistoryForDebug: jasmine
@@ -272,6 +312,8 @@ describe('recorderApi', () => {
     expect(recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug()).toBeUndefined()
     expect(recorderApi.getLastCanvasMutationForDebug()).toBeUndefined()
     expect(recorderApi.getCanvasMutationHistoryForDebug()).toBeUndefined()
+    expect(recorderApi.getLastDomMutationForDebug()).toBeUndefined()
+    expect(recorderApi.getDomMutationHistoryForDebug()).toBeUndefined()
     expect(recorderApi.getLastReplaySegmentFlushForDebug()).toBeUndefined()
     expect(recorderApi.getReplaySegmentFlushHistoryForDebug()).toBeUndefined()
     expect(recorderApi.getReplayPerformanceForDebug()).toBeUndefined()

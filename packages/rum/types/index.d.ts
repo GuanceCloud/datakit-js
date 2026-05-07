@@ -84,6 +84,18 @@ export interface CanvasMutationDebugResult {
 export interface CanvasMutationDebugHistoryResult
   extends CanvasMutationDebugResult {}
 
+export interface DomMutationDebugResult {
+  timestamp: number
+  adds: object[]
+  removes: object[]
+  texts: object[]
+  attributes: object[]
+  addsCount: number
+  removesCount: number
+  textsCount: number
+  attributesCount: number
+}
+
 export interface ReplaySegmentFlushDebugResult {
   sequence: number
   creationReason: string
@@ -189,6 +201,8 @@ export declare const datafluxRum: {
   getCanvasMutationHistoryForDebug: () =>
     | CanvasMutationDebugHistoryResult[]
     | undefined
+  getLastDomMutationForDebug: () => DomMutationDebugResult | undefined
+  getDomMutationHistoryForDebug: () => DomMutationDebugResult[] | undefined
   getLastReplaySegmentFlushForDebug: () =>
     | ReplaySegmentFlushDebugResult
     | undefined
@@ -198,6 +212,7 @@ export declare const datafluxRum: {
   getReplayPerformanceForDebug: () =>
     | ReplayPerformanceDebugResult
     | undefined
+  flushReplayMutationsForDebug: () => void
   createResourceTrackerId: () => string
   setResourceContext: (trackerId: string, context: Context) => void
   appendResourceContext: (trackerId: string, context: Context) => void

@@ -137,6 +137,8 @@ export function startRecording(
   var getLastCanvasMutationForDebug = _record.getLastCanvasMutationForDebug
   var getCanvasMutationHistoryForDebug =
     _record.getCanvasMutationHistoryForDebug
+  var getLastDomMutationForDebug = _record.getLastDomMutationForDebug
+  var getDomMutationHistoryForDebug = _record.getDomMutationHistoryForDebug
   var getReplayPerformanceForDebug = function () {
     return cloneReplayPerformanceForDebug(
       _record.getReplayPerformanceForDebug
@@ -188,10 +190,13 @@ export function startRecording(
       getAutoCanvasSnapshotDebugHistoryForDebug,
     getLastCanvasMutationForDebug: getLastCanvasMutationForDebug,
     getCanvasMutationHistoryForDebug: getCanvasMutationHistoryForDebug,
+    getLastDomMutationForDebug: getLastDomMutationForDebug,
+    getDomMutationHistoryForDebug: getDomMutationHistoryForDebug,
     getLastReplaySegmentFlushForDebug: getLastReplaySegmentFlushForDebug,
     getReplaySegmentFlushHistoryForDebug:
       getReplaySegmentFlushHistoryForDebug,
-    getReplayPerformanceForDebug: getReplayPerformanceForDebug
+    getReplayPerformanceForDebug: getReplayPerformanceForDebug,
+    flushReplayMutationsForDebug: flushMutations
   }
 }
 
