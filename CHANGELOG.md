@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.3.1
+
+- Fix replay mutation reparent handling and tracing ids
+- fix: add test
+
 ## v3.3.0
 
 - fix: add docs
