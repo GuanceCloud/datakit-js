@@ -60,7 +60,7 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
       resourceTrackerManager: resourceTrackerManager
     }),
     getCommonContext,
-    function (configuration, deflateWorker, initialViewOptions) {
+    function (configuration, compressionWorker, initialViewOptions) {
       if (configuration.storeContextsToLocal) {
         storeContextManager(
           configuration,
@@ -76,7 +76,7 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
         )
       }
       customerDataTrackerManager.setCompressionStatus(
-        deflateWorker
+        compressionWorker
           ? CustomerDataCompressionStatus.Enabled
           : CustomerDataCompressionStatus.Disabled
       )
@@ -86,9 +86,12 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
         customerDataTrackerManager,
         getCommonContext,
         initialViewOptions,
-        deflateWorker && options.createCompressionEncoder
+        compressionWorker && options.createCompressionEncoder
           ? function (streamId) {
-              return options.createCompressionEncoder(deflateWorker, streamId)
+              return options.createCompressionEncoder(
+                compressionWorker,
+                streamId
+              )
             }
           : createIdentityEncoder,
         resourceTrackerManager
@@ -98,7 +101,7 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
         configuration,
         startRumResult.session,
         startRumResult.viewContexts,
-        deflateWorker
+        compressionWorker
       )
 
       strategy = createPostStartStrategy(strategy, startRumResult)

@@ -30,7 +30,7 @@ export function createPreStartStrategy(
   var remoteConfigrationCallbacks = createBoundedBuffer()
   var firstStartViewCall
 
-  var deflateWorker
+  var compressionWorker
 
   var cachedInitConfiguration
   var cachedConfiguration
@@ -59,7 +59,7 @@ export function createPreStartStrategy(
 
     var startRumResult = doStartRum(
       cachedConfiguration,
-      deflateWorker,
+      compressionWorker,
       initialViewOptions
     )
 
@@ -102,7 +102,7 @@ export function createPreStartStrategy(
       !eventBridgeAvailable &&
       startCompressionWorker
     ) {
-      deflateWorker = startCompressionWorker(
+      compressionWorker = startCompressionWorker(
         configuration,
         'RUM',
         // Worker initialization can fail asynchronously, especially in Firefox where even CSP
@@ -110,7 +110,7 @@ export function createPreStartStrategy(
         // data won't be sent to Datadog. We could improve this behavior in the future.
         noop
       )
-      if (!deflateWorker) {
+      if (!compressionWorker) {
         // The compression worker starter should have logged an error message explaining the issue
         return
       }
