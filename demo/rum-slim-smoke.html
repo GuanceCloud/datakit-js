@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RUM Slim Smoke Demo</title>
+  </head>
+  <body>
+    <button id="smoke-action" type="button">Trigger action</button>
+    <script src="./dataflux-rum-slim.js"></script>
+    <script>
+      ;(function () {
+        var result = (window.__rumSlimSmoke = {
+          loaded: false,
+          ready: false,
+          completed: false,
+          replayApisAbsent: false,
+          compressionDisabled: false,
+          hasViewContext: false,
+          hasUser: false,
+          resourceTrackerStatus: '',
+          events: [],
+          eventTypes: [],
+          errors: []
+        })
+
+        function recordError(error) {
+          result.errors.push(error && error.message ? error.message : String(error))
+        }
+
+        function refreshEventTypes() {
+          var typeMap = {}
+          result.events.forEach(function (event) {
+            typeMap[event.type] = true
+          })
+          result.eventTypes = Object.keys(typeMap).sort()
+        }
+
+        function complete() {
+          var configuration = window.DATAFLUX_RUM.getInitConfiguration()
+          result.replayApisAbsent =
+            typeof window.DATAFLUX_RUM.startSessionReplayRecording ===
+              'undefined' &&
+            typeof window.DATAFLUX_RUM.stopSessionReplayRecording ===
+              'undefined' &&
+            typeof window.DATAFLUX_RUM.getSessionReplayLink === 'undefined'
+          result.compressionDisabled =
+            configuration.sessionReplaySampleRate === 0 &&
+            configuration.sessionReplayOnErrorSampleRate === 0 &&
+            configuration.replayCanvasEnabled === false &&
+            configuration.compressIntakeRequests === false
+          result.hasViewContext =
+            window.DATAFLUX_RUM.getViewContext().smoke === 'slim'
+          result.hasUser = window.DATAFLUX_RUM.getUser().id === 'slim-user'
+          result.completed = true
+        }
+
+        try {
+          result.loaded = !!window.DATAFLUX_RUM
+          window.DATAFLUX_RUM.init({
+            applicationId: 'rum-slim-smoke',
+            datakitOrigin: window.location.origin,
+            sessionSampleRate: 100,
+            sessionReplaySampleRate: 100,
+            sessionReplayOnErrorSampleRate: 100,
+            replayCanvasEnabled: true,
+            compressIntakeRequests: true,
+            service: 'rum-slim-smoke',
+            env: 'demo',
+            version: 'smoke',
+            trackUserInteractions: true,
+            sendContentTypeByJson: true,
+            beforeSend: function (event) {
+              result.events.push({
+                type: event.type,
+                viewName: event.view && event.view.name,
+                actionName:
+                  event.action && event.action.target && event.action.target.name,
+                resourceUrl: event.resource && event.resource.url,
+                errorMessage: event.error && event.error.message
+              })
+              refreshEventTypes()
+              return event.type === 'view'
+            }
+          })
+          result.ready = true
+          window.DATAFLUX_RUM.setUser({ id: 'slim-user', name: 'Slim User' })
+          window.DATAFLUX_RUM.startView({ name: 'rum-slim-smoke' })
+          window.DATAFLUX_RUM.setViewContext({ smoke: 'slim' })
+          window.DATAFLUX_RUM.addAction('manual smoke action', {
+            source: 'demo'
+          })
+          window.DATAFLUX_RUM.addError(new Error('manual smoke error'), {
+            source: 'demo'
+          })
+          window.DATAFLUX_RUM.addResource({ source: 'manual resource' })
+          var trackerId = window.DATAFLUX_RUM.createResourceTrackerId()
+          window.DATAFLUX_RUM.setResourceContext(trackerId, {
+            source: 'tracked resource'
+          })
+          window.DATAFLUX_RUM.finishResource(trackerId)
+          var trackedResource = window.DATAFLUX_RUM.getResource(trackerId)
+          result.resourceTrackerStatus = trackedResource && trackedResource.status
+          document.getElementById('smoke-action').click()
+          window
+            .fetch('./static/test.js?rum-slim-smoke=' + Date.now())
+            .catch(recordError)
+          window.setTimeout(complete, 1500)
+        } catch (error) {
+          recordError(error)
+          result.completed = true
+        }
+      })()
+    </script>
+  </body>
+</html>

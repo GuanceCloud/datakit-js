@@ -14,6 +14,8 @@ app.all('*', (req, res, next) => {
   // 其它配置
   next()
 })
+app.post('/v1/write/:type', (req, res) => res.status(204).end())
+app.post('/v1/write/:type/:subtype', (req, res) => res.status(204).end())
 app.use(express.static(path.join(__dirname, '../demo')))
 for (const config of [rumConfig, rumSlimConfig, logsConfig, workerConfig]) {
   app.use(middleware(webpack(config(null, { mode: 'development' }))))
