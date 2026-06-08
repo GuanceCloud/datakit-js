@@ -4,7 +4,7 @@ import {
   Observable,
   RumEventType
 } from '@cloudcare/browser-core'
-import { DeflateEncoderStreamId } from '../domain/deflate'
+import { EncoderStreamId } from '../domain/encoderStreamId'
 import { startRumBatch } from './startRumBatch'
 
 describe('startRumBatch', () => {
@@ -73,7 +73,7 @@ describe('startRumBatch', () => {
       createEncoder
     )
 
-    expect(createEncoder).toHaveBeenCalledWith(DeflateEncoderStreamId.RUM)
+    expect(createEncoder).toHaveBeenCalledWith(EncoderStreamId.RUM)
     expect(batch.flushObservable).toEqual(jasmine.any(Object))
 
     lifeCycle.notify(LifeCycleEventType.RUM_EVENT_COLLECTED, {

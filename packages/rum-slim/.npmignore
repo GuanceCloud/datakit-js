@@ -1,0 +1,7 @@
+*
+!/bundle/dataflux-rum-slim.js
+!/cjs/**/*
+!/esm/**/*
+!/types/**/*
+!/README.md
+

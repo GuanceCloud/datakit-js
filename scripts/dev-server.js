@@ -5,6 +5,7 @@ const webpack = require('webpack')
 
 const logsConfig = require('../packages/logs/webpack.config')
 const rumConfig = require('../packages/rum/webpack.config')
+const rumSlimConfig = require('../packages/rum-slim/webpack.config')
 const workerConfig = require('../packages/worker/webpack.config')
 
 const app = express()
@@ -14,7 +15,7 @@ app.all('*', (req, res, next) => {
   next()
 })
 app.use(express.static(path.join(__dirname, '../demo')))
-for (const config of [rumConfig, logsConfig, workerConfig]) {
+for (const config of [rumConfig, rumSlimConfig, logsConfig, workerConfig]) {
   app.use(middleware(webpack(config(null, { mode: 'development' }))))
 }
 

@@ -2,6 +2,7 @@ import { ActionType, ResourceType } from '@cloudcare/browser-core'
 
 describe('rumPublicApi', () => {
   let makeRumPublicApi
+  let makeSessionReplayPublicApi
   let originalBuildEnvVersion
 
   function createValidInitConfiguration(extra) {
@@ -18,6 +19,7 @@ describe('rumPublicApi', () => {
     originalBuildEnvVersion = globalThis.__BUILD_ENV__SDK_VERSION__
     globalThis.__BUILD_ENV__SDK_VERSION__ = 'test-version'
     ;({ makeRumPublicApi } = require('./rumPublicApi'))
+    ;({ makeSessionReplayPublicApi } = require('./sessionReplayPublicApi'))
   })
 
   afterEach(() => {
@@ -62,7 +64,9 @@ describe('rumPublicApi', () => {
       stop: jasmine.createSpy('stop'),
       takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
     }
-    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi)
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi, {
+      makeRecorderPublicApi: makeSessionReplayPublicApi
+    })
 
     rumPublicApi.setGlobalContextProperty('account', 'pro')
     rumPublicApi.setUser({
@@ -143,7 +147,9 @@ describe('rumPublicApi', () => {
       stop: jasmine.createSpy('stop'),
       takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
     }
-    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi)
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi, {
+      makeRecorderPublicApi: makeSessionReplayPublicApi
+    })
 
     rumPublicApi.init(createValidInitConfiguration())
     rumPublicApi.setViewName('Checkout')
@@ -321,7 +327,9 @@ describe('rumPublicApi', () => {
       stop: jasmine.createSpy('stop'),
       takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
     }
-    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi)
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi, {
+      makeRecorderPublicApi: makeSessionReplayPublicApi
+    })
     const initConfiguration = createValidInitConfiguration({
       sampleRate: 80
     })
@@ -399,6 +407,26 @@ describe('rumPublicApi', () => {
     expect(recorderApi.getLastReplaySegmentFlushForDebug).toHaveBeenCalled()
     expect(recorderApi.flushReplayMutationsForDebug).toHaveBeenCalled()
     expect(recorderApi.snapshotCanvas).toHaveBeenCalled()
+  })
+
+  it('should omit session replay controls when disabled by entry options', () => {
+    const startRumImpl = jasmine.createSpy('startRumImpl')
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      start: jasmine.createSpy('start'),
+      stop: jasmine.createSpy('stop')
+    }
+
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi, {
+      makeRecorderPublicApi: undefined
+    })
+
+    expect(rumPublicApi.startSessionReplayRecording).toBeUndefined()
+    expect(rumPublicApi.isRecording).toBeUndefined()
+    expect(rumPublicApi.stopSessionReplayRecording).toBeUndefined()
+    expect(rumPublicApi.takeSubsequentFullSnapshot).toBeUndefined()
+    expect(rumPublicApi.snapshotCanvas).toBeUndefined()
   })
 
   it('should expose resource tracker APIs', () => {

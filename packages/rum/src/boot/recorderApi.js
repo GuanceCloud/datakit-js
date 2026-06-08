@@ -8,6 +8,7 @@ import {
   PageExitReason
 } from '@cloudcare/browser-core'
 
+import { makeRecorderApiStub } from './recorderApiStub'
 import { getReplayStats as getReplayStatsImpl } from '../domain/replay/replayStats'
 import {
   createDeflateEncoder,
@@ -33,55 +34,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     (canUseEventBridge() && !bridgeSupports(BridgeCapability.RECORDS)) ||
     !isBrowserSupported()
   ) {
-    return {
-      start: noop,
-      stop: noop,
-      takeSubsequentFullSnapshot: noop,
-      snapshotCanvas: function () {
-        return {
-          ok: false,
-          reason: 'not_recording'
-        }
-      },
-      getSerializedNodeIdForDebug: function () {
-        return undefined
-      },
-      getLastAutoCanvasSnapshotResultForDebug: function () {
-        return undefined
-      },
-      getAutoCanvasSnapshotDebugHistoryForDebug: function () {
-        return undefined
-      },
-      getLastCanvasMutationForDebug: function () {
-        return undefined
-      },
-      getCanvasMutationHistoryForDebug: function () {
-        return undefined
-      },
-      getLastDomMutationForDebug: function () {
-        return undefined
-      },
-      getDomMutationHistoryForDebug: function () {
-        return undefined
-      },
-      getLastReplaySegmentFlushForDebug: function () {
-        return undefined
-      },
-      getReplaySegmentFlushHistoryForDebug: function () {
-        return undefined
-      },
-      getReplayPerformanceForDebug: function () {
-        return undefined
-      },
-      flushReplayMutationsForDebug: noop,
-      getReplayStats: function () {
-        return undefined
-      },
-      onRumStart: noop,
-      isRecording: function () {
-        return false
-      }
-    }
+    return makeRecorderApiStub()
   }
 
   var state = {

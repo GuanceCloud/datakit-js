@@ -141,6 +141,42 @@ describe('preStartRum', () => {
     )
   })
 
+  it('should apply the entry configuration override before starting rum', () => {
+    const doStartRum = jasmine
+      .createSpy('doStartRum')
+      .and.returnValue({})
+    const strategy = createPreStartStrategy(
+      {
+        overrideInitConfiguration: function (configuration) {
+          return Object.assign({}, configuration, {
+            sessionReplaySampleRate: 0,
+            sessionReplayOnErrorSampleRate: 0,
+            compressIntakeRequests: false
+          })
+        }
+      },
+      jasmine.createSpy('getCommonContext'),
+      doStartRum
+    )
+
+    strategy.init(
+      createValidInitConfiguration({
+        sessionReplaySampleRate: 100,
+        sessionReplayOnErrorSampleRate: 100,
+        compressIntakeRequests: true
+      })
+    )
+
+    expect(doStartRum).toHaveBeenCalled()
+    expect(doStartRum.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        sessionReplaySampleRate: 0,
+        sessionReplayOnErrorSampleRate: 0,
+        compressIntakeRequests: false
+      })
+    )
+  })
+
   it('should report an already initialized error on repeated init calls', () => {
     const doStartRum = jasmine
       .createSpy('doStartRum')

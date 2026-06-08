@@ -1,0 +1,20 @@
+{
+    "sourceMaps": true,
+    "include": [
+        "./src/**/*.js",
+        "../rum/src/**/*.js"
+    ],
+    "ignore": [
+        "./src/**/*.spec.js",
+        "../rum/src/**/*.spec.js"
+    ],
+    "presets": [
+        [
+            "@babel/preset-env",
+            {
+                "modules": false
+            }
+        ]
+    ]
+}
+

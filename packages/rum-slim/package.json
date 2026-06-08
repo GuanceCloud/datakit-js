@@ -1,0 +1,36 @@
+{
+    "name": "@cloudcare/browser-rum-slim",
+    "version": "3.3.1",
+    "main": "cjs/index.js",
+    "module": "esm/index.js",
+    "types": "types/index.d.ts",
+    "dependencies": {
+        "@cloudcare/browser-core": "3.3.0"
+    },
+    "description": "Guance Browser SDK RUM Slim Package",
+    "scripts": {
+        "dev": "webpack serve --open --mode=development",
+        "build": "run-s build:cjs build:esm build:bundle",
+        "build:cjs": "node ./scripts/build-module.js cjs",
+        "build:esm": "node ./scripts/build-module.js esm",
+        "build:bundle": "rm -rf bundle && webpack --mode=production"
+    },
+    "keywords": [
+        "dataflux",
+        "rum",
+        "slim",
+        "sdk"
+    ],
+    "repository": {
+        "url": "https://github.com/GuanceCloud/datakit-js",
+        "type": "git",
+        "directory": "packages/rum-slim"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "author": "dataflux",
+    "license": "MIT",
+    "homepage": "https://github.com/GuanceCloud/datakit-js/README.md"
+}
+

@@ -86,9 +86,9 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
         customerDataTrackerManager,
         getCommonContext,
         initialViewOptions,
-        deflateWorker && options.createDeflateEncoder
+        deflateWorker && options.createCompressionEncoder
           ? function (streamId) {
-              return options.createDeflateEncoder(deflateWorker, streamId)
+              return options.createCompressionEncoder(deflateWorker, streamId)
             }
           : createIdentityEncoder,
         resourceTrackerManager
@@ -119,7 +119,11 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     addTelemetryUsage({ feature: 'start-view' })
   })
 
-  var rumPublicApi = makePublicApi({
+  const recorderPublicApi = options.makeRecorderPublicApi
+    ? options.makeRecorderPublicApi(recorderApi)
+    : {}
+
+  var rumPublicApi = makePublicApi(assign({
     init: monitor(function (initConfiguration) {
       strategy.init(initConfiguration)
     }),
@@ -286,56 +290,6 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
       strategy.setForcedSession()
       addTelemetryUsage({ feature: 'set-forced-session' })
     }),
-    startSessionReplayRecording: monitor(function (options) {
-      recorderApi.start(options)
-      addTelemetryUsage({
-        feature: 'start-session-replay-recording',
-        force: options && options.force
-      })
-    }),
-    isRecording: monitor(function () {
-      return recorderApi.isRecording()
-    }),
-    stopSessionReplayRecording: monitor(recorderApi.stop),
-    takeSubsequentFullSnapshot: monitor(recorderApi.takeSubsequentFullSnapshot),
-    snapshotCanvas: monitor(function (canvas, options) {
-      return recorderApi.snapshotCanvas(canvas, options)
-    }),
-    getSerializedNodeIdForDebug: monitor(function (node) {
-      return recorderApi.getSerializedNodeIdForDebug(node)
-    }),
-    getLastAutoCanvasSnapshotResultForDebug: monitor(function () {
-      return recorderApi.getLastAutoCanvasSnapshotResultForDebug()
-    }),
-    getAutoCanvasSnapshotDebugHistoryForDebug: monitor(function () {
-      return recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug()
-    }),
-    getLastCanvasMutationForDebug: monitor(function () {
-      return recorderApi.getLastCanvasMutationForDebug()
-    }),
-    getCanvasMutationHistoryForDebug: monitor(function () {
-      return recorderApi.getCanvasMutationHistoryForDebug()
-    }),
-    getLastDomMutationForDebug: monitor(function () {
-      return recorderApi.getLastDomMutationForDebug()
-    }),
-    getDomMutationHistoryForDebug: monitor(function () {
-      return recorderApi.getDomMutationHistoryForDebug()
-    }),
-    getLastReplaySegmentFlushForDebug: monitor(function () {
-      return recorderApi.getLastReplaySegmentFlushForDebug()
-    }),
-    getReplaySegmentFlushHistoryForDebug: monitor(function () {
-      return recorderApi.getReplaySegmentFlushHistoryForDebug()
-    }),
-    getReplayPerformanceForDebug: monitor(function () {
-      return recorderApi.getReplayPerformanceForDebug()
-    }),
-    flushReplayMutationsForDebug: monitor(function () {
-      if (recorderApi.flushReplayMutationsForDebug) {
-        recorderApi.flushReplayMutationsForDebug()
-      }
-    }),
     createResourceTrackerId: monitor(function () {
       return resourceTrackerManager.createTrackerId()
     }),
@@ -357,7 +311,7 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
     getResource: monitor(function (trackerId) {
       return resourceTrackerManager.getResource(trackerId)
     })
-  })
+  }, recorderPublicApi))
   return rumPublicApi
 }
 function createPostStartStrategy(preStartStrategy, startRumResult) {

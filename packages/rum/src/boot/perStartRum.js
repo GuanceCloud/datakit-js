@@ -24,7 +24,8 @@ export function createPreStartStrategy(
 ) {
   var ignoreInitIfSyntheticsWillInjectRum =
     rumPublicApiOptions.ignoreInitIfSyntheticsWillInjectRum
-  var startDeflateWorker = rumPublicApiOptions.startDeflateWorker
+  var startCompressionWorker = rumPublicApiOptions.startCompressionWorker
+  var overrideInitConfiguration = rumPublicApiOptions.overrideInitConfiguration
   var bufferApiCalls = createBoundedBuffer()
   var remoteConfigrationCallbacks = createBoundedBuffer()
   var firstStartViewCall
@@ -70,6 +71,9 @@ export function createPreStartStrategy(
     if (eventBridgeAvailable) {
       initConfiguration = overrideInitConfigurationForBridge(initConfiguration)
     }
+    if (overrideInitConfiguration) {
+      initConfiguration = overrideInitConfiguration(initConfiguration)
+    }
 
     // Update the exposed initConfiguration to reflect the bridge and remote configuration overrides
     cachedInitConfiguration = initConfiguration
@@ -96,9 +100,9 @@ export function createPreStartStrategy(
       configuration.compressIntakeRequests &&
       !configuration.sendContentTypeByJson &&
       !eventBridgeAvailable &&
-      startDeflateWorker
+      startCompressionWorker
     ) {
-      deflateWorker = startDeflateWorker(
+      deflateWorker = startCompressionWorker(
         configuration,
         'RUM',
         // Worker initialization can fail asynchronously, especially in Firefox where even CSP
@@ -107,7 +111,7 @@ export function createPreStartStrategy(
         noop
       )
       if (!deflateWorker) {
-        // `startDeflateWorker` should have logged an error message explaining the issue
+        // The compression worker starter should have logged an error message explaining the issue
         return
       }
     }

@@ -3,7 +3,7 @@ import {
   RumEventType,
   startBatchWithReplica
 } from '@cloudcare/browser-core'
-import { DeflateEncoderStreamId } from '../domain/deflate'
+import { EncoderStreamId } from '../domain/encoderStreamId'
 export function startRumBatch(
   configuration,
   lifeCycle,
@@ -17,7 +17,7 @@ export function startRumBatch(
     configuration,
     {
       endpoint: configuration.rumEndpoint,
-      encoder: createEncoder(DeflateEncoderStreamId.RUM)
+      encoder: createEncoder(EncoderStreamId.RUM)
     },
     reportError,
     pageExitObservable,

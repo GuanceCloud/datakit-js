@@ -4,10 +4,8 @@ import {
   addTelemetryDebug,
   assign
 } from '@cloudcare/browser-core'
-export var DeflateEncoderStreamId = {
-  REPLAY: 1,
-  RUM: 2
-}
+import { EncoderStreamId } from '../encoderStreamId'
+export var DeflateEncoderStreamId = EncoderStreamId
 export function createDeflateEncoder(worker, streamId) {
   var rawBytesCount = 0
   var compressedData = []
