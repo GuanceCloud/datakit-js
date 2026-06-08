@@ -79,7 +79,7 @@
                 errorMessage: event.error && event.error.message
               })
               refreshEventTypes()
-              return event.type === 'view'
+              return true
             }
           })
           result.ready = true
@@ -101,6 +101,11 @@
           var trackedResource = window.DATAFLUX_RUM.getResource(trackerId)
           result.resourceTrackerStatus = trackedResource && trackedResource.status
           document.getElementById('smoke-action').click()
+          for (var i = 0; i < 55; i += 1) {
+            window.DATAFLUX_RUM.addAction('batch smoke action ' + i, {
+              index: i
+            })
+          }
           window
             .fetch('./static/test.js?rum-slim-smoke=' + Date.now())
             .catch(recordError)
