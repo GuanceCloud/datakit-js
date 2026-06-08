@@ -6,4 +6,5 @@ node_modules
 .DS_Store
 .vscode
 scripts/publish-oss.js
+!scripts/publish-oss.js
 scripts/publish-oss-base.js
