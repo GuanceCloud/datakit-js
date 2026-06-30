@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.3.3
+
+- v3.3.2
+- Add Electron RUM access docs
+- Verify normal collection in RUM slim smoke demo
+- Add RUM slim smoke demo
+- Use generic compression worker naming
+- Merge branch 'dev' into codex-rum-slim-package
+- fix: add publish-oss
+- Add slim RUM package
+- v3.3.1
+- Fix replay mutation reparent handling and tracing ids
+
 ## v3.3.2
 
 - Add Electron RUM access docs
