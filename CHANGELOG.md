@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.3.5
+
+- fix: unlock error replay sessions
+
 ## v3.3.4
 
 - fix: remove keepalive from regular fetch transport
