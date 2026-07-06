@@ -29,7 +29,7 @@ export function createHttpRequest(
   }
   var retryState = newRetryState(retryMaxSize)
   var sendStrategyForRetry = function (payload, onResponse) {
-    return fetchKeepAliveStrategy(endpointUrl, bytesLimit, payload, onResponse)
+    return fetchStrategyWithFallback(endpointUrl, payload, onResponse)
   }
 
   return {
@@ -87,54 +87,16 @@ function reportBeaconError(e) {
     addTelemetryError(e)
   }
 }
-export function fetchKeepAliveStrategy(
+export function fetchStrategyWithFallback(
   endpointUrl,
-  bytesLimit,
   payload,
   onResponse
 ) {
-  var data = payload.data
-  var bytesCount = payload.bytesCount
   var url = addBatchPrecision(endpointUrl, payload.encoding)
-  var canUseKeepAlive = isKeepAliveSupported() && bytesCount < bytesLimit
-  if (canUseKeepAlive) {
-    var fetchOption = {
-      method: 'POST',
-      body: data,
-      keepalive: true,
-      mode: 'cors'
-    }
-    const headers = {
-      'x-client-timestamp': Date.now().toString()
-    }
-    if (payload.type) {
-      headers['Content-Type'] = payload.type
-    }
-    fetchOption.headers = headers
-    fetch(url, fetchOption)
-      .then(
-        monitor(function (response) {
-          if (typeof onResponse === 'function') {
-            onResponse({ status: response.status, type: response.type })
-          }
-        })
-      )
-      .catch(
-        monitor(function () {
-          fetchStrategy(url, payload, onResponse)
-        })
-      )
+  if (typeof fetch === 'function') {
+    sendFetch(url, payload, onResponse)
   } else {
     sendXHR(url, payload, onResponse)
-  }
-}
-
-function isKeepAliveSupported() {
-  // Request can throw, cf https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#errors
-  try {
-    return window.Request && 'keepalive' in new Request('http://a')
-  } catch {
-    return false
   }
 }
 
@@ -162,11 +124,10 @@ function sendXHR(url, payload, onResponse) {
   )
   request.send(data)
 }
-function fetchStrategy(url, payload, onResponse) {
+function sendFetch(url, payload, onResponse) {
   const fetchOption = {
     method: 'POST',
     body: payload.data,
-    keepalive: true,
     mode: 'cors'
   }
   const headers = {
