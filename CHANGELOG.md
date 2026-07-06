@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.3.4
+
+- fix: remove keepalive from regular fetch transport
+- fix: add slim oss
+
 ## v3.3.3
 
 - v3.3.2
