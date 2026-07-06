@@ -27,22 +27,31 @@ export function startErrorCollection(
   trackRuntimeError(errorObservable)
   trackReportError(configuration, errorObservable)
   var session = sessionManager.findTrackedSession()
-  let hasError = session && session.isErrorSession && session.sessionHasError
-  if (session && session.isErrorSession) {
+  let hasError = shouldMarkSessionOnError(session) && session.sessionHasError
+  if (shouldMarkSessionOnError(session)) {
     lifeCycle.subscribe(LifeCycleEventType.SESSION_RENEWED, function () {
       hasError = false
     })
   }
-
-  errorObservable.subscribe(function (error) {
-    if (session && session.isErrorSession && !hasError) {
+  var markSessionOnError = function () {
+    if (shouldMarkSessionOnError(session) && !hasError) {
       sessionManager.setErrorForSession()
       hasError = true
     }
+  }
+
+  errorObservable.subscribe(function (error) {
+    markSessionOnError()
     lifeCycle.notify(LifeCycleEventType.RAW_ERROR_COLLECTED, { error: error })
   })
 
-  return doStartErrorCollection(lifeCycle, pageStateHistory)
+  var errorCollection = doStartErrorCollection(lifeCycle, pageStateHistory)
+  return {
+    addError: function (providedError, savedCommonContext) {
+      markSessionOnError()
+      errorCollection.addError(providedError, savedCommonContext)
+    }
+  }
 }
 
 export function doStartErrorCollection(lifeCycle, pageStateHistory) {
@@ -112,4 +121,11 @@ function processError(error, pageStateHistory) {
       error: error.originalError
     }
   }
+}
+
+function shouldMarkSessionOnError(session) {
+  return (
+    session &&
+    (session.isErrorSession || session.errorSessionReplayAllowed === true)
+  )
 }

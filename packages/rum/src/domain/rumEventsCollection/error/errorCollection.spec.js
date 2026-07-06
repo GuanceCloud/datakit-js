@@ -229,6 +229,69 @@ describe('errorCollection', () => {
     expect(setErrorForSession).toHaveBeenCalledTimes(2)
   })
 
+  it('should mark a session sampled for error replay when an error is collected', () => {
+    const lifeCycle = new LifeCycle()
+    const setErrorForSession = jasmine.createSpy('setErrorForSession')
+    const collected = jasmine.createSpy('collected')
+
+    startErrorCollection(
+      lifeCycle,
+      {},
+      {
+        findTrackedSession: () => ({
+          isErrorSession: false,
+          errorSessionReplayAllowed: true,
+          sessionHasError: false
+        }),
+        setErrorForSession
+      },
+      {
+        wasInPageStateAt: () => true
+      }
+    )
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    console.error(new Error('error replay session error'))
+
+    expect(setErrorForSession).toHaveBeenCalledTimes(1)
+    expect(collected).toHaveBeenCalled()
+  })
+
+  it('should mark a session sampled for error replay when a custom error is added', () => {
+    const lifeCycle = new LifeCycle()
+    const setErrorForSession = jasmine.createSpy('setErrorForSession')
+    const collected = jasmine.createSpy('collected')
+
+    const collection = startErrorCollection(
+      lifeCycle,
+      {},
+      {
+        findTrackedSession: () => ({
+          isErrorSession: false,
+          errorSessionReplayAllowed: true,
+          sessionHasError: false
+        }),
+        setErrorForSession
+      },
+      {
+        wasInPageStateAt: () => true
+      }
+    )
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    collection.addError({
+      error: new Error('custom error replay session error'),
+      handlingStack: 'provided-stack',
+      startClocks: {
+        relative: 10,
+        timeStamp: 20
+      }
+    })
+
+    expect(setErrorForSession).toHaveBeenCalledTimes(1)
+    expect(collected).toHaveBeenCalled()
+  })
+
   it('should not remark sessions that already have an error', () => {
     const lifeCycle = new LifeCycle()
     const setErrorForSession = jasmine.createSpy('setErrorForSession')

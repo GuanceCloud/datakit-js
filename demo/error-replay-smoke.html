@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Error Replay Smoke Demo</title>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 32px;
+      }
+
+      button {
+        margin-right: 8px;
+      }
+
+      pre {
+        background: #f6f8fa;
+        border: 1px solid #d8dee4;
+        border-radius: 6px;
+        padding: 16px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Error Replay Smoke Demo</h1>
+    <p id="status">Preparing smoke test...</p>
+    <button id="trigger-error" type="button">Trigger runtime error</button>
+    <button id="trigger-custom-error" type="button">Trigger custom error</button>
+    <div id="mutation-target">Initial content</div>
+    <pre id="result"></pre>
+
+    <script src="./dataflux-rum.js"></script>
+    <script>
+      ;(function () {
+        var result = (window.__errorReplaySmoke = {
+          loaded: false,
+          ready: false,
+          completed: false,
+          passed: false,
+          recordingStarted: false,
+          runtimeErrorTriggered: false,
+          runtimeErrorObserved: false,
+          customErrorTriggered: false,
+          flushViewTriggered: false,
+          replayUploadSeen: false,
+          errorEventSeen: false,
+          replayRequests: [],
+          eventTypes: [],
+          errors: []
+        })
+        var statusElement = document.getElementById('status')
+        var resultElement = document.getElementById('result')
+        var mutationTarget = document.getElementById('mutation-target')
+        var timeoutId
+
+        function updateResult() {
+          result.passed = result.replayUploadSeen && result.errorEventSeen
+          statusElement.textContent = result.completed
+            ? result.passed
+              ? 'Passed: error event and replay upload were observed.'
+              : 'Failed: error event or replay upload was not observed.'
+            : 'Running: waiting for error event and replay upload...'
+          resultElement.textContent = JSON.stringify(result, null, 2)
+        }
+
+        function complete() {
+          result.completed = true
+          window.clearTimeout(timeoutId)
+          updateResult()
+        }
+
+        function recordError(error) {
+          result.errors.push(error && error.message ? error.message : String(error))
+          updateResult()
+        }
+
+        function isReplayUpload(url) {
+          return typeof url === 'string' && url.indexOf('/v1/write/rum/replay') !== -1
+        }
+
+        function getRequestUrl(input) {
+          if (typeof input === 'string') {
+            return input
+          }
+          return input && input.url ? input.url : ''
+        }
+
+        function recordRequest(url, transport, body) {
+          if (!isReplayUpload(url)) {
+            return
+          }
+          result.replayUploadSeen = true
+          result.replayRequests.push({
+            transport: transport,
+            url: url,
+            bodyType: body && body.constructor ? body.constructor.name : typeof body
+          })
+          complete()
+        }
+
+        function installRequestObserver() {
+          if (window.fetch) {
+            var originalFetch = window.fetch
+            window.fetch = function (input, init) {
+              var url = getRequestUrl(input)
+              recordRequest(url, 'fetch', init && init.body)
+              return originalFetch.apply(this, arguments)
+            }
+          }
+
+          var originalOpen = window.XMLHttpRequest.prototype.open
+          var originalSend = window.XMLHttpRequest.prototype.send
+          window.XMLHttpRequest.prototype.open = function (method, url) {
+            this.__errorReplaySmokeUrl = url
+            return originalOpen.apply(this, arguments)
+          }
+          window.XMLHttpRequest.prototype.send = function (body) {
+            recordRequest(this.__errorReplaySmokeUrl, 'xhr', body)
+            return originalSend.apply(this, arguments)
+          }
+
+          if (navigator.sendBeacon) {
+            var originalSendBeacon = navigator.sendBeacon
+            navigator.sendBeacon = function (url, data) {
+              recordRequest(url, 'sendBeacon', data)
+              return originalSendBeacon.apply(this, arguments)
+            }
+          }
+        }
+
+        function recordEventType(type) {
+          if (result.eventTypes.indexOf(type) === -1) {
+            result.eventTypes.push(type)
+            result.eventTypes.sort()
+          }
+        }
+
+        function triggerRuntimeError() {
+          result.runtimeErrorTriggered = true
+          updateResult()
+          window.setTimeout(function () {
+            throw new Error('error replay smoke runtime error')
+          }, 0)
+          window.setTimeout(triggerReplayFlush, 1500)
+        }
+
+        function triggerCustomError() {
+          result.customErrorTriggered = true
+          window.DATAFLUX_RUM.addError(new Error('error replay smoke custom error'), {
+            source: 'demo'
+          })
+          triggerReplayFlush()
+        }
+
+        function triggerReplayFlush() {
+          mutationTarget.textContent = 'Mutation after error at ' + Date.now()
+          if (
+            window.DATAFLUX_RUM &&
+            typeof window.DATAFLUX_RUM.flushReplayMutationsForDebug ===
+              'function'
+          ) {
+            window.DATAFLUX_RUM.flushReplayMutationsForDebug()
+          }
+          if (
+            window.DATAFLUX_RUM &&
+            typeof window.DATAFLUX_RUM.startView === 'function' &&
+            !result.flushViewTriggered
+          ) {
+            result.flushViewTriggered = true
+            window.DATAFLUX_RUM.startView({
+              name: 'error-replay-smoke-after-error'
+            })
+          }
+          updateResult()
+        }
+
+        window.addEventListener('error', function () {
+          result.runtimeErrorObserved = true
+          updateResult()
+        })
+
+        document
+          .getElementById('trigger-error')
+          .addEventListener('click', triggerRuntimeError)
+        document
+          .getElementById('trigger-custom-error')
+          .addEventListener('click', triggerCustomError)
+
+        installRequestObserver()
+
+        try {
+          result.loaded = !!window.DATAFLUX_RUM
+          window.DATAFLUX_RUM.init({
+            applicationId: 'error-replay-smoke',
+            datakitOrigin: window.location.origin,
+            sessionSampleRate: 100,
+            sessionOnErrorSampleRate: 0,
+            sessionReplaySampleRate: 0,
+            sessionReplayOnErrorSampleRate: 100,
+            service: 'error-replay-smoke',
+            env: 'demo',
+            version: 'smoke',
+            trackUserInteractions: true,
+            sendContentTypeByJson: true,
+            beforeSend: function (event) {
+              recordEventType(event.type)
+              if (event.type === 'error') {
+                result.errorEventSeen = true
+              }
+              updateResult()
+              return true
+            }
+          })
+          result.ready = true
+          window.DATAFLUX_RUM.startView({ name: 'error-replay-smoke' })
+          if (
+            typeof window.DATAFLUX_RUM.startSessionReplayRecording === 'function'
+          ) {
+            window.DATAFLUX_RUM.startSessionReplayRecording()
+            result.recordingStarted = true
+          }
+          updateResult()
+          window.setTimeout(triggerRuntimeError, 1000)
+          timeoutId = window.setTimeout(complete, 9000)
+        } catch (error) {
+          recordError(error)
+          complete()
+        }
+      })()
+    </script>
+  </body>
+</html>

@@ -11,4 +11,5 @@ lerna-debug.log
 .tw-npmrc
 demo/node_modules
 config
-demo
+demo/*
+!demo/error-replay-smoke.html
