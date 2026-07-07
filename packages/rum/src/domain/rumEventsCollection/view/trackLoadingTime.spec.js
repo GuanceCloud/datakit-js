@@ -88,6 +88,38 @@ describe('trackLoadingTime', () => {
     expect(callback).not.toHaveBeenCalled()
   })
 
+  it('should keep visible loading time candidates when later candidates happen after first hidden', () => {
+    const lifeCycle = new LifeCycle()
+    const domMutationObservable = new Observable()
+    const callback = jasmine.createSpy('callback')
+    const tracking = trackLoadingTime(
+      lifeCycle,
+      domMutationObservable,
+      { excludedActivityUrls: [] },
+      ViewLoadingType.INITIAL_LOAD,
+      { relative: 0, timeStamp: Date.now() },
+      callback
+    )
+
+    tracking.setLoadEvent(20)
+
+    jasmine.clock().tick(25)
+    const pageHideEvent = new Event('pagehide')
+    Object.defineProperty(pageHideEvent, 'timeStamp', {
+      configurable: true,
+      value: 25
+    })
+    window.dispatchEvent(pageHideEvent)
+
+    jasmine.clock().tick(5)
+    domMutationObservable.notify()
+    jasmine.clock().tick(PAGE_ACTIVITY_END_DELAY)
+
+    expect(callback).toHaveBeenCalledWith(20)
+
+    tracking.stop()
+  })
+
   it('should report load event timing on stop when no activity candidate is collected', () => {
     const lifeCycle = new LifeCycle()
     const domMutationObservable = new Observable()

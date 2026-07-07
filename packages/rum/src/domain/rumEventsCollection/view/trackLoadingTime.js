@@ -19,10 +19,19 @@ export function trackLoadingTime(
       !isWaitingForLoadEvent &&
       loadingTimeCandidates.length > 0
     ) {
-      var loadingTime = Math.max.apply(Math, loadingTimeCandidates)
-      if (loadingTime < firstHidden.getTimeStamp() - viewStart.relative) {
-        callback(loadingTime)
+      var firstHiddenTime = firstHidden.getTimeStamp() - viewStart.relative
+      var visibleLoadingTimeCandidates = loadingTimeCandidates.filter(function (
+        loadingTime
+      ) {
+        return loadingTime < firstHiddenTime
+      })
+
+      if (visibleLoadingTimeCandidates.length === 0) {
+        return
       }
+
+      var loadingTime = Math.max.apply(Math, visibleLoadingTimeCandidates)
+      callback(loadingTime)
     }
   }
 
