@@ -3,16 +3,24 @@ const { runMain } = require('../utils')
 const { modifyFile } = require('../files-utils')
 const { command } = require('../command')
 
-const JSON_FILES = ['rum', 'logs'].map(
-  (packageName) => `./packages/${packageName}/package.json`
-)
+const JSON_FILES = [
+  'rum-react',
+  'rum-vue',
+  'rum-angular',
+  'rum-nextjs',
+  'rum-nuxt'
+].map((packageName) => `./packages/${packageName}/package.json`)
+const RUM_PEER_DEPENDENCIES = [
+  '@cloudcare/browser-rum',
+  '@cloudcare/browser-rum-slim'
+]
 
-// This script updates the peer dependency versions between rum and logs packages to match the new
-// version during a release.
+// Keep framework plugins from being installed with an older RUM runtime that does not implement
+// their plugin lifecycle contract.
 //
 // Lerna [intentionally removed support for it][1], and [closed a feature request asking for an
 // option to bump them on publish][2], but we still want to make sure this version is updated as
-// well to warn users who use different versions of RUM and Logs packages.
+// well to prevent framework plugins from declaring compatibility with an older RUM package.
 //
 // [1]: https://github.com/lerna/lerna/commit/bdbfc62966e5351abfeac77830f9d47b6d69f1b1
 // [2]: https://github.com/lerna/lerna/issues/1575
@@ -20,14 +28,20 @@ runMain(async () => {
   for (const jsonFile of JSON_FILES) {
     await modifyFile(jsonFile, updateJsonPeerDependencies)
   }
-  // update yarn.lock to match the updated JSON files
-  command`npm install`.run()
+  command`npm install --package-lock-only --ignore-scripts`.run()
 })
 
 function updateJsonPeerDependencies(content) {
   const json = JSON.parse(content)
-  Object.keys(json.peerDependencies).forEach((key) => {
-    json.peerDependencies[key] = lernaConfig.version
+  const indentation = content.match(/^\{\n(\s+)"/)
+  RUM_PEER_DEPENDENCIES.forEach((packageName) => {
+    if (json.peerDependencies[packageName]) {
+      json.peerDependencies[packageName] = `>=${lernaConfig.version}`
+    }
   })
-  return `${JSON.stringify(json, null, 2)}\n`
+  return `${JSON.stringify(
+    json,
+    null,
+    indentation ? indentation[1].length : 2
+  )}\n`
 }

@@ -13,3 +13,5 @@ demo/node_modules
 config
 demo/*
 !demo/error-replay-smoke.html
+!demo/framework-demo.css
+!demo/framework-demo-runtime.js

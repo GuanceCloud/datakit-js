@@ -16,6 +16,7 @@ import {
   getType
 } from '@cloudcare/browser-core'
 import { validateAndBuildRumConfiguration } from '../domain/configuration'
+import { getPluginsTelemetry, validatePlugins } from '../domain/plugins'
 
 export function createPreStartStrategy(
   rumPublicApiOptions,
@@ -35,9 +36,12 @@ export function createPreStartStrategy(
   var cachedInitConfiguration
   var cachedConfiguration
   var cachedRemoteConfiguration
+  var hasStarted
+  var initializationPending
+  var pluginsRequireManualViewTracking
   var resourceTrackerManager = rumPublicApiOptions.resourceTrackerManager
   function tryStartRum() {
-    if (!cachedInitConfiguration || !cachedConfiguration) {
+    if (hasStarted || !cachedInitConfiguration || !cachedConfiguration) {
       return
     }
 
@@ -62,6 +66,7 @@ export function createPreStartStrategy(
       compressionWorker,
       initialViewOptions
     )
+    hasStarted = true
 
     bufferApiCalls.drain(startRumResult)
   }
@@ -79,13 +84,20 @@ export function createPreStartStrategy(
     cachedInitConfiguration = initConfiguration
     cachedRemoteConfiguration = remoteConfiguration
     remoteConfigrationCallbacks.drain(cachedRemoteConfiguration)
-    addTelemetryConfiguration(deepClone(initConfiguration))
     if (cachedConfiguration) {
       displayAlreadyInitializedError('DATAFLUX_RUM', initConfiguration)
       return
     }
+    var telemetryConfiguration = deepClone(initConfiguration)
+    if (initConfiguration.plugins) {
+      telemetryConfiguration.plugins = getPluginsTelemetry(
+        initConfiguration.plugins
+      )
+    }
+    addTelemetryConfiguration(telemetryConfiguration)
     var configuration = validateAndBuildRumConfiguration(initConfiguration)
     if (!configuration) {
+      initializationPending = false
       return
     }
 
@@ -93,6 +105,7 @@ export function createPreStartStrategy(
       display.warn(
         'No storage available for session. We will not send any data.'
       )
+      initializationPending = false
       return
     }
 
@@ -112,39 +125,63 @@ export function createPreStartStrategy(
       )
       if (!compressionWorker) {
         // The compression worker starter should have logged an error message explaining the issue
+        initializationPending = false
         return
       }
     }
 
     cachedConfiguration = configuration
+    initializationPending = false
     // Instrumuent fetch to track network requests
     // This is needed in case the consent is not granted and some cutsomer
     // library (Apollo Client) is storing uninstrumented fetch to be used later
     // The subscrption is needed so that the instrumentation process is completed
     initFetchObservable().subscribe(noop)
-
     tryStartRum()
   }
 
   return {
-    init: function (initConfiguration) {
+    init: function (initConfiguration, publicApi) {
       if (!initConfiguration) {
         display.error('Missing configuration')
         return
       }
       // Set the experimental feature flags as early as possible, so we can use them in most places
 
-      // Expose the initial configuration regardless of initialization success.
-      cachedInitConfiguration = initConfiguration
       // If we are in a Synthetics test configured to automatically inject a RUM instance, we want
       // to completely discard the customer application RUM instance by ignoring their init() call.
       // But, we should not ignore the init() call from the Synthetics-injected RUM instance, so the
       // internal `ignoreInitIfSyntheticsWillInjectRum` option is here to bypass this condition.
       if (ignoreInitIfSyntheticsWillInjectRum && willSyntheticsInjectRum()) {
+        cachedInitConfiguration = initConfiguration
         return
       }
+      if (initializationPending || cachedConfiguration) {
+        displayAlreadyInitializedError('DATAFLUX_RUM', initConfiguration)
+        return
+      }
+      // Expose the accepted configuration regardless of initialization success.
+      cachedInitConfiguration = initConfiguration
+      if (!validatePlugins(initConfiguration.plugins)) {
+        return
+      }
+      initializationPending = true
+      if (rumPublicApiOptions.onInit) {
+        rumPublicApiOptions.onInit(initConfiguration, publicApi)
+      }
+      pluginsRequireManualViewTracking =
+        !!initConfiguration.plugins &&
+        initConfiguration.trackViewsManually === true
       if (initConfiguration.remoteConfiguration) {
-        fetchAndApplyRemoteConfiguration(initConfiguration, doInit)
+        fetchAndApplyRemoteConfiguration(
+          initConfiguration,
+          function (remoteInitConfiguration, remoteConfiguration) {
+            if (pluginsRequireManualViewTracking) {
+              remoteInitConfiguration.trackViewsManually = true
+            }
+            doInit(remoteInitConfiguration, remoteConfiguration)
+          }
+        )
       } else {
         doInit(initConfiguration)
       }

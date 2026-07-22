@@ -178,7 +178,8 @@ function newView(
     name: name,
     startClocks: startClocks,
     service: service,
-    version: version
+    version: version,
+    url: viewOptions && viewOptions.url
   }
   lifeCycle.notify(LifeCycleEventType.BEFORE_VIEW_CREATED, viewCreatedEvent)
   lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, viewCreatedEvent)

@@ -1,0 +1,17 @@
+{
+    "sourceMaps": true,
+    "include": [
+        "./src/**/*.js"
+    ],
+    "ignore": [
+        "./src/**/*.spec.js"
+    ],
+    "presets": [
+        [
+            "@babel/preset-env",
+            {
+                "modules": "cjs"
+            }
+        ]
+    ]
+}

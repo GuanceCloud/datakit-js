@@ -1,0 +1,63 @@
+{
+    "name": "@cloudcare/browser-rum-vue",
+    "version": "3.3.5",
+    "main": "cjs/index.js",
+    "module": "esm/index.js",
+    "types": "types/index.d.ts",
+    "files": [
+        "cjs",
+        "esm",
+        "types",
+        "README.md"
+    ],
+    "sideEffects": false,
+    "description": "Guance Browser SDK RUM Vue integration",
+    "scripts": {
+        "build": "run-p build:cjs build:esm",
+        "build:cjs": "rm -rf cjs && babel --config-file ./babel.cjs.json --out-dir cjs ./src",
+        "build:esm": "rm -rf esm && babel --config-file ./babel.esm.json --out-dir esm ./src",
+        "demo:build": "webpack --config demo/webpack.config.js --mode=development",
+        "prepack": "npm run build"
+    },
+    "dependencies": {
+        "@cloudcare/browser-core": "3.3.4"
+    },
+    "peerDependencies": {
+        "@cloudcare/browser-rum": ">=3.3.5",
+        "@cloudcare/browser-rum-slim": ">=3.3.5",
+        "vue": ">=2.7 || >=3",
+        "vue-router": ">=3 || >=4"
+    },
+    "peerDependenciesMeta": {
+        "@cloudcare/browser-rum": {
+            "optional": true
+        },
+        "@cloudcare/browser-rum-slim": {
+            "optional": true
+        },
+        "vue-router": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "vue": "3.5.22",
+        "vue-router": "4.5.1"
+    },
+    "keywords": [
+        "dataflux",
+        "rum",
+        "vue",
+        "sdk"
+    ],
+    "repository": {
+        "url": "https://github.com/GuanceCloud/datakit-js",
+        "type": "git",
+        "directory": "packages/rum-vue"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "author": "dataflux",
+    "license": "MIT",
+    "homepage": "https://github.com/GuanceCloud/datakit-js/README.md"
+}

@@ -28,8 +28,7 @@ cmd_release () {
 
 cmd_version () {
   node ./scripts/release/generate-changelog.js
-#   node ./scripts/release/update-peer-dependency-versions.js
-
+  node ./scripts/release/update-peer-dependency-versions.js
 }
 
 main "$@"

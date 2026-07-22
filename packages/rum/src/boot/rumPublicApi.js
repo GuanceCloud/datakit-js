@@ -22,6 +22,7 @@ import {
   getType
 } from '@cloudcare/browser-core'
 import { buildCommonContext } from '../domain/contexts/commonContext'
+import { callPluginsMethod } from '../domain/plugins'
 import { createPreStartStrategy } from './perStartRum'
 import { createResourceTrackerManager } from '../domain/rumEventsCollection/resource/resourceTrackerManager'
 var RUM_STORAGE_KEY = 'rum'
@@ -55,9 +56,30 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
       recorderApi
     )
   }
-  let strategy = createPreStartStrategy(
+  let strategy
+  function addPluginError(providedError) {
+    callMonitored(function () {
+      providedError = providedError || {}
+      strategy.addError(
+        assign({}, providedError, {
+          context: sanitize(providedError.context)
+        }),
+        getCommonContext()
+      )
+      addTelemetryUsage({ feature: 'add-error' })
+    })
+  }
+  strategy = createPreStartStrategy(
     assign({}, options, {
-      resourceTrackerManager: resourceTrackerManager
+      resourceTrackerManager: resourceTrackerManager,
+      onInit: function (initConfiguration, publicApi) {
+        callPluginsMethod(initConfiguration.plugins, 'onInit', {
+          addError: addPluginError,
+          publicApi: publicApi,
+          rum: publicApi,
+          initConfiguration: initConfiguration
+        })
+      }
     }),
     getCommonContext,
     function (configuration, compressionWorker, initialViewOptions) {
@@ -106,6 +128,12 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
 
       strategy = createPostStartStrategy(strategy, startRumResult)
 
+      callPluginsMethod(configuration.plugins, 'onRumStart', {
+        addError: addPluginError,
+        publicApi: rumPublicApi,
+        rum: rumPublicApi
+      })
+
       return startRumResult
     }
   )
@@ -128,7 +156,7 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
 
   var rumPublicApi = makePublicApi(assign({
     init: monitor(function (initConfiguration) {
-      strategy.init(initConfiguration)
+      strategy.init(initConfiguration, rumPublicApi)
     }),
     setViewName: monitor((name) => {
       strategy.setViewName(name)

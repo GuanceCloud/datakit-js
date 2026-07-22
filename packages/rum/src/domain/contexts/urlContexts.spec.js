@@ -118,4 +118,50 @@ describe('urlContexts', () => {
       pathname: '/account/profile'
     })
   })
+
+  it('should resolve an explicit view URL and use it as the next view referrer', () => {
+    const lifeCycle = new LifeCycle()
+    const location = {
+      href: 'https://example.com/current',
+      pathname: '/current',
+      hash: '',
+      host: 'example.com'
+    }
+    const urlContexts = startUrlContexts(
+      lifeCycle,
+      {
+        subscribe() {
+          return { unsubscribe() {} }
+        }
+      },
+      location
+    )
+
+    lifeCycle.notify(LifeCycleEventType.BEFORE_VIEW_CREATED, {
+      startClocks: { relative: 10 },
+      url: '/products/42?tab=details#reviews'
+    })
+
+    expect(urlContexts.findUrl(10)).toEqual({
+      url: 'https://example.com/products/42?tab=details#reviews',
+      referrer: 'https://referrer.example/landing',
+      host: 'example.com',
+      path: '/products/42',
+      pathGroup: '/products/?',
+      urlQuery: { tab: 'details' },
+      pathname: '/products/42'
+    })
+
+    lifeCycle.notify(LifeCycleEventType.AFTER_VIEW_ENDED, {
+      endClocks: { relative: 20 }
+    })
+    lifeCycle.notify(LifeCycleEventType.BEFORE_VIEW_CREATED, {
+      startClocks: { relative: 30 },
+      url: '/checkout'
+    })
+
+    expect(urlContexts.findUrl(30).referrer).toBe(
+      'https://example.com/products/42?tab=details#reviews'
+    )
+  })
 })

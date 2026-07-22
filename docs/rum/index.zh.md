@@ -40,4 +40,5 @@ datafluxRum.startSessionReplayRecording()
 
 - [应用接入说明](./app-access.zh.md)
 - [Electron 应用接入说明](./electron-access.zh.md)
+- [框架插件接入说明](./framework-plugins.zh.md)
 - [Canvas 录制使用手册](../replay-canvas.md)

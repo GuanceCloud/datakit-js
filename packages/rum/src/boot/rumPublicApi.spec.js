@@ -1,4 +1,4 @@
-import { ActionType, ResourceType } from '@cloudcare/browser-core'
+import { ActionType, ResourceType, display } from '@cloudcare/browser-core'
 
 describe('rumPublicApi', () => {
   let makeRumPublicApi
@@ -104,6 +104,217 @@ describe('rumPublicApi', () => {
       startRumResult.viewContexts,
       undefined
     )
+  })
+
+  it('should let plugins configure manual views before RUM starts', () => {
+    const startRumResult = {
+      addAction: jasmine.createSpy('addAction'),
+      addError: jasmine.createSpy('addError'),
+      addResource: jasmine.createSpy('addResource'),
+      addTiming: jasmine.createSpy('addTiming'),
+      getInternalContext: jasmine.createSpy('getInternalContext'),
+      getViewContext: jasmine.createSpy('getViewContext'),
+      lifeCycle: {},
+      session: {},
+      setForcedSession: jasmine.createSpy('setForcedSession'),
+      setViewContext: jasmine.createSpy('setViewContext'),
+      setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
+      setViewName: jasmine.createSpy('setViewName'),
+      startView: jasmine.createSpy('startView'),
+      stopSession: jasmine.createSpy('stopSession'),
+      viewContexts: {}
+    }
+    const startRumImpl = jasmine
+      .createSpy('startRumImpl')
+      .and.returnValue(startRumResult)
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
+      getSerializedNodeIdForDebug: jasmine
+        .createSpy('getSerializedNodeIdForDebug')
+        .and.returnValue(undefined),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(undefined),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      snapshotCanvas: jasmine.createSpy('snapshotCanvas'),
+      start: jasmine.createSpy('start'),
+      stop: jasmine.createSpy('stop'),
+      takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
+    }
+    const plugin = {
+      name: 'test-plugin',
+      onInit: jasmine.createSpy('onInit').and.callFake(function (context) {
+        context.initConfiguration.trackViewsManually = true
+        context.publicApi.startView('Plugin initial view')
+      }),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      getConfigurationTelemetry: function () {
+        return { router: true }
+      }
+    }
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi, {
+      makeRecorderPublicApi: makeSessionReplayPublicApi
+    })
+    const initConfiguration = createValidInitConfiguration({
+      plugins: [plugin]
+    })
+
+    rumPublicApi.init(initConfiguration)
+
+    expect(plugin.onInit).toHaveBeenCalledWith({
+      addError: jasmine.any(Function),
+      publicApi: rumPublicApi,
+      rum: rumPublicApi,
+      initConfiguration: initConfiguration
+    })
+    expect(initConfiguration.trackViewsManually).toBeTrue()
+    expect(startRumImpl).toHaveBeenCalledTimes(1)
+    expect(startRumImpl.calls.mostRecent().args[4]).toEqual({
+      name: 'Plugin initial view'
+    })
+    const pluginAddError = plugin.onInit.calls.mostRecent().args[0].addError
+    expect(plugin.onRumStart).toHaveBeenCalledWith({
+      addError: pluginAddError,
+      publicApi: rumPublicApi,
+      rum: rumPublicApi
+    })
+    expect(plugin.onInit).toHaveBeenCalledBefore(plugin.onRumStart)
+  })
+
+  it('should protect plugin errors and preserve their common context', () => {
+    const startRumResult = {
+      addAction: jasmine.createSpy('addAction'),
+      addError: jasmine.createSpy('addError'),
+      addResource: jasmine.createSpy('addResource'),
+      addTiming: jasmine.createSpy('addTiming'),
+      getInternalContext: jasmine.createSpy('getInternalContext'),
+      getViewContext: jasmine.createSpy('getViewContext'),
+      lifeCycle: {},
+      session: {},
+      setForcedSession: jasmine.createSpy('setForcedSession'),
+      setViewContext: jasmine.createSpy('setViewContext'),
+      setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
+      setViewName: jasmine.createSpy('setViewName'),
+      startView: jasmine.createSpy('startView'),
+      stopSession: jasmine.createSpy('stopSession'),
+      viewContexts: {}
+    }
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(undefined),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      start: jasmine.createSpy('start'),
+      stop: jasmine.createSpy('stop')
+    }
+    let pluginAddError
+    const pluginError = new Error('framework render failed')
+    const plugin = {
+      name: 'framework-plugin',
+      onInit: function (context) {
+        pluginAddError = context.addError
+        context.initConfiguration.trackViewsManually = true
+        context.addError({
+          error: pluginError,
+          handlingStack: 'framework stack',
+          context: { feature: 'checkout', ignored: function () {} },
+          startClocks: { relative: 10, timeStamp: 20 }
+        })
+        context.publicApi.setGlobalContextProperty('phase', 'after-error')
+        context.publicApi.startView('Framework initial view')
+      }
+    }
+    const rumPublicApi = makeRumPublicApi(
+      jasmine.createSpy('startRumImpl').and.returnValue(startRumResult),
+      recorderApi
+    )
+    rumPublicApi.setGlobalContextProperty('phase', 'before-error')
+
+    rumPublicApi.init(
+      createValidInitConfiguration({
+        plugins: [plugin]
+      })
+    )
+
+    expect(startRumResult.addError).toHaveBeenCalledWith(
+      {
+        error: pluginError,
+        handlingStack: 'framework stack',
+        context: { feature: 'checkout', ignored: '[Function] ignored' },
+        startClocks: { relative: 10, timeStamp: 20 }
+      },
+      jasmine.objectContaining({
+        context: { phase: 'before-error' }
+      })
+    )
+    expect(pluginAddError).not.toBe(startRumResult.addError)
+
+    startRumResult.addError.and.throwError('collector failed')
+    expect(function () {
+      pluginAddError({
+        error: new Error('second framework error'),
+        startClocks: { relative: 30, timeStamp: 40 }
+      })
+    }).not.toThrow()
+  })
+
+  it('should keep starting RUM when a plugin throws during initialization', () => {
+    const displayErrorSpy = spyOn(display, 'error')
+    const startRumResult = {
+      addAction: jasmine.createSpy('addAction'),
+      addError: jasmine.createSpy('addError'),
+      addResource: jasmine.createSpy('addResource'),
+      addTiming: jasmine.createSpy('addTiming'),
+      getInternalContext: jasmine.createSpy('getInternalContext'),
+      getViewContext: jasmine.createSpy('getViewContext'),
+      lifeCycle: {},
+      session: {},
+      setForcedSession: jasmine.createSpy('setForcedSession'),
+      setViewContext: jasmine.createSpy('setViewContext'),
+      setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
+      setViewName: jasmine.createSpy('setViewName'),
+      startView: jasmine.createSpy('startView'),
+      stopSession: jasmine.createSpy('stopSession'),
+      viewContexts: {}
+    }
+    const startRumImpl = jasmine
+      .createSpy('startRumImpl')
+      .and.returnValue(startRumResult)
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
+      getSerializedNodeIdForDebug: jasmine
+        .createSpy('getSerializedNodeIdForDebug')
+        .and.returnValue(undefined),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(undefined),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      snapshotCanvas: jasmine.createSpy('snapshotCanvas'),
+      start: jasmine.createSpy('start'),
+      stop: jasmine.createSpy('stop'),
+      takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
+    }
+    const pluginError = new Error('plugin failed')
+    const plugin = {
+      name: 'broken-plugin',
+      onInit: jasmine.createSpy('onInit').and.throwError(pluginError)
+    }
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi, {
+      makeRecorderPublicApi: makeSessionReplayPublicApi
+    })
+
+    rumPublicApi.init(
+      createValidInitConfiguration({
+        plugins: [plugin]
+      })
+    )
+
+    expect(displayErrorSpy).toHaveBeenCalledWith(
+      'broken-plugin plugin onInit threw an error:',
+      pluginError
+    )
+    expect(startRumImpl).toHaveBeenCalledTimes(1)
   })
 
   it('should delegate public APIs to the started strategy with sanitized payloads', () => {

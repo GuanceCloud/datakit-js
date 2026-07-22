@@ -43,6 +43,7 @@ describe('rum configuration', () => {
         }
       ],
       defaultPrivacyLevel: DefaultPrivacyLevel.ALLOW,
+      plugins: [{ name: 'test' }],
       trackInteractions: true,
       replayCanvasWorkerUrl: '/canvas-worker.js',
       sessionReplaySampleRate: 50,
@@ -65,6 +66,7 @@ describe('rum configuration', () => {
     expect(configuration.applicationId).toBe('app-1')
     expect(configuration.sdkVersion).toBe('test-version')
     expect(configuration.trackUserInteractions).toBeTrue()
+    expect(configuration.plugins).toEqual([{ name: 'test' }])
     expect(configuration.sessionReplaySampleRate).toBe(50)
     expect(configuration.sessionOnErrorSampleRate).toBe(10)
     expect(configuration.sessionReplayOnErrorSampleRate).toBe(20)
@@ -245,6 +247,38 @@ describe('rum configuration', () => {
     ).toBeUndefined()
 
     expect(displayErrorSpy.calls.count()).toBe(2)
+  })
+
+  it('should reject invalid plugin configuration', () => {
+    const displayErrorSpy = spyOn(display, 'error')
+
+    expect(
+      validateAndBuildRumConfiguration({
+        applicationId: 'app-1',
+        datakitUrl: 'https://datakit.example.com',
+        plugins: 'invalid'
+      })
+    ).toBeUndefined()
+    expect(
+      validateAndBuildRumConfiguration({
+        applicationId: 'app-1',
+        datakitUrl: 'https://datakit.example.com',
+        plugins: [{ name: '' }]
+      })
+    ).toBeUndefined()
+    expect(
+      validateAndBuildRumConfiguration({
+        applicationId: 'app-1',
+        datakitUrl: 'https://datakit.example.com',
+        plugins: [{ name: 'react', onInit: true }]
+      })
+    ).toBeUndefined()
+
+    expect(displayErrorSpy.calls.allArgs()).toEqual([
+      ['Plugins should be an array'],
+      ['Plugins should have a non-empty string name'],
+      ['Plugin react has an invalid onInit method']
+    ])
   })
 
   it('should reject invalid replay canvas options', () => {
