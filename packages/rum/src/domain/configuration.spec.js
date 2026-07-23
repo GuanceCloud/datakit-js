@@ -98,6 +98,28 @@ describe('rum configuration', () => {
     )
   })
 
+  it('should enable WebSocket tracking only through its experimental flag', () => {
+    const enabled = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      enableExperimentalFeatures: ['track_websockets', 'unknown']
+    })
+    const disabled = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      enableExperimentalFeatures: ['unknown']
+    })
+    const invalid = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      enableExperimentalFeatures: 'track_websockets'
+    })
+
+    expect(enabled.trackWebSockets).toBeTrue()
+    expect(disabled.trackWebSockets).toBeFalse()
+    expect(invalid.trackWebSockets).toBeFalse()
+  })
+
   it('should map sentry-like replay canvas quality presets to internal defaults', () => {
     const lowConfiguration = validateAndBuildRumConfiguration({
       applicationId: 'app-1',

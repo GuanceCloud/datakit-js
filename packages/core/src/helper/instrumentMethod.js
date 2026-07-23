@@ -60,6 +60,134 @@ export function instrumentMethod(targetPrototype, method, onPreCall, opts) {
   }
 }
 
+export function instrumentConstructor(container, constructor, onPreCall, opts) {
+  var computeHandlingStack = opts && opts.computeHandlingStack
+  var original = container[constructor]
+
+  if (typeof original !== 'function') {
+    return { stop: noop }
+  }
+
+  var stopped = false
+  var instrumentation = function () {
+    if (!new.target) {
+      return original.apply(this, arrayFrom(arguments))
+    }
+
+    var newTarget = new.target === instrumentation ? original : new.target
+
+    if (stopped) {
+      return construct(original, arrayFrom(arguments), newTarget)
+    }
+
+    var parameters = arrayFrom(arguments)
+    var postCallCallback
+
+    callMonitored(onPreCall, null, [
+      {
+        parameters: parameters,
+        onPostCall: function (callback) {
+          postCallCallback = callback
+        },
+        handlingStack: computeHandlingStack
+          ? createHandlingStack()
+          : undefined
+      }
+    ])
+
+    var result = construct(original, parameters, newTarget)
+
+    if (postCallCallback) {
+      callMonitored(postCallCallback, null, [result])
+    }
+
+    return result
+  }
+
+  var restorePrototypeConstructor = preserveConstructorShape(
+    instrumentation,
+    original
+  )
+  container[constructor] = instrumentation
+
+  return {
+    stop: function () {
+      stopped = true
+      restorePrototypeConstructor()
+      if (container[constructor] === instrumentation) {
+        container[constructor] = original
+      }
+    }
+  }
+}
+
+function construct(original, parameters, newTarget) {
+  if (
+    typeof Reflect !== 'undefined' &&
+    typeof Reflect.construct === 'function'
+  ) {
+    return Reflect.construct(original, parameters, newTarget)
+  }
+
+  var BoundConstructor = Function.prototype.bind.apply(
+    original,
+    [null].concat(parameters)
+  )
+  var result = new BoundConstructor()
+
+  if (newTarget !== original && newTarget.prototype) {
+    if (Object.setPrototypeOf) {
+      Object.setPrototypeOf(result, newTarget.prototype)
+    } else if ('__proto__' in result) {
+      result.__proto__ = newTarget.prototype
+    }
+  }
+
+  return result
+}
+
+function preserveConstructorShape(instrumentation, original) {
+  var propertyKeys = Object.getOwnPropertyNames(original)
+  if (Object.getOwnPropertySymbols) {
+    propertyKeys = propertyKeys.concat(Object.getOwnPropertySymbols(original))
+  }
+
+  propertyKeys.forEach(function (key) {
+    Object.defineProperty(
+      instrumentation,
+      key,
+      Object.getOwnPropertyDescriptor(original, key)
+    )
+  })
+
+  if (!original.prototype) {
+    return noop
+  }
+
+  var originalConstructorDescriptor = Object.getOwnPropertyDescriptor(
+    original.prototype,
+    'constructor'
+  )
+  Object.defineProperty(original.prototype, 'constructor', {
+    ...originalConstructorDescriptor,
+    value: instrumentation
+  })
+
+  return function () {
+    var currentDescriptor = Object.getOwnPropertyDescriptor(
+      original.prototype,
+      'constructor'
+    )
+    if (currentDescriptor && currentDescriptor.value === instrumentation) {
+      Object.defineProperty(
+        original.prototype,
+        'constructor',
+        originalConstructorDescriptor
+      )
+    }
+  }
+}
+
 export function instrumentSetter(targetPrototype, property, after) {
   var originalDescriptor = Object.getOwnPropertyDescriptor(
     targetPrototype,

@@ -47,6 +47,44 @@ describe('batch', () => {
     expect(processed.rowData.fields.custom_keys).toBe('["customField"]')
   })
 
+  it('should serialize WebSocket resource metrics into transport fields', () => {
+    const processed = processedMessageByDataMap({
+      type: 'resource',
+      date: 123,
+      resource: {
+        id: 'resource-1',
+        type: 'websocket',
+        url: 'wss://example.com/socket',
+        duration: 10000000,
+        websocket: {
+          connection_id: 'connection-1',
+          handshake_succeeded: true,
+          tracking_end_reason: 'close_event',
+          messages_in: { count: 2, size: 16 },
+          messages_out: { count: 1, size: 4 },
+          setup_duration: 3000000
+        }
+      }
+    })
+
+    expect(processed.rowData.fields).toEqual(
+      jasmine.objectContaining({
+        resource_type: 'websocket',
+        resource_websocket_connection_id: 'connection-1',
+        resource_websocket_handshake_succeeded: true,
+        resource_websocket_tracking_end_reason: 'close_event',
+        resource_websocket_messages_in_count: 2,
+        resource_websocket_messages_in_size: 16,
+        resource_websocket_messages_out_count: 1,
+        resource_websocket_messages_out_size: 4,
+        resource_websocket_setup_duration: 3000000
+      })
+    )
+    expect(processed.rowStr).toContain(
+      'resource_websocket_connection_id="connection-1"'
+    )
+  })
+
   it('should discard messages bigger than the allowed size', () => {
     const flushObservable = new Observable()
     const flushController = {

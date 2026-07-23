@@ -1,5 +1,9 @@
 import { datafluxRum } from '@cloudcare/browser-rum'
 import { datafluxRum as slimRum } from '@cloudcare/browser-rum-slim'
+import {
+  ExperimentalFeature,
+  ResourceType
+} from '@cloudcare/browser-core'
 import type { Router as AngularRouter } from '@angular/router'
 import type { Router as ReactRouterInstance } from '@remix-run/router'
 import type { NextRouter } from 'next/router'
@@ -41,6 +45,7 @@ const reactRouter: ReactRouter = {
   state: { location: { pathname: '/' }, matches: [] },
   subscribe: () => () => undefined
 }
+const webSocketResourceType: ResourceType = ResourceType.WEBSOCKET
 const wrappedReactRouterFactory = wrapCreateReactRouter(
   (): ReactRouter => reactRouter
 )
@@ -65,6 +70,7 @@ nuxtRumPlugin({ router: vueRouterInstance })
 datafluxRum.init({
   applicationId: 'framework-types',
   datakitOrigin: 'https://example.invalid',
+  enableExperimentalFeatures: [ExperimentalFeature.TRACK_WEBSOCKETS],
   plugins: [
     reactPlugin({ router: reactRouter }),
     vuePlugin({ router: vueRouter }),
@@ -77,6 +83,7 @@ datafluxRum.init({
 slimRum.init({
   applicationId: 'framework-types-slim',
   datakitOrigin: 'https://example.invalid',
+  enableExperimentalFeatures: ['track_websockets'],
   plugins: [reactPlugin()]
 })
 
@@ -84,6 +91,7 @@ const boundary: typeof ReactErrorBoundary = ReactErrorBoundary
 const boundaryProps: ErrorBoundaryProps = { fallback: null }
 void boundary
 void boundaryProps
+void webSocketResourceType
 void provideRumErrorHandler()
 void provideRumRouter()
 void RumNextjsAppRouter()

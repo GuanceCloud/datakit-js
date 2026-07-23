@@ -140,7 +140,44 @@ export var dataMap = {
       resource_first_byte_time: 'resource.first_byte_time',
       resource_connect_time: 'resource.connect_time',
       resource_ssl_time: 'resource.ssl_time',
-      resource_redirect_time: 'resource.redirect_time'
+      resource_redirect_time: 'resource.redirect_time',
+      resource_websocket_connection_id:
+        'resource.websocket.connection_id',
+      resource_websocket_handshake_succeeded:
+        'resource.websocket.handshake_succeeded',
+      resource_websocket_start_time: 'resource.websocket.start_time',
+      resource_websocket_end_time: 'resource.websocket.end_time',
+      resource_websocket_start_view_id:
+        'resource.websocket.start_view_id',
+      resource_websocket_end_view_id: 'resource.websocket.end_view_id',
+      resource_websocket_tracking_end_reason:
+        'resource.websocket.tracking_end_reason',
+      resource_websocket_close_code: 'resource.websocket.close_code',
+      resource_websocket_close_reason: 'resource.websocket.close_reason',
+      resource_websocket_was_clean: 'resource.websocket.was_clean',
+      resource_websocket_messages_in_count:
+        'resource.websocket.messages_in.count',
+      resource_websocket_messages_in_size:
+        'resource.websocket.messages_in.size',
+      resource_websocket_messages_out_count:
+        'resource.websocket.messages_out.count',
+      resource_websocket_messages_out_size:
+        'resource.websocket.messages_out.size',
+      resource_websocket_time_to_first_message_in:
+        'resource.websocket.time_to_first_message_in',
+      resource_websocket_time_to_first_message_out:
+        'resource.websocket.time_to_first_message_out',
+      resource_websocket_last_message_in_at:
+        'resource.websocket.last_message_in_at',
+      resource_websocket_longest_inbound_silence:
+        'resource.websocket.longest_inbound_silence',
+      resource_websocket_inbound_idle_duration_before_close:
+        'resource.websocket.inbound_idle_duration_before_close',
+      resource_websocket_buffered_amount_max:
+        'resource.websocket.buffered_amount_max',
+      resource_websocket_protocol: 'resource.websocket.protocol',
+      resource_websocket_setup_duration:
+        'resource.websocket.setup_duration'
     }
   },
   error: {

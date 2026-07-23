@@ -34,6 +34,99 @@ describe('resourceCollection', () => {
     globalThis.PerformanceObserver = OriginalPerformanceObserver
   })
 
+  it('should synchronously convert completed WebSockets into RUM resources', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    const collection = startResourceCollection(
+      lifeCycle,
+      {
+        resourceUrlLimit: 1024,
+        isIntakeUrl: () => false
+      },
+      {
+        wasInPageStateDuringPeriod: () => false
+      },
+      {
+        push: jasmine.createSpy('push')
+      },
+      () => {}
+    )
+    const webSocket = {}
+    lifeCycle.subscribe(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, collected)
+
+    lifeCycle.notify(LifeCycleEventType.WEBSOCKET_COMPLETED, {
+      webSocket,
+      connectionId: 'connection-1',
+      url: 'wss://example.com/rooms/42?token=masked',
+      protocol: 'chat.v1',
+      startClocks: { relative: 10, timeStamp: 1000 },
+      endClocks: { relative: 80, timeStamp: 1060 },
+      startViewId: 'view-a',
+      endViewId: 'view-b',
+      messagesIn: { count: 2, size: 16 },
+      messagesOut: { count: 1, size: 4 },
+      firstMessageInOffset: 5,
+      firstMessageOutOffset: 6,
+      lastMessageInAt: 1050,
+      longestInboundSilence: 20,
+      inboundIdleDurationBeforeClose: 10,
+      bufferedAmountMax: 8,
+      closeCode: 1000,
+      closeReason: 'done',
+      wasClean: true,
+      handshakeSucceeded: true,
+      trackingEndReason: 'close_event',
+      setupDuration: 4
+    })
+
+    expect(collected).toHaveBeenCalledTimes(1)
+    expect(collected.calls.mostRecent().args[0]).toEqual(
+      jasmine.objectContaining({
+        startTime: 10,
+        rawRumEvent: jasmine.objectContaining({
+          date: 1000,
+          type: 'resource',
+          resource: jasmine.objectContaining({
+            type: ResourceType.WEBSOCKET,
+            url: 'wss://example.com/rooms/42?token=masked',
+            urlHost: 'example.com',
+            urlPath: '/rooms/42',
+            urlPathGroup: '/rooms/?',
+            duration: 60000000,
+            websocket: {
+              connectionId: 'connection-1',
+              handshakeSucceeded: true,
+              startTime: 1000,
+              endTime: 1060,
+              startViewId: 'view-a',
+              endViewId: 'view-b',
+              trackingEndReason: 'close_event',
+              closeCode: 1000,
+              closeReason: 'done',
+              wasClean: true,
+              messagesIn: { count: 2, size: 16 },
+              messagesOut: { count: 1, size: 4 },
+              timeToFirstMessageIn: 5000000,
+              timeToFirstMessageOut: 6000000,
+              lastMessageInAt: 1050,
+              longestInboundSilence: 20000000,
+              inboundIdleDurationBeforeClose: 10000000,
+              bufferedAmountMax: 8,
+              protocol: 'chat.v1',
+              setupDuration: 4000000
+            }
+          })
+        }),
+        domainContext: {
+          isWebSocket: true,
+          webSocket
+        }
+      })
+    )
+
+    collection.stop()
+  })
+
   it('should delay tracked request resources until finishResource is called', () => {
     const lifeCycle = new LifeCycle()
     const collected = jasmine.createSpy('collected')

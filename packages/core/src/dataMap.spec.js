@@ -35,6 +35,12 @@ describe('dataMap', () => {
     expect(dataMap.resource.fields.resource_url_path_group).toBe(
       'resource.url_path_group'
     )
+    expect(
+      dataMap.resource.fields.resource_websocket_messages_in_count
+    ).toBe('resource.websocket.messages_in.count')
+    expect(
+      dataMap.resource.fields.resource_websocket_setup_duration
+    ).toBe('resource.websocket.setup_duration')
     expect(dataMap.view.fields.first_contentful_paint).toBe(
       'view.first_contentful_paint'
     )

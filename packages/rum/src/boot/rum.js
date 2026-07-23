@@ -30,6 +30,7 @@ import { startErrorCollection } from '../domain/rumEventsCollection/error/errorC
 import { startViewCollection } from '../domain/rumEventsCollection/view/viewCollection'
 import { startRequestCollection } from '../domain/requestCollection'
 import { startResourceCollection } from '../domain/rumEventsCollection/resource/resourceCollection'
+import { startWebSocketCollection } from '../domain/rumEventsCollection/resource/webSocketCollection'
 
 export function startRum(
   configuration,
@@ -145,6 +146,13 @@ export function startRum(
   )
   var addResource = _startResourceCollection.addResource
   cleanupTasks.push(_startResourceCollection.stop)
+  if (configuration.trackWebSockets) {
+    var webSocketCollection = startWebSocketCollection(
+      lifeCycle,
+      viewContexts
+    )
+    cleanupTasks.unshift(webSocketCollection.stop)
+  }
   if (
     PerformanceObserver.supportedEntryTypes &&
     PerformanceObserver.supportedEntryTypes.includes(

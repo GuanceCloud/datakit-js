@@ -13,7 +13,8 @@ import {
   catchUserErrors,
   getOrigin,
   each,
-  isNumber
+  isNumber,
+  ExperimentalFeature
 } from '@cloudcare/browser-core'
 import { buildEnv } from '../boot/buildEnv'
 import { isTracingOption } from '../domain/tracing/tracer'
@@ -295,6 +296,11 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
       replayCanvasWorkerUrl: initConfiguration.replayCanvasWorkerUrl,
       compressIntakeRequests: !!initConfiguration.compressIntakeRequests,
       trackUserInteractions: trackUserInteractions,
+      trackWebSockets:
+        isArray(initConfiguration.enableExperimentalFeatures) &&
+        initConfiguration.enableExperimentalFeatures.indexOf(
+          ExperimentalFeature.TRACK_WEBSOCKETS
+        ) !== -1,
       enableLongAnimationFrame: !!initConfiguration.enableLongAnimationFrame,
       trackViewsManually: !!initConfiguration.trackViewsManually,
       plugins: initConfiguration.plugins || [],
