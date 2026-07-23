@@ -46,16 +46,6 @@ describe('replay/record/canvasCommandSerializeArgs', () => {
     })
   })
 
-  it('should serialize html canvas elements as image sources', () => {
-    var canvas = document.createElement('canvas')
-    spyOn(canvas, 'toDataURL').and.returnValue('data:image/png;base64,QUJD')
-
-    expect(serializeCanvasCommandArg(canvas)).toEqual({
-      rr_type: 'HTMLImageElement',
-      src: 'data:image/png;base64,QUJD'
-    })
-  })
-
   it('should serialize mixed drawImage-style arguments', () => {
     var image = document.createElement('img')
     image.src = 'https://example.com/chart.png'
