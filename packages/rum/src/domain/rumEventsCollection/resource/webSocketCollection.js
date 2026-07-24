@@ -3,6 +3,7 @@ import {
   elapsed,
   initWebSocketObservable,
   LifeCycleEventType,
+  PageExitReason,
   UUID
 } from '@cloudcare/browser-core'
 
@@ -19,13 +20,29 @@ export function startWebSocketCollection(
   var sessionExpiredSubscription = lifeCycle.subscribe(
     LifeCycleEventType.SESSION_EXPIRED,
     function () {
-      tracker.flushOpenConnections('session_end')
+      tracker.flushOpenConnections('session_end', true)
+    }
+  )
+  var sessionRenewedSubscription = lifeCycle.subscribe(
+    LifeCycleEventType.SESSION_RENEWED,
+    function () {
+      tracker.resumeOpenConnections()
+    }
+  )
+  var pageExitSubscription = lifeCycle.subscribe(
+    LifeCycleEventType.PAGE_EXITED,
+    function (event) {
+      if (event.reason === PageExitReason.UNLOADING) {
+        tracker.flushOpenConnections('page_exit')
+      }
     }
   )
 
   return {
     stop: function () {
       sessionExpiredSubscription.unsubscribe()
+      sessionRenewedSubscription.unsubscribe()
+      pageExitSubscription.unsubscribe()
       tracker.flushOpenConnections('session_end')
       tracker.stop()
     }
@@ -38,26 +55,33 @@ export function trackWebSocket(
   viewContexts
 ) {
   var registry = new Map()
+  var isWaitingForSessionRenewal = false
   var subscription = webSocketContextObservable.subscribe(function (context) {
     var connection = registry.get(context.instance)
 
     if (context.state === 'connecting') {
-      var startView = viewContexts.findView(context.startClocks.relative)
-      registry.set(context.instance, {
-        webSocket: context.instance,
-        connectionId: UUID(),
-        url: context.url,
-        startClocks: context.startClocks,
-        startViewId: startView && startView.id,
-        messagesIn: { count: 0, size: 0 },
-        messagesOut: { count: 0, size: 0 },
-        longestInboundSilence: 0,
-        bufferedAmountMax: 0
-      })
+      connection = createConnection(
+        context.instance,
+        context.url,
+        context.startClocks,
+        viewContexts
+      )
+      connection.pendingSessionRenewal = isWaitingForSessionRenewal
+      registry.set(context.instance, connection)
       return
     }
 
     if (!connection) {
+      return
+    }
+
+    if (connection.pendingSessionRenewal) {
+      if (context.state === 'open') {
+        connection.openClocks = context.openClocks
+        connection.protocol = context.protocol
+      } else if (context.state === 'closed') {
+        registry.delete(context.instance)
+      }
       return
     }
 
@@ -104,20 +128,73 @@ export function trackWebSocket(
   })
 
   return {
-    flushOpenConnections: function (reason) {
+    flushOpenConnections: function (reason, preserveConnections) {
       var at = clocksNow()
+      isWaitingForSessionRenewal = !!preserveConnections
       registry.forEach(function (connection) {
+        if (connection.pendingSessionRenewal) {
+          return
+        }
         lifeCycle.notify(
           LifeCycleEventType.WEBSOCKET_COMPLETED,
           buildCompletedEvent(connection, { at: at }, reason, viewContexts)
         )
+        if (preserveConnections) {
+          connection.pendingSessionRenewal = true
+        }
       })
-      registry.clear()
+      if (!preserveConnections) {
+        registry.clear()
+      }
+    },
+    resumeOpenConnections: function () {
+      var at = clocksNow()
+      isWaitingForSessionRenewal = false
+      registry.forEach(function (connection) {
+        if (connection.pendingSessionRenewal) {
+          resetConnectionSegment(connection, at, viewContexts)
+        }
+      })
     },
     stop: function () {
       subscription.unsubscribe()
       registry.clear()
     }
+  }
+}
+
+function createConnection(webSocket, url, startClocks, viewContexts) {
+  var connection = {
+    webSocket: webSocket,
+    connectionId: UUID(),
+    url: url
+  }
+  resetConnectionSegment(connection, startClocks, viewContexts)
+  return connection
+}
+
+function resetConnectionSegment(connection, startClocks, viewContexts) {
+  var wasOpen = connection.openClocks !== undefined
+  var startView = viewContexts.findView(startClocks.relative)
+
+  connection.startClocks = startClocks
+  connection.startViewId = startView && startView.id
+  connection.messagesIn = { count: 0, size: 0 }
+  connection.messagesOut = { count: 0, size: 0 }
+  connection.longestInboundSilence = 0
+  connection.bufferedAmountMax = 0
+  connection.pendingSessionRenewal = false
+
+  delete connection.firstMessageInOffset
+  delete connection.firstMessageOutOffset
+  delete connection.lastMessageInAt
+
+  if (wasOpen) {
+    connection.openClocks = startClocks
+    connection.setupDuration = 0
+  } else {
+    delete connection.openClocks
+    delete connection.setupDuration
   }
 }
 
@@ -156,7 +233,7 @@ function buildCompletedEvent(
   var endClocks = endInfo.at
   var endView = viewContexts.findView(
     endClocks.relative,
-    trackingEndReason === 'session_end'
+    trackingEndReason === 'session_end' || trackingEndReason === 'page_exit'
       ? { returnInactive: true }
       : undefined
   )

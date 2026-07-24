@@ -4,7 +4,7 @@ import {
   inject,
   makeEnvironmentProviders
 } from '@angular/core'
-import { GuardsCheckEnd, NavigationEnd, Router } from '@angular/router'
+import { NavigationEnd, Router } from '@angular/router'
 import { addAngularError, trackAngularRouter } from './index'
 
 class AngularRumErrorHandler extends ErrorHandler {
@@ -41,8 +41,5 @@ export function provideRumRouter() {
 }
 
 function isSuccessfulNavigationEvent(event) {
-  if (event instanceof GuardsCheckEnd) {
-    return event.shouldActivate
-  }
   return event instanceof NavigationEnd
 }

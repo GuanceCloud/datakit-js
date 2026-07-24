@@ -1,4 +1,8 @@
-import { clocksNow, createHandlingStack } from '@cloudcare/browser-core'
+import {
+  clocksNow,
+  createHandlingStack,
+  setTimeout
+} from '@cloudcare/browser-core'
 
 var activeRum
 var activeAddError
@@ -285,6 +289,20 @@ function remember(seen, error) {
     seen.add(error)
   } else {
     seen.push(error)
+  }
+  setTimeout(function () {
+    forget(seen, error)
+  }, 0)
+}
+
+function forget(seen, error) {
+  if (typeof seen.delete === 'function') {
+    seen.delete(error)
+    return
+  }
+  var index = seen.indexOf(error)
+  if (index !== -1) {
+    seen.splice(index, 1)
   }
 }
 

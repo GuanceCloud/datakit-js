@@ -1,7 +1,7 @@
 const path = require('path')
 
-const reactDirectory = path.resolve(__dirname, '../node_modules/react')
-const reactDomDirectory = path.resolve(__dirname, '../node_modules/react-dom')
+const reactDirectory = path.dirname(require.resolve('react/package.json'))
+const reactDomDirectory = path.dirname(require.resolve('react-dom/package.json'))
 
 module.exports = (env, args) => ({
   mode: args.mode,

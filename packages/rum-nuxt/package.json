@@ -29,8 +29,8 @@
         "@cloudcare/browser-rum": ">=3.3.5",
         "@cloudcare/browser-rum-slim": ">=3.3.5",
         "nuxt": "3 || 4",
-        "vue": ">=3.5",
-        "vue-router": ">=4 <6"
+        "vue": "3",
+        "vue-router": "4"
     },
     "peerDependenciesMeta": {
         "@cloudcare/browser-rum": {

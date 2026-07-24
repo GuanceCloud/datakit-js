@@ -1,12 +1,16 @@
 import { createMemoryRouter } from 'react-router-dom'
+import { createMemoryRouter as createMemoryRouterV7 } from 'react-router-7'
+import { createMemoryRouter as createMemoryRouterV8 } from 'react-router'
 import {
   addReactError,
-  computeReactRouterViewName,
   createErrorBoundary,
-  reactPlugin,
-  resetReactPlugin,
-  wrapCreateReactRouter
+  reactPlugin
 } from './index'
+import { resetReactPlugin } from './domain/pluginState'
+import {
+  computeReactRouterViewName,
+  wrapCreateRouter
+} from './domain/reactRouter'
 
 describe('rum react plugin', () => {
   beforeEach(() => {
@@ -99,7 +103,7 @@ describe('rum react plugin', () => {
       addError: jasmine.createSpy('addError'),
       startView: jasmine.createSpy('startView')
     }
-    const createRouter = wrapCreateReactRouter(createMemoryRouter)
+    const createRouter = wrapCreateRouter(createMemoryRouter)
     const router = createRouter(
       [
         {
@@ -130,4 +134,84 @@ describe('rum react plugin', () => {
     expect(rum.startView.calls.mostRecent().args[0].name).toBe('/users/:id')
     router.dispose()
   })
+
+  it('should track a React Router v7 data router', async () => {
+    await expectDataRouterViews(createMemoryRouterV7)
+  })
+
+  it('should track a React Router v8 data router', async () => {
+    await expectDataRouterViews(createMemoryRouterV8)
+  })
+
+  it('should replay an initial loader error to the next router subscriber', () => {
+    const state = {
+      location: { pathname: '/' },
+      matches: [{ route: { path: '/' }, params: {} }]
+    }
+    let subscriberCount = 0
+    const router = {
+      state,
+      subscribe: function (callback) {
+        subscriberCount += 1
+        if (subscriberCount === 1) {
+          callback(state, { newErrors: { root: new Error('loader failed') } })
+        }
+        return function () {}
+      }
+    }
+    const createRouter = wrapCreateRouter(function () {
+      return router
+    })
+    const instrumentedRouter = createRouter()
+    const routerProviderSubscriber = jasmine.createSpy(
+      'routerProviderSubscriber'
+    )
+
+    instrumentedRouter.subscribe(routerProviderSubscriber)
+
+    expect(routerProviderSubscriber).toHaveBeenCalledOnceWith(
+      state,
+      jasmine.objectContaining({ newErrors: jasmine.any(Object) })
+    )
+  })
 })
+
+async function expectDataRouterViews(createMemoryRouterForVersion) {
+  const rum = {
+    startView: jasmine.createSpy('startView')
+  }
+  const createRouter = wrapCreateRouter(createMemoryRouterForVersion)
+  const router = createRouter(
+    [{ path: '/orders/:orderId', element: null }],
+    { initialEntries: ['/orders/1'] }
+  )
+
+  reactPlugin({ router: true }).onInit({
+    publicApi: rum,
+    rum,
+    initConfiguration: {}
+  })
+  await router.navigate('/orders/2')
+
+  expect(rum.startView.calls.allArgs()).toEqual([
+    [
+      {
+        name: '/orders/:orderId',
+        context: {
+          framework: 'react',
+          router: 'react-router'
+        }
+      }
+    ],
+    [
+      {
+        name: '/orders/:orderId',
+        context: {
+          framework: 'react',
+          router: 'react-router'
+        }
+      }
+    ]
+  ])
+  router.dispose()
+}

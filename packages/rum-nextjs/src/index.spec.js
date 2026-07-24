@@ -51,7 +51,7 @@ describe('rum nextjs plugin', () => {
     })
   })
 
-  it('should start App Router transitions before rendering the route', () => {
+  it('should wait for an App Router transition to commit before starting a view', () => {
     const rum = {
       setViewName: jasmine.createSpy('setViewName'),
       startView: jasmine.createSpy('startView')
@@ -60,20 +60,15 @@ describe('rum nextjs plugin', () => {
     rum.startView.calls.reset()
 
     onRouterTransitionStart('/users/42?tab=profile')
-    startNextjsView('/about')
+    expect(rum.startView).not.toHaveBeenCalled()
+
+    startNextjsView('/users/[id]')
 
     expect(rum.startView.calls.allArgs()).toEqual([
       [
         {
-          name: undefined,
+          name: '/users/[id]',
           url: window.location.origin + '/users/42?tab=profile',
-          context: { framework: 'nextjs', router: 'next-router' }
-        }
-      ],
-      [
-        {
-          name: '/about',
-          url: undefined,
           context: { framework: 'nextjs', router: 'next-router' }
         }
       ]
@@ -148,15 +143,22 @@ describe('rum nextjs plugin', () => {
         slug: ['a', 'b']
       })
     ).toBe('/x/[...slug]')
+    expect(
+      computeViewNameFromParams('/users/users', { id: 'users' })
+    ).toBe('/users/users')
+    expect(
+      computeViewNameFromParams('/a/b/a/b', { slug: ['a', 'b'] })
+    ).toBe('/a/b/a/b')
   })
 
-  it('should track Pages Router completions and ignore query-only changes', () => {
+  it('should track only completed Pages Router transitions', () => {
     const rum = {
       setViewName: jasmine.createSpy('setViewName'),
       startView: jasmine.createSpy('startView')
     }
     var routeChangeStart
     var routeChangeComplete
+    var routeChangeError
     const router = {
       isReady: true,
       pathname: '/users/[id]',
@@ -167,6 +169,8 @@ describe('rum nextjs plugin', () => {
             routeChangeStart = callback
           } else if (name === 'routeChangeComplete') {
             routeChangeComplete = callback
+          } else if (name === 'routeChangeError') {
+            routeChangeError = callback
           }
         }),
         off: jasmine.createSpy('off')
@@ -175,20 +179,27 @@ describe('rum nextjs plugin', () => {
 
     const stop = trackNextjsRouter(router, rum)
     routeChangeStart('/users/42?tab=activity')
+    expect(rum.startView).toHaveBeenCalledTimes(1)
     routeChangeComplete('/users/42?tab=activity')
+
+    routeChangeStart('/canceled')
+    routeChangeError(new Error('canceled'), '/canceled')
+    expect(rum.startView).toHaveBeenCalledTimes(1)
+
     router.asPath = '/users/43'
     routeChangeStart('/users/43')
+    expect(rum.startView).toHaveBeenCalledTimes(1)
     routeChangeComplete('/users/43')
     stop()
 
     expect(rum.startView).toHaveBeenCalledTimes(2)
     expect(rum.startView.calls.allArgs()[0][0].name).toBe('/users/[id]')
     expect(rum.startView.calls.allArgs()[1][0]).toEqual({
-      name: undefined,
+      name: '/users/[id]',
       url: window.location.origin + '/users/43',
       context: { framework: 'nextjs', router: 'next-router' }
     })
-    expect(rum.setViewName).toHaveBeenCalledOnceWith('/users/[id]')
+    expect(rum.setViewName).not.toHaveBeenCalled()
     expect(router.events.off).toHaveBeenCalledWith(
       'routeChangeStart',
       routeChangeStart
@@ -197,9 +208,42 @@ describe('rum nextjs plugin', () => {
       'routeChangeComplete',
       routeChangeComplete
     )
+    expect(router.events.off).toHaveBeenCalledWith(
+      'routeChangeError',
+      routeChangeError
+    )
   })
 
-  it('should start Pages Router views before the route renders', async () => {
+  it('should allow a Pages Router view name callback to skip a transition', () => {
+    const rum = {
+      setViewName: jasmine.createSpy('setViewName'),
+      startView: jasmine.createSpy('startView')
+    }
+    const callbacks = {}
+    const router = {
+      isReady: false,
+      pathname: '/private',
+      asPath: '/private',
+      events: {
+        on: function (name, callback) {
+          callbacks[name] = callback
+        },
+        off: jasmine.createSpy('off')
+      }
+    }
+
+    trackNextjsRouter(router, rum, {
+      getViewName: function () {
+        return undefined
+      }
+    })
+    callbacks.routeChangeStart('/private')
+    callbacks.routeChangeComplete('/private')
+
+    expect(rum.startView).not.toHaveBeenCalled()
+  })
+
+  it('should start Pages Router views after the route commits', async () => {
     const rum = {
       setViewName: jasmine.createSpy('setViewName'),
       startView: jasmine.createSpy('startView')
@@ -229,11 +273,7 @@ describe('rum nextjs plugin', () => {
     expect(rum.startView).toHaveBeenCalledTimes(1)
 
     callbacks.routeChangeStart('/about')
-    expect(rum.startView.calls.allArgs()[1][0]).toEqual({
-      name: undefined,
-      url: window.location.origin + '/about',
-      context: { framework: 'nextjs', router: 'next-router' }
-    })
+    expect(rum.startView).toHaveBeenCalledTimes(1)
 
     router.pathname = '/about'
     router.asPath = '/about'
@@ -242,7 +282,12 @@ describe('rum nextjs plugin', () => {
     })
 
     expect(rum.startView).toHaveBeenCalledTimes(2)
-    expect(rum.setViewName).toHaveBeenCalledOnceWith('/about')
+    expect(rum.startView.calls.allArgs()[1][0]).toEqual({
+      name: '/about',
+      url: window.location.origin + '/about',
+      context: { framework: 'nextjs', router: 'next-router' }
+    })
+    expect(rum.setViewName).not.toHaveBeenCalled()
 
     await act(async function () {
       root.unmount()
@@ -251,9 +296,13 @@ describe('rum nextjs plugin', () => {
       'routeChangeStart',
       callbacks.routeChangeStart
     )
+    expect(router.events.off).toHaveBeenCalledWith(
+      'routeChangeError',
+      callbacks.routeChangeError
+    )
   })
 
-  it('should start App Router views before following components render', async () => {
+  it('should start App Router views after React commits the route', async () => {
     const rum = {
       setViewName: jasmine.createSpy('setViewName'),
       startView: jasmine.createSpy('startView')
@@ -288,12 +337,12 @@ describe('rum nextjs plugin', () => {
     })
 
     expect(rum.startView).toHaveBeenCalledOnceWith({
-      name: undefined,
+      name: '/users/[id]',
       url: window.location.origin + '/users/42',
       context: { framework: 'nextjs', router: 'next-router' }
     })
-    expect(rum.setViewName).toHaveBeenCalledOnceWith('/users/[id]')
-    expect(renderOrder.slice(0, 2)).toEqual(['start-view', 'content'])
+    expect(rum.setViewName).not.toHaveBeenCalled()
+    expect(renderOrder.slice(0, 2)).toEqual(['content', 'start-view'])
 
     onRouterTransitionStart('/users/42?tab=activity')
     setNextNavigation('/users/42', { id: '42' })
@@ -322,6 +371,24 @@ describe('rum nextjs plugin', () => {
       )
     })
     expect(rum.startView).toHaveBeenCalledTimes(2)
+
+    onRouterTransitionStart('/private')
+    setNextNavigation('/login', {})
+    await act(async function () {
+      root.render(
+        React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(RumNextjsAppRouter),
+          React.createElement(Content)
+        )
+      )
+    })
+    expect(rum.startView.calls.allArgs()[2][0]).toEqual({
+      name: '/login',
+      url: window.location.origin + '/login',
+      context: { framework: 'nextjs', router: 'next-router' }
+    })
 
     await act(async function () {
       root.unmount()

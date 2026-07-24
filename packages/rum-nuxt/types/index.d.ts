@@ -18,16 +18,12 @@ export interface NuxtComponentInstance {
 export interface NuxtApp {
   vueApp: {
     config: {
-      errorHandler?: (
-        error: unknown,
-        instance: NuxtComponentInstance | null,
-        info: string
-      ) => unknown
+      errorHandler?: (...args: any[]) => unknown
     }
   }
-  hook?: (name: string, callback: (...args: any[]) => void) => unknown
+  hook?: (name: any, callback: any, ...args: any[]) => unknown
   hooks?: {
-    hook?: (name: string, callback: (...args: any[]) => void) => unknown
+    hook?: (name: any, callback: any, ...args: any[]) => unknown
   }
 }
 

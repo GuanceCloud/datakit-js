@@ -1,0 +1,7 @@
+{
+  "name": "@cloudcare/browser-rum-vue/vue-router-v3",
+  "private": true,
+  "main": "../cjs/entries/vueRouterV3.js",
+  "module": "../esm/entries/vueRouterV3.js",
+  "types": "../types/vueRouterV3.d.ts"
+}

@@ -1,11 +1,15 @@
-import { createMemoryHistory, createRouter } from 'vue-router'
+import { createMemoryHistory } from 'vue-router'
 import {
   addVueError,
-  computeVueRouterViewName,
   installVueErrorHandler,
-  resetVuePlugin,
   vuePlugin
 } from './index'
+import { resetVuePlugin } from './domain/pluginState'
+import {
+  computeVueRouterViewName,
+  wrapRouterConstructor
+} from './domain/vueRouter'
+import { createRouter } from './entries/vueRouterV4'
 
 describe('rum vue plugin', () => {
   beforeEach(() => {
@@ -19,16 +23,14 @@ describe('rum vue plugin', () => {
     }
     const previousErrorHandler = jasmine.createSpy('previousErrorHandler')
     const app = { config: { errorHandler: previousErrorHandler } }
-    const router = { afterEach: jasmine.createSpy('afterEach') }
     const initConfiguration = {}
-    const plugin = vuePlugin({ app, router })
+    const plugin = vuePlugin({ app, router: true })
 
     plugin.onInit({ publicApi: rum, rum, initConfiguration })
 
     expect(initConfiguration.trackViewsManually).toBeTrue()
     expect(app.config.errorHandler).toEqual(jasmine.any(Function))
     expect(app.config.errorHandler).not.toBe(previousErrorHandler)
-    expect(router.afterEach).toHaveBeenCalled()
     expect(plugin.getConfigurationTelemetry()).toEqual({ router: true })
   })
 
@@ -120,6 +122,9 @@ describe('rum vue plugin', () => {
         '/org/123/a/b'
       )
     ).toBe('/org/:orgId/a/b')
+    expect(computeVueRouterViewName([{ path: '*' }], '/not/found')).toBe(
+      '/not/found'
+    )
   })
 
   it('should track a real Vue Router and ignore query-only navigation', async () => {
@@ -134,7 +139,11 @@ describe('rum vue plugin', () => {
     await router.push('/users/42?tab=profile')
 
     const initConfiguration = {}
-    vuePlugin({ router }).onInit({ publicApi: rum, rum, initConfiguration })
+    vuePlugin({ router: true }).onInit({
+      publicApi: rum,
+      rum,
+      initConfiguration
+    })
     await router.push('/users/42?tab=activity')
     await router.push('/users/43')
 
@@ -154,5 +163,25 @@ describe('rum vue plugin', () => {
         }
       ]
     ])
+  })
+
+  it('should preserve Vue Router 3 constructor statics and instrument instances', () => {
+    const install = jasmine.createSpy('install')
+    const afterEach = jasmine.createSpy('afterEach')
+    function VueRouter() {
+      this.currentRoute = {
+        path: '/legacy',
+        matched: [{ path: '/legacy' }]
+      }
+      this.afterEach = afterEach
+    }
+    VueRouter.install = install
+
+    const InstrumentedVueRouter = wrapRouterConstructor(VueRouter)
+    const router = new InstrumentedVueRouter()
+
+    expect(InstrumentedVueRouter.install).toBe(install)
+    expect(router instanceof VueRouter).toBeTrue()
+    expect(afterEach).toHaveBeenCalled()
   })
 })

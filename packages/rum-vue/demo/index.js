@@ -1,12 +1,12 @@
 import { createApp, defineComponent, h, ref } from 'vue'
 import {
   RouterView,
-  createRouter,
   createWebHistory,
   useRoute,
   useRouter
 } from 'vue-router'
 import { vuePlugin } from '../src'
+import { createRouter } from '../src/entries/vueRouterV4'
 import {
   createFrameworkDemo,
   createRumConfiguration
@@ -80,7 +80,11 @@ var app = createApp(App)
 
 try {
   window.DATAFLUX_RUM.init(
-    createRumConfiguration('vue', vuePlugin({ app: app, router: router }), demo)
+    createRumConfiguration(
+      'vue',
+      vuePlugin({ app: app, router: true }),
+      demo
+    )
   )
   app.use(router)
   app.mount('#app')

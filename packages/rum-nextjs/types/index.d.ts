@@ -14,6 +14,13 @@ export interface NextjsPluginConfiguration {
   getViewName?: (url: string, router: NextRouter) => string | undefined
 }
 
+export interface RumNextjsAppRouterProps {
+  getViewName?: (
+    pathname: string,
+    params: Record<string, string | string[] | undefined>
+  ) => string | undefined
+}
+
 export interface RumPlugin {
   name: string
   onInit?: (context: {
@@ -51,7 +58,9 @@ export declare function addNextjsError(
   context?: Context
 ): void
 export declare const ErrorBoundary: React.ComponentClass<ErrorBoundaryProps>
-export declare function RumNextjsAppRouter(): null
+export declare function RumNextjsAppRouter(
+  props?: RumNextjsAppRouterProps
+): null
 export declare function RumNextjsPagesRouter(): null
 export declare function trackNextjsRouter(
   router: NextRouter,

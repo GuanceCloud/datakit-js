@@ -56,12 +56,8 @@ export function nextjsPlugin(configuration) {
 export function onRouterTransitionStart(url) {
   lastNavigationUrl = url
   var path = normalizePath(url)
-  if (activeRum && !activeConfiguration.router) {
-    if (path !== lastStartedPath) {
-      startNextjsView(undefined, url, activeRum)
-    } else {
-      lastNavigationUrl = undefined
-    }
+  if (activeRum && !activeConfiguration.router && path === lastStartedPath) {
+    lastNavigationUrl = undefined
   }
 }
 
@@ -104,19 +100,27 @@ export var ErrorBoundary = createErrorBoundary(
   'RumNextjsErrorBoundary'
 )
 
-export function RumNextjsAppRouter() {
+export function RumNextjsAppRouter(props) {
   var pathname = usePathname()
   var params = useParams() || {}
   var previousPathname = useRef(null)
-  var viewName = pathname
-    ? computeViewNameFromParams(pathname, params)
-    : undefined
+  var viewName
+  if (pathname) {
+    viewName =
+      props && typeof props.getViewName === 'function'
+        ? props.getViewName(pathname, params)
+        : computeViewNameFromParams(pathname, params)
+  }
 
   useEffect(
     function () {
       if (pathname && previousPathname.current !== pathname) {
         previousPathname.current = pathname
-        updateNextjsView(normalizePath(pathname), viewName, pathname)
+        updateNextjsView(
+          normalizePath(pathname),
+          viewName,
+          getCommittedAppRouterUrl(pathname)
+        )
       }
     },
     [pathname, viewName]
@@ -139,10 +143,15 @@ export function RumNextjsPagesRouter() {
       var handleRouteChangeStart = function (url) {
         onRouterTransitionStart(url)
       }
+      var handleRouteChangeError = function () {
+        lastNavigationUrl = undefined
+      }
       router.events.on('routeChangeStart', handleRouteChangeStart)
+      router.events.on('routeChangeError', handleRouteChangeError)
       return function () {
         if (typeof router.events.off === 'function') {
           router.events.off('routeChangeStart', handleRouteChangeStart)
+          router.events.off('routeChangeError', handleRouteChangeError)
         }
       }
     },
@@ -170,22 +179,32 @@ export function trackNextjsRouter(router, rum, options) {
   }
 
   var lastPath
+  var pendingPath
   var startTransition = function (url) {
     var path = normalizePath(url || router.asPath || router.pathname)
     if (path === lastPath) {
+      pendingPath = undefined
       return
     }
-    lastPath = path
-    startNextjsView(undefined, url, rum)
+    pendingPath = path
   }
   var completeTransition = function (url) {
     var path = normalizePath(url || router.asPath || router.pathname)
-    lastPath = path
+    pendingPath = undefined
     var name =
       typeof options.getViewName === 'function'
         ? options.getViewName(url, router)
         : router.pathname || path
+    if (name === undefined) {
+      return
+    }
+    lastPath = path
     updateNextjsView(path, name, url, rum)
+  }
+  var cancelTransition = function (error, url) {
+    if (!url || normalizePath(url) === pendingPath) {
+      pendingPath = undefined
+    }
   }
 
   if (router.isReady && (router.asPath || router.pathname)) {
@@ -197,10 +216,12 @@ export function trackNextjsRouter(router, rum, options) {
   }
   router.events.on('routeChangeStart', startTransition)
   router.events.on('routeChangeComplete', completeTransition)
+  router.events.on('routeChangeError', cancelTransition)
   if (typeof router.events.off === 'function') {
     return function () {
       router.events.off('routeChangeStart', startTransition)
       router.events.off('routeChangeComplete', completeTransition)
+      router.events.off('routeChangeError', cancelTransition)
     }
   }
 }
@@ -219,15 +240,16 @@ export function computeViewNameFromParams(pathname, params) {
     if (!Array.isArray(catchAllValue) || catchAllValue.length === 0) {
       continue
     }
-    for (var segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-      if (matchesSegments(segments, segmentIndex, catchAllValue)) {
-        segments.splice(
-          segmentIndex,
-          catchAllValue.length,
-          '[...' + catchAllName + ']'
-        )
-        break
-      }
+    var segmentIndex = findUniqueSegmentSequenceIndex(
+      segments,
+      catchAllValue
+    )
+    if (segmentIndex !== -1) {
+      segments.splice(
+        segmentIndex,
+        catchAllValue.length,
+        '[...' + catchAllName + ']'
+      )
     }
   }
 
@@ -237,7 +259,7 @@ export function computeViewNameFromParams(pathname, params) {
     if (typeof value !== 'string' || !value) {
       continue
     }
-    var index = segments.indexOf(value)
+    var index = findUniqueSegmentIndex(segments, value)
     if (index !== -1) {
       segments[index] = '[' + name + ']'
     }
@@ -270,6 +292,10 @@ function startInitialAppRouterView() {
 }
 
 function updateNextjsView(path, viewName, viewUrl, rum) {
+  lastNavigationUrl = undefined
+  if (viewName === undefined) {
+    return
+  }
   var targetRum = rum || activeRum
   if (path !== lastStartedPath) {
     startNextjsView(viewName, viewUrl, targetRum)
@@ -283,6 +309,43 @@ function updateNextjsView(path, viewName, viewUrl, rum) {
     targetRum.setViewName(viewName)
     lastStartedViewName = viewName
   }
+}
+
+function getCommittedAppRouterUrl(pathname) {
+  if (
+    lastNavigationUrl &&
+    normalizePath(lastNavigationUrl) === normalizePath(pathname)
+  ) {
+    return lastNavigationUrl
+  }
+  return pathname
+}
+
+function findUniqueSegmentIndex(segments, value) {
+  var matchIndex = -1
+  for (var i = 0; i < segments.length; i += 1) {
+    if (segments[i] === value) {
+      if (matchIndex !== -1) {
+        return -1
+      }
+      matchIndex = i
+    }
+  }
+  return matchIndex
+}
+
+function findUniqueSegmentSequenceIndex(segments, values) {
+  var matchIndex = -1
+  for (var i = 0; i <= segments.length - values.length; i += 1) {
+    if (!matchesSegments(segments, i, values)) {
+      continue
+    }
+    if (matchIndex !== -1) {
+      return -1
+    }
+    matchIndex = i
+  }
+  return matchIndex
 }
 
 function matchesSegments(segments, startIndex, values) {

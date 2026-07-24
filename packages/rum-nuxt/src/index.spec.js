@@ -77,7 +77,7 @@ describe('rum nuxt plugin', () => {
     )
   })
 
-  it('should deduplicate Vue and app:error reports and preserve custom handling', () => {
+  it('should deduplicate one error propagation and allow a later occurrence', async () => {
     const reportError = jasmine.createSpy('reportError')
     const previousErrorHandler = jasmine.createSpy('previousErrorHandler')
     const hooks = {}
@@ -109,6 +109,13 @@ describe('rum nuxt plugin', () => {
       'render'
     ])
     expect(previousErrorHandler).toHaveBeenCalledTimes(2)
+
+    await new Promise(function (resolve) {
+      setTimeout(resolve, 0)
+    })
+    hooks['app:error'](error)
+
+    expect(reportError).toHaveBeenCalledTimes(3)
   })
 
   it('should stop calling the Nuxt default handler after suspense resolves', () => {

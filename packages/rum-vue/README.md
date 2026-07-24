@@ -2,6 +2,9 @@
 
 Vue integration for `@cloudcare/browser-rum` and `@cloudcare/browser-rum-slim`.
 
+Detailed Chinese guide:
+[Vue RUM integration](https://github.com/GuanceCloud/datakit-js/blob/master/docs/rum/framework-vue.zh.md).
+
 ```bash
 npm install @cloudcare/browser-rum @cloudcare/browser-rum-vue
 ```
@@ -12,30 +15,54 @@ import { vuePlugin } from '@cloudcare/browser-rum-vue'
 
 datafluxRum.init({
   applicationId: '<APP_ID>',
-  datakitOrigin: '<DATAKIT_ORIGIN>',
-  plugins: [vuePlugin({ app, router })]
+  clientToken: '<CLIENT_TOKEN>',
+  site: '<PUBLIC_DATAWAY_URL>',
+  plugins: [vuePlugin({ app, router: true })]
 })
 ```
 
-Passing `app` installs a Vue error handler while preserving the application's existing
-handler. Passing `router` enables manual view tracking, ignores query-only changes, and
-uses matched route templates such as `/users/:id` as view names.
+For a DataKit direct connection, replace `site` and `clientToken` with
+`datakitOrigin`. Do not configure both reporting modes.
 
-For routers created before RUM initialization, either pass the router instance to the
-plugin or wrap the router factory:
+Passing `app` installs a Vue error handler while preserving the application's existing
+handler. Setting `router: true` enables manual view tracking. Import the Router creation
+API from the entry matching the installed Vue Router major.
+
+## Vue 3 and Vue Router 4
 
 ```js
-import { createRouter as createVueRouter } from 'vue-router'
-import { wrapCreateVueRouter } from '@cloudcare/browser-rum-vue'
+import { createWebHistory } from 'vue-router'
+import { createRouter } from '@cloudcare/browser-rum-vue/vue-router-v4'
 
-const createRouter = wrapCreateVueRouter(createVueRouter)
-const router = createRouter(routerOptions)
+const router = createRouter({
+  history: createWebHistory(),
+  routes
+})
 
 datafluxRum.init({
   // ...
   plugins: [vuePlugin({ app, router: true })]
 })
 ```
+
+## Vue 2.7 and Vue Router 3
+
+```js
+import Vue from 'vue'
+import VueRouter from '@cloudcare/browser-rum-vue/vue-router-v3'
+import { vuePlugin } from '@cloudcare/browser-rum-vue'
+
+Vue.use(VueRouter)
+const router = new VueRouter({ routes })
+
+datafluxRum.init({
+  // ...
+  plugins: [vuePlugin({ app: Vue, router: true })]
+})
+```
+
+Both entries ignore query-only navigation and use matched route templates such
+as `/users/:id` as view names.
 
 `addVueError(error, instance, info, context)` is available for custom handlers.
 

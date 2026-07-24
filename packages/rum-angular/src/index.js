@@ -179,12 +179,6 @@ function isSuccessfulNavigationEvent(event, options) {
   if (typeof options.navigationEventMatcher === 'function') {
     return options.navigationEventMatcher(event)
   }
-  if (
-    typeof event.shouldActivate === 'boolean' &&
-    event.state !== undefined
-  ) {
-    return event.shouldActivate !== false
-  }
   return (
     typeof event.id === 'number' &&
     typeof event.url === 'string' &&

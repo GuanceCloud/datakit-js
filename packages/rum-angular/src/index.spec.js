@@ -1,5 +1,5 @@
 import '@angular/compiler'
-import { GuardsCheckEnd } from '@angular/router'
+import { NavigationEnd } from '@angular/router'
 
 import {
   addAngularError,
@@ -102,21 +102,11 @@ describe('rum angular plugin', () => {
     ).toBe('/missing/page')
   })
 
-  it('should track successful guarded navigation and ignore query-only changes', () => {
+  it('should track completed navigation and ignore guards and query-only changes', () => {
     const rum = {
       startView: jasmine.createSpy('startView')
     }
     var routerSubscriber
-    const router = {
-      events: {
-        subscribe: jasmine
-          .createSpy('subscribe')
-          .and.callFake(function (callback) {
-            routerSubscriber = callback
-            return { unsubscribe: jasmine.createSpy('unsubscribe') }
-          })
-      }
-    }
     const root = {
       children: [
         {
@@ -132,27 +122,42 @@ describe('rum angular plugin', () => {
         }
       ]
     }
+    const router = {
+      events: {
+        subscribe: jasmine
+          .createSpy('subscribe')
+          .and.callFake(function (callback) {
+            routerSubscriber = callback
+            return { unsubscribe: jasmine.createSpy('unsubscribe') }
+          })
+      },
+      routerState: {
+        snapshot: { root }
+      }
+    }
 
     trackAngularRouter(router, rum)
     routerSubscriber(
-      new GuardsCheckEnd(1, '/orders/42', '/orders/42', { root }, false)
+      {
+        id: 1,
+        url: '/orders/42',
+        urlAfterRedirects: '/orders/42',
+        state: { root },
+        shouldActivate: true
+      }
     )
     routerSubscriber(
-      new GuardsCheckEnd(
+      new NavigationEnd(
         2,
         '/orders/42?tab=items',
-        '/orders/42?tab=items',
-        { root },
-        true
+        '/orders/42?tab=items'
       )
     )
     routerSubscriber(
-      new GuardsCheckEnd(
+      new NavigationEnd(
         3,
         '/orders/42?tab=summary',
-        '/orders/42?tab=summary',
-        { root },
-        true
+        '/orders/42?tab=summary'
       )
     )
 

@@ -3,15 +3,11 @@ import { createRoot } from 'react-dom/client'
 import {
   Outlet,
   RouterProvider,
-  createBrowserRouter,
   useLocation,
   useNavigate
 } from 'react-router-dom'
-import {
-  ErrorBoundary,
-  reactPlugin,
-  wrapCreateReactRouter
-} from '../src'
+import { ErrorBoundary, reactPlugin } from '../src'
+import { createBrowserRouter } from '../src/entries/reactRouterV6'
 import {
   createFrameworkDemo,
   createRumConfiguration
@@ -78,8 +74,7 @@ function ErrorFallback(props) {
   )
 }
 
-var createRouter = wrapCreateReactRouter(createBrowserRouter)
-var router = createRouter(
+var router = createBrowserRouter(
   [
     {
       path: '/',

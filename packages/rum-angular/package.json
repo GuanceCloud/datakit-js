@@ -7,11 +7,13 @@
     "exports": {
         ".": {
             "types": "./types/index.d.ts",
+            "node": "./cjs/index.js",
             "import": "./esm/index.js",
             "require": "./cjs/index.js"
         },
         "./providers": {
             "types": "./types/providers.d.ts",
+            "node": "./cjs/providers.js",
             "import": "./esm/providers.js",
             "require": "./cjs/providers.js"
         }

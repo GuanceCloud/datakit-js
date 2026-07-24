@@ -17,11 +17,7 @@ export interface VueComponentInstance {
 
 export interface VueApp {
   config: {
-    errorHandler?: (
-      error: unknown,
-      instance: VueComponentInstance | null,
-      info: string
-    ) => unknown
+    errorHandler?: (...args: any[]) => unknown
   }
 }
 
@@ -37,16 +33,9 @@ export interface VueRoute {
   matched?: VueRouteRecord[]
 }
 
-export interface VueRouter {
-  currentRoute?: VueRoute | { value: VueRoute }
-  afterEach: (
-    callback: (to: VueRoute, from?: VueRoute, failure?: unknown) => void
-  ) => unknown
-}
-
 export interface VuePluginConfiguration {
   app?: VueApp
-  router?: boolean | VueRouter
+  router?: boolean
   getViewName?: (route: VueRoute) => string | undefined
 }
 
@@ -91,18 +80,3 @@ export declare function installVueErrorHandler(
   app: VueApp,
   rum?: RumPluginApi
 ): (() => void) | undefined
-export declare function trackVueRouter(
-  router: VueRouter,
-  rum: RumPluginApi,
-  options?: VuePluginConfiguration
-): unknown
-export declare function wrapCreateVueRouter<T extends (...args: any[]) => VueRouter>(
-  createRouter: T,
-  options?: VuePluginConfiguration
-): T
-export declare function computeVueRouterViewName(
-  matched: VueRouteRecord[],
-  path: string
-): string
-/** @internal */
-export declare function resetVuePlugin(): void

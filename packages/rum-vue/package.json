@@ -4,10 +4,33 @@
     "main": "cjs/index.js",
     "module": "esm/index.js",
     "types": "types/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./types/index.d.ts",
+            "node": "./cjs/index.js",
+            "import": "./esm/index.js",
+            "require": "./cjs/index.js"
+        },
+        "./vue-router-v3": {
+            "types": "./types/vueRouterV3.d.ts",
+            "node": "./cjs/entries/vueRouterV3.js",
+            "import": "./esm/entries/vueRouterV3.js",
+            "require": "./cjs/entries/vueRouterV3.js"
+        },
+        "./vue-router-v4": {
+            "types": "./types/vueRouterV4.d.ts",
+            "node": "./cjs/entries/vueRouterV4.js",
+            "import": "./esm/entries/vueRouterV4.js",
+            "require": "./cjs/entries/vueRouterV4.js"
+        },
+        "./package.json": "./package.json"
+    },
     "files": [
         "cjs",
         "esm",
         "types",
+        "vue-router-v3",
+        "vue-router-v4",
         "README.md"
     ],
     "sideEffects": false,
@@ -25,8 +48,8 @@
     "peerDependencies": {
         "@cloudcare/browser-rum": ">=3.3.5",
         "@cloudcare/browser-rum-slim": ">=3.3.5",
-        "vue": ">=2.7 || >=3",
-        "vue-router": ">=3 || >=4"
+        "vue": "2.7 || 3",
+        "vue-router": "3 || 4"
     },
     "peerDependenciesMeta": {
         "@cloudcare/browser-rum": {

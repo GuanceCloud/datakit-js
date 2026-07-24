@@ -1,7 +1,9 @@
 import {
+  clocksNow,
   LifeCycle,
   LifeCycleEventType,
-  Observable
+  Observable,
+  PageExitReason
 } from '@cloudcare/browser-core'
 import {
   startWebSocketCollection,
@@ -148,26 +150,195 @@ describe('webSocketCollection', () => {
     expect(completed[0].connectionId).not.toBe(completed[1].connectionId)
   })
 
-  it('should finalize open connections once when the session expires', () => {
-    const oldWebSocket = {}
-    const newWebSocket = {}
+  it('should split an open connection across renewed sessions', () => {
+    const webSocket = {}
     const collection = startWebSocketCollection(
       lifeCycle,
       viewContexts,
       observable
     )
 
-    notify('connecting', oldWebSocket, {
-      url: 'wss://example.com/old',
+    notify('connecting', webSocket, {
+      url: 'wss://example.com/socket',
       startClocks: clocks(0, 1000)
     })
-    notify('open', oldWebSocket, {
+    notify('open', webSocket, {
       protocol: '',
       openClocks: clocks(10, 1010)
     })
+    notify('message-in', webSocket, {
+      size: 2,
+      at: clocks(15, 1015)
+    })
 
     lifeCycle.notify(LifeCycleEventType.SESSION_EXPIRED)
-    notify('closed', oldWebSocket, {
+    notify('message-in', webSocket, {
+      size: 100,
+      at: clocksNow()
+    })
+    lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
+
+    const renewedMessageAt = clocksNow()
+    notify('message-out', webSocket, {
+      size: 3,
+      bufferedAmountPreSend: 4,
+      at: renewedMessageAt
+    })
+    notify('closed', webSocket, {
+      code: 1000,
+      reason: '',
+      wasClean: true,
+      at: clocksNow()
+    })
+
+    expect(completed.length).toBe(2)
+    expect(completed[0].trackingEndReason).toBe('session_end')
+    expect(completed[0].messagesIn).toEqual({ count: 1, size: 2 })
+    expect(
+      viewContexts.findView.calls.allArgs().some(function (args) {
+        return args[1] && args[1].returnInactive
+      })
+    ).toBeTrue()
+    expect(completed[1]).toEqual(
+      jasmine.objectContaining({
+        trackingEndReason: 'close_event',
+        messagesIn: { count: 0, size: 0 },
+        messagesOut: { count: 1, size: 3 },
+        bufferedAmountMax: 4,
+        setupDuration: 0
+      })
+    )
+    expect(completed[1].connectionId).toBe(completed[0].connectionId)
+    expect(completed[1].startClocks.timeStamp).toBeGreaterThanOrEqual(
+      completed[0].endClocks.timeStamp
+    )
+
+    collection.stop()
+  })
+
+  it('should not resume a connection closed between session expiration and renewal', () => {
+    const webSocket = {}
+    const collection = startWebSocketCollection(
+      lifeCycle,
+      viewContexts,
+      observable
+    )
+
+    notify('connecting', webSocket, {
+      url: 'wss://example.com/socket',
+      startClocks: clocks(0, 1000)
+    })
+    lifeCycle.notify(LifeCycleEventType.SESSION_EXPIRED)
+    notify('closed', webSocket, {
+      code: 1000,
+      reason: '',
+      wasClean: true,
+      at: clocksNow()
+    })
+    lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
+
+    expect(completed.length).toBe(1)
+    expect(completed[0].trackingEndReason).toBe('session_end')
+
+    collection.stop()
+    expect(completed.length).toBe(1)
+  })
+
+  it('should start a connection created during the session gap on renewal', () => {
+    const webSocket = {}
+    const collection = startWebSocketCollection(
+      lifeCycle,
+      viewContexts,
+      observable
+    )
+
+    lifeCycle.notify(LifeCycleEventType.SESSION_EXPIRED)
+    notify('connecting', webSocket, {
+      url: 'wss://example.com/socket',
+      startClocks: clocks(0, 1000)
+    })
+    notify('open', webSocket, {
+      protocol: 'chat',
+      openClocks: clocks(5, 1005)
+    })
+    notify('message-in', webSocket, {
+      size: 100,
+      at: clocks(10, 1010)
+    })
+
+    lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
+    notify('message-out', webSocket, {
+      size: 3,
+      bufferedAmountPreSend: 4,
+      at: clocksNow()
+    })
+    notify('closed', webSocket, {
+      code: 1000,
+      reason: '',
+      wasClean: true,
+      at: clocksNow()
+    })
+
+    expect(completed.length).toBe(1)
+    expect(completed[0]).toEqual(
+      jasmine.objectContaining({
+        trackingEndReason: 'close_event',
+        protocol: 'chat',
+        messagesIn: { count: 0, size: 0 },
+        messagesOut: { count: 1, size: 3 },
+        setupDuration: 0
+      })
+    )
+    expect(completed[0].startClocks.timeStamp).toBeGreaterThan(1005)
+
+    collection.stop()
+  })
+
+  it('should not settle an expired segment again when the page unloads', () => {
+    const webSocket = {}
+    const collection = startWebSocketCollection(
+      lifeCycle,
+      viewContexts,
+      observable
+    )
+
+    notify('connecting', webSocket, {
+      url: 'wss://example.com/socket',
+      startClocks: clocks(0, 1000)
+    })
+    lifeCycle.notify(LifeCycleEventType.SESSION_EXPIRED)
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.UNLOADING
+    })
+
+    expect(completed.length).toBe(1)
+    expect(completed[0].trackingEndReason).toBe('session_end')
+
+    collection.stop()
+    expect(completed.length).toBe(1)
+  })
+
+  it('should finalize open connections when the page unloads', () => {
+    const webSocket = {}
+    const collection = startWebSocketCollection(
+      lifeCycle,
+      viewContexts,
+      observable
+    )
+
+    notify('connecting', webSocket, {
+      url: 'wss://example.com/socket',
+      startClocks: clocks(0, 1000)
+    })
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.HIDDEN
+    })
+    expect(completed.length).toBe(0)
+
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.UNLOADING
+    })
+    notify('closed', webSocket, {
       code: 1000,
       reason: '',
       wasClean: true,
@@ -175,26 +346,13 @@ describe('webSocketCollection', () => {
     })
 
     expect(completed.length).toBe(1)
-    expect(completed[0].trackingEndReason).toBe('session_end')
+    expect(completed[0].trackingEndReason).toBe('page_exit')
     expect(
       viewContexts.findView.calls.mostRecent().args[1]
     ).toEqual({ returnInactive: true })
 
-    notify('connecting', newWebSocket, {
-      url: 'wss://example.com/new',
-      startClocks: clocks(30, 1030)
-    })
-    notify('closed', newWebSocket, {
-      code: 1000,
-      reason: '',
-      wasClean: true,
-      at: clocks(40, 1040)
-    })
-
-    expect(completed.length).toBe(2)
-    expect(completed[1].trackingEndReason).toBe('close_event')
-
     collection.stop()
+    expect(completed.length).toBe(1)
   })
 
   it('should flush on stop and ignore later observable events', () => {

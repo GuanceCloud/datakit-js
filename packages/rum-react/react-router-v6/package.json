@@ -1,0 +1,7 @@
+{
+  "name": "@cloudcare/browser-rum-react/react-router-v6",
+  "private": true,
+  "main": "../cjs/entries/reactRouterV6.js",
+  "module": "../esm/entries/reactRouterV6.js",
+  "types": "../types/reactRouterV6.d.ts"
+}

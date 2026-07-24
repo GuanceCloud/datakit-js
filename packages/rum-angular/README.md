@@ -2,6 +2,9 @@
 
 Angular integration for `@cloudcare/browser-rum` and `@cloudcare/browser-rum-slim`.
 
+Detailed Chinese guide:
+[Angular RUM integration](https://github.com/GuanceCloud/datakit-js/blob/master/docs/rum/framework-angular.zh.md).
+
 ```bash
 npm install @cloudcare/browser-rum @cloudcare/browser-rum-angular
 ```
@@ -18,7 +21,8 @@ import {
 
 datafluxRum.init({
   applicationId: '<APP_ID>',
-  datakitOrigin: '<DATAKIT_ORIGIN>',
+  clientToken: '<CLIENT_TOKEN>',
+  site: '<PUBLIC_DATAWAY_URL>',
   plugins: [angularPlugin({ router: true })]
 })
 
@@ -31,9 +35,13 @@ bootstrapApplication(AppComponent, {
 })
 ```
 
-The router provider starts views after guards pass and uses route templates such as
-`/users/:id`. Query and hash-only changes do not create views. The error provider keeps
-Angular's default console reporting behavior.
+For a DataKit direct connection, replace `site` and `clientToken` with
+`datakitOrigin`. Do not configure both reporting modes.
+
+The router provider starts views only after `NavigationEnd` and uses route templates
+such as `/users/:id`. Canceled or failed navigations, query-only changes, and hash-only
+changes do not create views. The error provider keeps Angular's default console
+reporting behavior.
 
 Applications with an existing `ErrorHandler` can call `addAngularError(error, context)`
 instead.

@@ -1,10 +1,9 @@
 import { clocksNow, createHandlingStack } from '@cloudcare/browser-core'
-
-var activeRum
-var activeConfiguration = {}
-var activeAddError
-var pendingInitCallbacks = []
-var pendingStartCallbacks = []
+import {
+  initializeVuePlugin,
+  onRumStart,
+  startVuePlugin
+} from './domain/pluginState'
 
 export function vuePlugin(configuration) {
   if (configuration === undefined) {
@@ -14,30 +13,16 @@ export function vuePlugin(configuration) {
   return {
     name: 'vue',
     onInit: function (context) {
-      activeRum = getPublicApi(context)
-      activeConfiguration = configuration
-      activeAddError = context.addError || activeAddError
-
+      initializeVuePlugin(configuration, context)
       if (configuration.router) {
         context.initConfiguration.trackViewsManually = true
       }
-
-      drainCallbacks(pendingInitCallbacks, function (callback) {
-        callback(activeConfiguration, activeRum)
-      })
-      drainPendingErrors()
-
       if (configuration.app) {
         installVueErrorHandler(configuration.app)
       }
-      if (isRouter(configuration.router)) {
-        trackVueRouter(configuration.router, activeRum, configuration)
-      }
     },
     onRumStart: function (context) {
-      activeRum = getPublicApi(context) || activeRum
-      activeAddError = context.addError || activeAddError
-      drainPendingErrors()
+      startVuePlugin(context)
     },
     getConfigurationTelemetry: function () {
       return { router: !!configuration.router }
@@ -52,7 +37,7 @@ export function addVueError(error, instance, info, context) {
     context: buildVueErrorContext(error, instance, info, context),
     startClocks: clocksNow()
   }
-  whenRumStarted(function (addError) {
+  onRumStart(function (addError) {
     addError(providedError)
   })
 }
@@ -82,120 +67,6 @@ export function installVueErrorHandler(app, rum) {
   }
 }
 
-export function trackVueRouter(router, rum, options) {
-  if (options === undefined) {
-    options = {}
-  }
-  if (!router || !rum || typeof router.afterEach !== 'function') {
-    return
-  }
-
-  var lastPath
-  var currentRoute = getCurrentRoute(router)
-  if (currentRoute && currentRoute.matched && currentRoute.matched.length) {
-    startVueView(currentRoute, rum, options)
-    lastPath = currentRoute.path
-  }
-
-  return router.afterEach(function (to, from, failure) {
-    if (failure) {
-      return
-    }
-    var fromHasMatches = from && from.matched && from.matched.length > 0
-    if (
-      (fromHasMatches && to.path === from.path) ||
-      (lastPath !== undefined && to.path === lastPath)
-    ) {
-      return
-    }
-    lastPath = to.path
-    startVueView(to, rum, options)
-  })
-}
-
-export function wrapCreateVueRouter(createRouter, options) {
-  if (typeof createRouter !== 'function') {
-    throw new Error('A Vue Router create function is required')
-  }
-
-  return function () {
-    var router = createRouter.apply(this, arguments)
-    whenRumInitialized(function (configuration, rum) {
-      if (!configuration.router) {
-        return
-      }
-      trackVueRouter(router, rum, options || configuration)
-    })
-    return router
-  }
-}
-
-export function computeVueRouterViewName(matched, path) {
-  if (!matched || matched.length === 0) {
-    return ''
-  }
-
-  var viewName = '/'
-  for (var i = 0; i < matched.length; i += 1) {
-    var routePath = matched[i].path
-    if (!routePath) {
-      continue
-    }
-    if (routePath.indexOf('/') === 0) {
-      viewName = routePath
-    } else {
-      if (viewName.charAt(viewName.length - 1) !== '/') {
-        viewName += '/'
-      }
-      viewName += routePath
-    }
-  }
-  return substituteCatchAll(viewName, path)
-}
-
-export function resetVuePlugin() {
-  activeRum = undefined
-  activeConfiguration = {}
-  activeAddError = undefined
-  pendingInitCallbacks.length = 0
-  pendingStartCallbacks.length = 0
-}
-
-function startVueView(route, rum, options) {
-  var name
-  if (typeof options.getViewName === 'function') {
-    name = options.getViewName(route)
-  } else if (route.meta && route.meta.rumViewName) {
-    name = route.meta.rumViewName
-  } else {
-    name = computeVueRouterViewName(route.matched, route.path)
-  }
-  if (name === undefined) {
-    return
-  }
-  rum.startView({
-    name: name,
-    context: {
-      framework: 'vue',
-      router: 'vue-router'
-    }
-  })
-}
-
-function substituteCatchAll(viewName, path) {
-  var pattern = '/:pathMatch(.*)*'
-  var catchAllIndex = viewName.indexOf(pattern)
-  if (catchAllIndex === -1) {
-    return viewName
-  }
-
-  var prefix = viewName.slice(0, catchAllIndex)
-  var prefixSegmentCount = prefix ? prefix.split('/').length - 1 : 0
-  var pathSegments = String(path || '').split('/')
-  var suffix = pathSegments.slice(prefixSegmentCount + 1).join('/')
-  return prefix + (suffix ? '/' + suffix : '') || '/'
-}
-
 function buildVueErrorContext(error, instance, info, context) {
   var vueContext = {
     framework: 'vue',
@@ -223,52 +94,6 @@ function buildComponentStack(instance, info) {
     current = current.parent || current.$parent
   }
   return parts.length ? parts.join('\n') : undefined
-}
-
-function whenRumInitialized(callback) {
-  if (activeRum) {
-    callback(activeConfiguration, activeRum)
-  } else {
-    pendingInitCallbacks.push(callback)
-  }
-}
-
-function whenRumStarted(callback) {
-  if (activeAddError) {
-    callback(activeAddError)
-  } else {
-    pendingStartCallbacks.push(callback)
-  }
-}
-
-function drainPendingErrors() {
-  if (activeAddError) {
-    drainCallbacks(pendingStartCallbacks, function (callback) {
-      callback(activeAddError)
-    })
-  }
-}
-
-function drainCallbacks(callbacks, invoke) {
-  var pending = callbacks.splice(0, callbacks.length)
-  for (var i = 0; i < pending.length; i += 1) {
-    invoke(pending[i])
-  }
-}
-
-function getCurrentRoute(router) {
-  if (!router.currentRoute) {
-    return undefined
-  }
-  return router.currentRoute.value || router.currentRoute
-}
-
-function getPublicApi(context) {
-  return context && (context.publicApi || context.rum)
-}
-
-function isRouter(value) {
-  return value && typeof value === 'object' && typeof value.afterEach === 'function'
 }
 
 function assignContext(base, extra) {
