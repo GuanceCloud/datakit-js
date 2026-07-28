@@ -1,0 +1,95 @@
+# Dataflux Web RUM documentation conventions
+
+## Sources of truth
+
+Re-read these files from the current `release` branch for every task because the repository can evolve:
+
+- `README.md`: authoring rules and collaboration workflow
+- `docs/zh/real-user-monitoring/web/.pages`: Web RUM navigation
+- `docs/zh/real-user-monitoring/web/custom-sdk/.pages`: custom SDK navigation
+- `mkdocs.zh.yml`: Guance template keys
+- neighboring documents: current structure, terminology, code style, admonitions, and tabs
+
+Do not copy rules from an old branch when current `release` differs.
+
+## Topic mapping
+
+| SDK change | Primary document |
+| --- | --- |
+| Installation, initialization, CDN, config, public method overview | `app-access.md` |
+| Versioned release behavior | `sdk-changelog.md` |
+| Next.js, Nuxt, SSR, hydration | `ssr-access.md` |
+| Electron integration | `electron-access.md` |
+| Event fields and collected data | `app-data-collection.md` |
+| Sampling | `sampling.md` |
+| Resource hooks | `hook-resource.md` |
+| Action tracking | `tracking-user-actions.md` |
+| Custom View | `custom-view.md` |
+| Custom user, context, Action, or Error APIs | `custom-sdk/` |
+| Troubleshooting and edge cases | `faq.md` |
+
+Prefer the narrowest existing owner. If a new topic deserves its own page, place it beside related pages and update the nearest `.pages`.
+
+## Template syntax
+
+Use the repository's triple-angle template syntax exactly.
+
+Brand name:
+
+```markdown
+<<< custom_key.brand_name >>> RUM SDK
+```
+
+Brand-aware domain:
+
+```markdown
+https://static.<<< custom_key.brand_main_domain >>>/browser-sdk/v3/dataflux-rum.js
+```
+
+Brand-specific values:
+
+````markdown
+<<<% if custom_key.brand_key == "truewatch" %>>>
+```bash
+npm install @truewatchtech/browser-rum
+```
+<<<% else %>>>
+```bash
+npm install @cloudcare/browser-rum
+```
+<<<% endif %>>>
+````
+
+Keep the opening `if`, optional `else`, and closing `endif` balanced. Put complete runnable examples in both branches when code differs.
+
+## Brand neutrality
+
+- Do not add fixed `观测云` prose.
+- Do not add hard-coded `*.guance.com` or `*.guance.one` hosts.
+- Do not assume that replacing the brand display name also replaces package names, globals, or stable filenames.
+- Put literal package namespaces such as `@cloudcare` and `@truewatchtech` in their appropriate brand branches.
+- Use a template variable for shared domains and a conditional only when the brands truly need different values.
+- Keep stable published filenames such as `dataflux-rum.js` and `dataflux-logs.js` unless the SDK release changes the actual artifact contract.
+
+## Writing and structure
+
+- Use one H1 for the page title and increase heading levels one level at a time.
+- Use `「」` for product UI labels and Chinese quotation marks for other quoted text.
+- Give fenced code blocks a language.
+- Follow adjacent documents for MkDocs tabs, admonitions, anchors, link attributes, and table formatting.
+- Keep relative links valid from the edited file.
+- Avoid a Markdown file and a same-named directory at the same level because it interferes with search.
+- Keep images below 1 MB when practical, except GIFs, and follow neighboring image markup.
+- State prerequisites, minimum SDK/DataKit versions, defaults, and behavior from verified source rather than assumptions.
+- Use public, task-oriented language. Do not expose internal implementation variables or source-only concepts unless users must configure them.
+
+## Review checklist
+
+- The page is the correct owner for the SDK change.
+- New pages appear in `.pages`.
+- Examples match the current runtime API and published type declarations.
+- Both brands render meaningful prose and runnable code.
+- No fixed brand name or Guance domain was added.
+- CDN URLs retain the `static.` subdomain and the actual published filename.
+- Version claims are supported by package metadata or release evidence.
+- Changed links, headings, tables, templates, and code fences are valid.
