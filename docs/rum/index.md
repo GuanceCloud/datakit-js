@@ -235,6 +235,28 @@ import { datafluxRum } from '@cloudcare/browser-rum'
 datafluxRum.setUser({ id: '1234', name: 'John Doe', email: 'john@doe.com' })
 ```
 
+## Runtime Session Control
+
+Calling `startSession()` immediately ends the current session and creates a new
+one without waiting for user activity. It can also override the runtime session
+sample rate used by the new session and subsequent automatic renewals:
+
+```javascript
+datafluxRum.startSession({
+  sessionSampleRate: 100
+})
+```
+
+To immediately collect and record a session that was not selected by sampling,
+use:
+
+```javascript
+datafluxRum.startSessionReplayRecording({ force: true })
+```
+
+Forced sessions receive a `session_id` and are marked with
+`session.is_forced_session: true`.
+
 ## Session Replay Configuration
 
 ### Ensure SDK Version Support

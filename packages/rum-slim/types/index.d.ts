@@ -29,6 +29,14 @@ export interface InternalContext {
   }
 }
 
+export interface StartSessionOptions {
+  /**
+   * Overrides the runtime RUM session sample rate for the new session and
+   * subsequent automatic session renewals.
+   */
+  sessionSampleRate?: number
+}
+
 export interface ResourceTrackerSnapshot {
   trackerId: string
   status:
@@ -122,6 +130,7 @@ export declare const datafluxRum: {
   removeUserProperty: (key: any) => void
   clearUser: () => void
   stopSession: () => void
+  startSession: (options?: StartSessionOptions) => void
   setForcedSession: () => void
   createResourceTrackerId: () => string
   setResourceContext: (trackerId: string, context: Context) => void
@@ -131,4 +140,3 @@ export declare const datafluxRum: {
 } & {
   onReady(callback: () => void): void
 }
-

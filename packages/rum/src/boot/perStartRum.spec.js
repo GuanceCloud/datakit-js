@@ -39,6 +39,7 @@ describe('preStartRum', () => {
       addError: jasmine.createSpy('addError'),
       addResource: jasmine.createSpy('addResource'),
       addTiming: jasmine.createSpy('addTiming'),
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       startView: jasmine.createSpy('startView'),
       setViewName: jasmine.createSpy('setViewName'),
@@ -55,6 +56,7 @@ describe('preStartRum', () => {
     strategy.addResource({ url: '/resource' })
     strategy.addError({ message: 'boom' })
     strategy.addTiming('ready', 123)
+    strategy.startSession({ sessionSampleRate: 100 })
     strategy.setForcedSession()
     strategy.setViewName('Ignored until post-start strategy swap')
 
@@ -82,6 +84,9 @@ describe('preStartRum', () => {
       { view: { id: 'view-1' } }
     )
     expect(startRumResult.addTiming).toHaveBeenCalledWith('ready', 123)
+    expect(startRumResult.startSession).toHaveBeenCalledWith({
+      sessionSampleRate: 100
+    })
     expect(startRumResult.setForcedSession).toHaveBeenCalled()
     expect(startRumResult.setViewName).toHaveBeenCalledWith(
       'Ignored until post-start strategy swap'

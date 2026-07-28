@@ -196,6 +196,9 @@ export function startRum(
     stopSession: function () {
       session.expire()
     },
+    startSession: function (options) {
+      session.startSession(options)
+    },
     getInternalContext: internalContext.get,
     stop: function () {
       cleanupTasks.forEach(function (task) {

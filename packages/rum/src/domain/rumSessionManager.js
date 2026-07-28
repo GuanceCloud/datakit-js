@@ -7,7 +7,9 @@ import {
   timeStampNow,
   bridgeSupports,
   BridgeCapability,
-  SESSION_NOT_TRACKED
+  SESSION_NOT_TRACKED,
+  display,
+  isPercentage
 } from '@cloudcare/browser-core'
 
 export var RUM_SESSION_KEY = 'rum'
@@ -60,6 +62,7 @@ export function startRumSessionManager(configuration, lifeCycle) {
       if (!previousState.forcedSession && newState.forcedSession) {
         const sessionEntity = sessionManager.findSession()
         if (sessionEntity) {
+          sessionEntity.id = newState.id
           sessionEntity.isSessionForced = true
         }
       }
@@ -116,12 +119,18 @@ export function startRumSessionManager(configuration, lifeCycle) {
     },
     expire: sessionManager.expire,
     keepSessionAlive: sessionManager.expandOrRenewSession,
+    startSession: function (options) {
+      if (!applyStartSessionOptions(configuration, options)) {
+        return
+      }
+      sessionManager.renewSession()
+    },
     expireObservable: sessionManager.expireObservable,
     sessionStateUpdateObservable: sessionManager.sessionStateUpdateObservable,
     setErrorForSession: () =>
       sessionManager.updateSessionState({ hasError: '1', ets: timeStampNow() }),
     setForcedSession: () => {
-      sessionManager.updateSessionState({ forcedSession: '1' })
+      sessionManager.forceSession()
     }
   }
 }
@@ -148,6 +157,7 @@ export function startRumSessionManagerStub() {
     },
     expire: noop,
     keepSessionAlive: noop,
+    startSession: noop,
     expireObservable: new Observable(),
     setErrorForSession: function () {
       session.sessionErrorTimestamp = timeStampNow()
@@ -157,6 +167,27 @@ export function startRumSessionManagerStub() {
     },
     setForcedSession: noop
   }
+}
+
+function applyStartSessionOptions(configuration, options) {
+  if (options === undefined) {
+    return true
+  }
+  if (
+    !options ||
+    typeof options !== 'object' ||
+    (options.sessionSampleRate !== undefined &&
+      !isPercentage(options.sessionSampleRate))
+  ) {
+    display.error(
+      'startSession options should contain a sessionSampleRate between 0 and 100'
+    )
+    return false
+  }
+  if (options.sessionSampleRate !== undefined) {
+    configuration.sessionSampleRate = options.sessionSampleRate
+  }
+  return true
 }
 
 function computeSessionState(configuration, rawTrackingType) {

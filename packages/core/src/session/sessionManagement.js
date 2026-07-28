@@ -84,6 +84,8 @@ export function startSessionManager(
       return sessionContextHistory.find(startTime, options)
     },
     expandOrRenewSession: sessionStore.expandOrRenewSession,
+    renewSession: sessionStore.renewSession,
+    forceSession: sessionStore.forceSession,
     renewObservable,
     expireObservable,
     sessionStateUpdateObservable: sessionStore.sessionStateUpdateObservable,
