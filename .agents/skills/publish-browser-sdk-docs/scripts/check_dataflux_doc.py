@@ -216,7 +216,6 @@ def check_hardcoded_values(added_lines: Dict[Path, List[Tuple[int, str]]]) -> Li
 def check_brand_package_templates(
     repo: Path,
     paths: Sequence[Path],
-    added_lines: Dict[Path, List[Tuple[int, str]]],
 ) -> List[str]:
     errors = []
     for path in paths:
@@ -224,15 +223,9 @@ def check_brand_package_templates(
         if path.suffix.lower() != ".md" or not absolute.is_file():
             continue
 
-        added_line_numbers = {
-            line_number for line_number, _line in added_lines.get(path, [])
-        }
-        if not added_line_numbers:
-            continue
-
         stack = []
         blocks = {}
-        added_occurrences = []
+        package_occurrences = []
         next_block_id = 1
 
         for line_number, line in enumerate(
@@ -273,16 +266,15 @@ def check_brand_package_templates(
             block_id = brand_context["brand_id"] if brand_context else None
             branch = brand_context["branch"] if brand_context else None
 
-            if line_number in added_line_numbers:
-                for match in MISSPELLED_TRUEWATCH_PACKAGE_RE.finditer(line):
-                    errors.append(
-                        "{}:{}: use @truewatchtech/{} instead of {}".format(
-                            path,
-                            line_number,
-                            match.group(1),
-                            match.group(0),
-                        )
+            for match in MISSPELLED_TRUEWATCH_PACKAGE_RE.finditer(line):
+                errors.append(
+                    "{}:{}: use @truewatchtech/{} instead of {}".format(
+                        path,
+                        line_number,
+                        match.group(1),
+                        match.group(0),
                     )
+                )
 
             for namespace, pattern in (
                 ("cloudcare", CLOUDCARE_PACKAGE_RE),
@@ -292,18 +284,17 @@ def check_brand_package_templates(
                     package_suffix = match.group(1)
                     if block_id is not None and branch == namespace:
                         blocks[block_id][namespace].add(package_suffix)
-                    if line_number in added_line_numbers:
-                        added_occurrences.append(
-                            (
-                                line_number,
-                                namespace,
-                                package_suffix,
-                                block_id,
-                                branch,
-                            )
+                    package_occurrences.append(
+                        (
+                            line_number,
+                            namespace,
+                            package_suffix,
+                            block_id,
+                            branch,
                         )
+                    )
 
-        for line_number, namespace, package_suffix, block_id, branch in added_occurrences:
+        for line_number, namespace, package_suffix, block_id, branch in package_occurrences:
             expected_branch = namespace
             if block_id is None or branch != expected_branch:
                 errors.append(
@@ -445,7 +436,7 @@ def main() -> int:
 
         errors = []
         errors.extend(check_hardcoded_values(added_lines))
-        errors.extend(check_brand_package_templates(repo, paths, added_lines))
+        errors.extend(check_brand_package_templates(repo, paths))
         errors.extend(check_markdown_structure(repo, paths))
         errors.extend(check_navigation(repo, added, deleted))
         if errors:
