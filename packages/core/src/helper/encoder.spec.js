@@ -8,6 +8,7 @@ describe('encoder', () => {
     expect(encoder.isAsync).toBeFalse()
     expect(encoder.isEmpty()).toBeTrue()
     expect(encoder.estimateEncodedBytesCount('abc')).toBe(3)
+    expect(encoder.estimateEncodedBytesCount(3)).toBe(3)
 
     encoder.write('ab', callback)
     encoder.write('c')

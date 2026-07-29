@@ -3,13 +3,140 @@ import {
   LifeCycleEventType,
   RumEventType
 } from '@cloudcare/browser-core'
+import { NodePrivacyLevel } from '../../../constants'
 import { RecordType } from '../../../types'
 import {
   getRecordIdForEvent,
-  initFrustrationObserver
+  initFrustrationObserver,
+  initInputObserver,
+  initObservers
 } from './observers'
+import {
+  getSerializedNodeId,
+  setSerializedNodeId
+} from './serializationUtils'
 
 describe('replay/record/observers', () => {
+  it('should roll back previously initialized observers when a later observer fails', () => {
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    setSerializedNodeId(input, 99)
+    const inputCb = jasmine.createSpy('inputCb')
+    const callback = jasmine.createSpy('callback')
+
+    expect(() =>
+      initObservers({
+        lifeCycle: {
+          subscribe() {
+            throw new Error('frustration observer initialization failed')
+          }
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        elementsScrollPositions: new Map(),
+        inputCb,
+        mediaInteractionCb: callback,
+        mouseInteractionCb: callback,
+        mousemoveCb: callback,
+        mutationCb: callback,
+        mutationPerfCb: callback,
+        mutationOverflowCb: callback,
+        mutationActivityCb: callback,
+        scrollCb: callback,
+        styleSheetCb: callback,
+        viewportResizeCb: callback,
+        frustrationCb: callback,
+        focusCb: callback,
+        visualViewportResizeCb: callback,
+        shadowRootsController: {
+          addShadowRoot: function () {
+            return true
+          },
+          removeShadowRoot: function () {}
+        }
+      })
+    ).toThrowError('frustration observer initialization failed')
+
+    input.value = 'after-failure'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(inputCb).not.toHaveBeenCalled()
+    input.remove()
+  })
+
+  it('should gate property setter and composed input callbacks for skipped shadow nodes', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const input = document.createElement('input')
+    shadowRoot.appendChild(input)
+    setSerializedNodeId(input, 100)
+
+    let skipped = true
+    const inputCb = jasmine.createSpy('inputCb')
+    const callback = jasmine.createSpy('callback')
+    const unsubscribe = jasmine.createSpy('unsubscribe')
+    const observers = initObservers({
+      lifeCycle: {
+        subscribe() {
+          return { unsubscribe }
+        }
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      elementsScrollPositions: new Map(),
+      inputCb,
+      mediaInteractionCb: callback,
+      mouseInteractionCb: callback,
+      mousemoveCb: callback,
+      mutationCb: callback,
+      mutationPerfCb: callback,
+      mutationOverflowCb: callback,
+      mutationActivityCb: callback,
+      scrollCb: callback,
+      styleSheetCb: callback,
+      viewportResizeCb: callback,
+      frustrationCb: callback,
+      focusCb: callback,
+      visualViewportResizeCb: callback,
+      shadowRootsController: {
+        addShadowRoot: function () {
+          return true
+        },
+        removeShadowRoot: function () {},
+        isNodeInSkippedShadowRoot: function (node) {
+          return (
+            skipped &&
+            node &&
+            typeof node.getRootNode === 'function' &&
+            node.getRootNode() === shadowRoot
+          )
+        }
+      }
+    })
+
+    try {
+      input.value = 'ignored'
+      input.dispatchEvent(
+        new Event('input', { bubbles: true, composed: true })
+      )
+      expect(inputCb).not.toHaveBeenCalled()
+
+      skipped = false
+      input.dispatchEvent(
+        new Event('input', { bubbles: true, composed: true })
+      )
+      expect(inputCb).toHaveBeenCalledOnceWith({
+        id: 100,
+        text: 'ignored'
+      })
+    } finally {
+      observers.stop()
+      host.remove()
+    }
+  })
+
   it('should allocate stable record ids per event object', () => {
     const eventA = {}
     const eventB = {}
@@ -108,5 +235,282 @@ describe('replay/record/observers', () => {
     })
 
     expect(frustrationCb).not.toHaveBeenCalled()
+  })
+
+  describe('radio input observation', () => {
+    let fixtures
+    let observerStops
+    let nextSerializedId
+
+    beforeEach(() => {
+      fixtures = []
+      observerStops = []
+      nextSerializedId = 100
+    })
+
+    afterEach(() => {
+      observerStops.forEach(function (stop) {
+        stop()
+      })
+      fixtures.forEach(function (fixture) {
+        fixture.remove()
+      })
+    })
+
+    function observeInputs(callback, root) {
+      var stop = initInputObserver(
+        callback,
+        { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+        root
+      )
+      observerStops.push(stop)
+    }
+
+    function createRadio(parent, name, checked) {
+      var radio = document.createElement('input')
+      radio.type = 'radio'
+      radio.name = name
+      radio.checked = !!checked
+      setSerializedNodeId(radio, nextSerializedId)
+      nextSerializedId += 1
+      parent.appendChild(radio)
+      return radio
+    }
+
+    function dispatchRadioChange(radio, checked, eventType) {
+      radio.checked = checked
+      radio.dispatchEvent(
+        new Event(eventType || 'input', {
+          bubbles: true,
+          composed: true
+        })
+      )
+    }
+
+    it('should not emit unchanged peers when a radio group is first observed', () => {
+      var fixture = document.createElement('div')
+      fixtures.push(fixture)
+      document.body.appendChild(fixture)
+      var first = createRadio(fixture, 'first-interaction', false)
+      createRadio(fixture, 'first-interaction', true)
+      createRadio(fixture, 'first-interaction', false)
+      createRadio(fixture, 'first-interaction', false)
+      var inputCb = jasmine.createSpy('inputCb')
+      observeInputs(inputCb)
+
+      dispatchRadioChange(first, true)
+
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(first), isChecked: true }]
+      ])
+    })
+
+    it('should emit only the newly checked and previously observed radio', () => {
+      var fixture = document.createElement('div')
+      fixtures.push(fixture)
+      document.body.appendChild(fixture)
+      var first = createRadio(fixture, 'tracked-group', false)
+      var second = createRadio(fixture, 'tracked-group', false)
+      var inputCb = jasmine.createSpy('inputCb')
+      observeInputs(inputCb)
+
+      dispatchRadioChange(first, true)
+      inputCb.calls.reset()
+      dispatchRadioChange(second, true)
+
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(second), isChecked: true }],
+        [{ id: getSerializedId(first), isChecked: false }]
+      ])
+    })
+
+    it('should not emit a previously tracked radio after it becomes unpublished', () => {
+      var fixture = document.createElement('div')
+      fixtures.push(fixture)
+      document.body.appendChild(fixture)
+      var first = createRadio(fixture, 'publication-group', false)
+      var second = createRadio(fixture, 'publication-group', false)
+      var unpublishedRadio
+      var inputCb = jasmine.createSpy('inputCb')
+      observerStops.push(
+        initInputObserver(
+          inputCb,
+          { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+          undefined,
+          function (node) {
+            return node === unpublishedRadio
+          }
+        )
+      )
+
+      dispatchRadioChange(first, true)
+      inputCb.calls.reset()
+      unpublishedRadio = first
+      dispatchRadioChange(second, true)
+
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(second), isChecked: true }]
+      ])
+    })
+
+    it('should emit an explicit uncheck once and deduplicate repeated state', () => {
+      var fixture = document.createElement('div')
+      fixtures.push(fixture)
+      document.body.appendChild(fixture)
+      var radio = createRadio(fixture, 'explicit-uncheck', false)
+      var inputCb = jasmine.createSpy('inputCb')
+      observeInputs(inputCb)
+
+      dispatchRadioChange(radio, true)
+      inputCb.calls.reset()
+      dispatchRadioChange(radio, false)
+      dispatchRadioChange(radio, false)
+
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(radio), isChecked: false }]
+      ])
+    })
+
+    it('should keep large radio groups O(1) per observed selection', () => {
+      var fixture = document.createElement('div')
+      fixtures.push(fixture)
+      document.body.appendChild(fixture)
+      var radios = []
+      for (var index = 0; index < 1000; index += 1) {
+        radios.push(
+          createRadio(fixture, 'large-radio-group', index === 0)
+        )
+      }
+      var querySelectorAll = spyOn(
+        document,
+        'querySelectorAll'
+      ).and.callThrough()
+      var inputCb = jasmine.createSpy('inputCb')
+      observeInputs(inputCb)
+
+      dispatchRadioChange(radios[999], true)
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(radios[999]), isChecked: true }]
+      ])
+
+      inputCb.calls.reset()
+      dispatchRadioChange(radios[500], true)
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(radios[500]), isChecked: true }],
+        [{ id: getSerializedId(radios[999]), isChecked: false }]
+      ])
+      expect(querySelectorAll).not.toHaveBeenCalled()
+    })
+
+    it('should evict old dynamic group names from the bounded registry', () => {
+      var fixture = document.createElement('div')
+      fixtures.push(fixture)
+      document.body.appendChild(fixture)
+      var first = createRadio(fixture, 'evicted-group', false)
+      var replacement = createRadio(fixture, 'evicted-group', false)
+      var otherRadios = []
+      for (var index = 0; index < 256; index += 1) {
+        otherRadios.push(
+          createRadio(fixture, 'dynamic-group-' + index, false)
+        )
+      }
+      var inputCb = jasmine.createSpy('inputCb')
+      observeInputs(inputCb)
+
+      dispatchRadioChange(first, true)
+      otherRadios.forEach(function (radio) {
+        dispatchRadioChange(radio, true)
+      })
+      inputCb.calls.reset()
+
+      dispatchRadioChange(replacement, true)
+
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(replacement), isChecked: true }]
+      ])
+    })
+
+    it('should discard detached or regrouped tracked radios', () => {
+      var fixture = document.createElement('div')
+      fixtures.push(fixture)
+      document.body.appendChild(fixture)
+      var regrouped = createRadio(fixture, 'stale-group', false)
+      var regroupedReplacement = createRadio(
+        fixture,
+        'stale-group',
+        false
+      )
+      var detached = createRadio(fixture, 'detached-group', false)
+      var detachedReplacement = createRadio(
+        fixture,
+        'detached-group',
+        false
+      )
+      var inputCb = jasmine.createSpy('inputCb')
+      observeInputs(inputCb)
+
+      dispatchRadioChange(regrouped, true)
+      regrouped.name = 'new-group'
+      inputCb.calls.reset()
+      dispatchRadioChange(regroupedReplacement, true)
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(regroupedReplacement), isChecked: true }]
+      ])
+
+      dispatchRadioChange(detached, true)
+      detached.remove()
+      inputCb.calls.reset()
+      dispatchRadioChange(detachedReplacement, true)
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(detachedReplacement), isChecked: true }]
+      ])
+    })
+
+    it('should synchronize radios only inside their shadow root', () => {
+      var host = document.createElement('div')
+      fixtures.push(host)
+      document.body.appendChild(host)
+      var shadowRoot = host.attachShadow({ mode: 'open' })
+      var first = createRadio(shadowRoot, 'scoped-group', false)
+      var second = createRadio(shadowRoot, 'scoped-group', false)
+      var outside = createRadio(document.body, 'scoped-group', true)
+      fixtures.push(outside)
+      var inputCb = jasmine.createSpy('inputCb')
+      observeInputs(inputCb, shadowRoot)
+
+      dispatchRadioChange(first, true, 'change')
+      inputCb.calls.reset()
+      dispatchRadioChange(second, true, 'change')
+
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(second), isChecked: true }],
+        [{ id: getSerializedId(first), isChecked: false }]
+      ])
+      expect(outside.checked).toBeTrue()
+    })
+
+    it('should support radio names containing selector-special characters', () => {
+      var fixture = document.createElement('div')
+      fixtures.push(fixture)
+      document.body.appendChild(fixture)
+      var specialName = 'quote"][data-probe="value\\\\tail'
+      var first = createRadio(fixture, specialName, false)
+      var second = createRadio(fixture, specialName, false)
+      var inputCb = jasmine.createSpy('inputCb')
+      observeInputs(inputCb)
+
+      dispatchRadioChange(first, true)
+      inputCb.calls.reset()
+      dispatchRadioChange(second, true)
+
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: getSerializedId(second), isChecked: true }],
+        [{ id: getSerializedId(first), isChecked: false }]
+      ])
+    })
+
+    function getSerializedId(node) {
+      return getSerializedNodeId(node)
+    }
   })
 })

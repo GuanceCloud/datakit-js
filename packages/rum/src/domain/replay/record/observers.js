@@ -11,7 +11,6 @@ import {
   RumEventType,
   ActionType,
   isNodeShadowHost,
-  cssEscape,
   getScrollX,
   getScrollY
 } from '@cloudcare/browser-core'
@@ -32,7 +31,6 @@ import {
 } from './serializationUtils'
 import {
   assembleIncrementalSnapshot,
-  forEach,
   getPathToNestedCSSRule,
   isTouchEvent
 } from './utils'
@@ -45,6 +43,7 @@ import {
 var MOUSE_MOVE_OBSERVER_THRESHOLD = 50
 var SCROLL_OBSERVER_THRESHOLD = 100
 var VISUAL_VIEWPORT_OBSERVER_THRESHOLD = 200
+var MAX_TRACKED_RADIO_GROUPS = 256
 
 var recordIds = new WeakMap()
 let nextId = 1
@@ -56,49 +55,104 @@ export function getRecordIdForEvent(event) {
   return recordIds.get(event)
 }
 export function initObservers(o) {
-  var mutationHandler = initMutationObserver(
-    o.mutationCb,
-    o.configuration,
+  var cleanupTasks = []
+  var mutationHandler
+  var isNodeIgnored = createNodeIgnorePredicate(
     o.shadowRootsController,
-    o.mutationPerfCb
+    o.isNodeIgnored
   )
-  var mousemoveHandler = initMoveObserver(o.mousemoveCb, o.configuration)
-  var mouseInteractionHandler = initMouseInteractionObserver(
-    o.mouseInteractionCb,
-    o.configuration
-  )
-  var scrollHandler = initScrollObserver(
-    o.scrollCb,
-    o.configuration,
-    o.elementsScrollPositions
-  )
-  var viewportResizeHandler = initViewportResizeObserver(
-    o.viewportResizeCb,
-    o.configuration
-  )
-  var inputHandler = initInputObserver(o.inputCb, o.configuration)
-  var mediaInteractionHandler = initMediaInteractionObserver(
-    o.mediaInteractionCb,
-    o.configuration
-  )
-  var styleSheetObserver = initStyleSheetObserver(
-    o.styleSheetCb,
-    o.configuration
-  )
-  var focusHandler = initFocusObserver(o.focusCb, o.configuration)
-  var visualViewportResizeHandler = initVisualViewportResizeObserver(
-    o.visualViewportResizeCb,
-    o.configuration
-  )
-  var frustrationHandler = initFrustrationObserver(
-    o.lifeCycle,
-    o.frustrationCb,
-    o.configuration
-  )
+  try {
+    mutationHandler = initMutationObserver(
+      o.mutationCb,
+      o.configuration,
+      o.shadowRootsController,
+      o.mutationPerfCb,
+      o.mutationOverflowCb,
+      o.mutationActivityCb,
+      o.mutationNodeSerializationCb,
+      // DOM mutations use the ordered admission queue, so they may be staged
+      // behind a serialized-but-not-yet-published add. Other observer sources
+      // keep the stricter published-only predicate below.
+      o.isNodeIgnored &&
+        function (node) {
+          return o.isNodeIgnored(node, true)
+        },
+      o.isNodePublished
+    )
+    cleanupTasks.push(mutationHandler.stop)
+    cleanupTasks.push(
+      initMoveObserver(o.mousemoveCb, o.configuration, isNodeIgnored)
+    )
+    cleanupTasks.push(
+      initMouseInteractionObserver(
+        o.mouseInteractionCb,
+        o.configuration,
+        isNodeIgnored
+      )
+    )
+    cleanupTasks.push(
+      initScrollObserver(
+        o.scrollCb,
+        o.configuration,
+        o.elementsScrollPositions,
+        isNodeIgnored
+      )
+    )
+    cleanupTasks.push(
+      initViewportResizeObserver(o.viewportResizeCb, o.configuration)
+    )
+    cleanupTasks.push(
+      initInputObserver(
+        o.inputCb,
+        o.configuration,
+        undefined,
+        isNodeIgnored
+      )
+    )
+    cleanupTasks.push(
+      initMediaInteractionObserver(
+        o.mediaInteractionCb,
+        o.configuration,
+        isNodeIgnored
+      )
+    )
+    cleanupTasks.push(
+      initStyleSheetObserver(
+        o.styleSheetCb,
+        o.configuration,
+        isNodeIgnored
+      )
+    )
+    cleanupTasks.push(initFocusObserver(o.focusCb, o.configuration))
+    cleanupTasks.push(
+      initVisualViewportResizeObserver(
+        o.visualViewportResizeCb,
+        o.configuration
+      )
+    )
+    cleanupTasks.push(
+      initFrustrationObserver(
+        o.lifeCycle,
+        o.frustrationCb,
+        o.configuration,
+        isNodeIgnored
+      )
+    )
+  } catch (error) {
+    try {
+      runObserverCleanupTasks(cleanupTasks.slice().reverse())
+    } catch (_) {}
+    throw error
+  }
 
   return {
     flush: function () {
-      mutationHandler.flush()
+      return mutationHandler.flush()
+    },
+    refreshAndFlushPendingRootForNode: function (node) {
+      if (mutationHandler.refreshAndFlushPendingRootForNode) {
+        return mutationHandler.refreshAndFlushPendingRootForNode(node)
+      }
     },
     reset: function () {
       if (mutationHandler.reset) {
@@ -106,18 +160,58 @@ export function initObservers(o) {
       }
     },
     stop: function () {
-      mutationHandler.stop()
-      mousemoveHandler()
-      mouseInteractionHandler()
-      scrollHandler()
-      viewportResizeHandler()
-      inputHandler()
-      mediaInteractionHandler()
-      styleSheetObserver()
-      focusHandler()
-      visualViewportResizeHandler()
-      frustrationHandler()
+      runObserverCleanupTasks(cleanupTasks)
     }
+  }
+}
+
+function createNodeIgnorePredicate(
+  shadowRootsController,
+  customIsNodeIgnored
+) {
+  if (typeof customIsNodeIgnored === 'function') {
+    return function (node) {
+      try {
+        return customIsNodeIgnored(node)
+      } catch (_) {
+        return true
+      }
+    }
+  }
+  if (
+    !shadowRootsController ||
+    typeof shadowRootsController.isNodeInSkippedShadowRoot !== 'function'
+  ) {
+    return function () {
+      return false
+    }
+  }
+  return function (node) {
+    try {
+      return shadowRootsController.isNodeInSkippedShadowRoot(node)
+    } catch (_) {
+      return true
+    }
+  }
+}
+
+function neverIgnoreNode() {
+  return false
+}
+
+function runObserverCleanupTasks(tasks) {
+  var firstError
+  tasks.forEach(function (task) {
+    try {
+      task()
+    } catch (error) {
+      if (!firstError) {
+        firstError = error
+      }
+    }
+  })
+  if (firstError) {
+    throw firstError
   }
 }
 
@@ -125,22 +219,33 @@ export function initMutationObserver(
   cb,
   configuration,
   shadowRootsController,
-  mutationPerfCb
+  mutationPerfCb,
+  mutationOverflowCb,
+  mutationActivityCb,
+  mutationNodeSerializationCb,
+  isNodeIgnored,
+  isNodePublished
 ) {
   return startMutationObserver(
     cb,
     configuration,
     shadowRootsController,
     document,
-    mutationPerfCb
+    mutationPerfCb,
+    mutationOverflowCb,
+    mutationActivityCb,
+    mutationNodeSerializationCb,
+    isNodeIgnored,
+    isNodePublished
   )
 }
 
-export function initMoveObserver(cb, configuration) {
+export function initMoveObserver(cb, configuration, isNodeIgnored) {
+  isNodeIgnored = isNodeIgnored || neverIgnoreNode
   var _updatePosition = throttle(
     function (event) {
       var target = getEventTarget(event)
-      if (hasSerializedNode(target)) {
+      if (!isNodeIgnored(target) && hasSerializedNode(target)) {
         var coordinates = tryToComputeCoordinates(event)
         if (!coordinates) {
           return
@@ -204,10 +309,16 @@ var eventTypeToMouseInteraction = {
   [DOM_EVENT.TOUCH_START]: MouseInteractionType.TouchStart,
   [DOM_EVENT.TOUCH_END]: MouseInteractionType.TouchEnd
 }
-export function initMouseInteractionObserver(cb, configuration) {
+export function initMouseInteractionObserver(
+  cb,
+  configuration,
+  isNodeIgnored
+) {
+  isNodeIgnored = isNodeIgnored || neverIgnoreNode
   var handler = function (event) {
     var target = getEventTarget(event)
     if (
+      isNodeIgnored(target) ||
       getNodePrivacyLevel(target, configuration.defaultPrivacyLevel) ===
         NodePrivacyLevel.HIDDEN ||
       !hasSerializedNode(target)
@@ -267,11 +378,18 @@ function tryToComputeCoordinates(event) {
   return { x: x, y: y }
 }
 
-function initScrollObserver(cb, configuration, elementsScrollPositions) {
+function initScrollObserver(
+  cb,
+  configuration,
+  elementsScrollPositions,
+  isNodeIgnored
+) {
+  isNodeIgnored = isNodeIgnored || neverIgnoreNode
   var _updatePosition = throttle(function (event) {
     var target = getEventTarget(event)
     if (
       !target ||
+      isNodeIgnored(target) ||
       getNodePrivacyLevel(target, configuration.defaultPrivacyLevel) ===
         NodePrivacyLevel.HIDDEN ||
       !hasSerializedNode(target)
@@ -314,11 +432,18 @@ function initViewportResizeObserver(cb, configuration) {
   return initViewportObservable().subscribe(cb).unsubscribe
 }
 
-export function initInputObserver(cb, configuration, target) {
+export function initInputObserver(
+  cb,
+  configuration,
+  target,
+  isNodeIgnored
+) {
   if (target === undefined) {
     target = document
   }
+  isNodeIgnored = isNodeIgnored || neverIgnoreNode
   var lastInputStateMap = new WeakMap()
+  var radioGroupStateByRoot = new WeakMap()
   var isShadowRoot = target !== document
 
   var _addEventListeners = addEventListeners(
@@ -371,6 +496,9 @@ export function initInputObserver(cb, configuration, target) {
   }
 
   function onElementChange(target) {
+    if (isNodeIgnored(target)) {
+      return
+    }
     var nodePrivacyLevel = getNodePrivacyLevel(
       target,
       configuration.defaultPrivacyLevel
@@ -396,30 +524,125 @@ export function initInputObserver(cb, configuration, target) {
     }
 
     // Can be multiple changes on the same node within the same batched mutation observation.
-    cbWithDedup(target, inputState)
+    var shouldTrackRadioGroup = cbWithDedup(target, inputState)
 
     // If a radio was checked, other radios with the same name attribute will be unchecked.
-    var name = target.name
-    if (type === 'radio' && name && target.checked) {
-      forEach(
-        document.querySelectorAll(
-          'input[type="radio"][name="' + cssEscape(name) + '"]'
-        ),
-        function (el) {
-          if (el !== target) {
-            cbWithDedup(el, { isChecked: false })
-          }
-        }
-      )
+    // Keep only the last observed checked radio per native group. This avoids
+    // scanning an arbitrarily large document and does not manufacture false
+    // records for every unchecked peer when a group is first observed.
+    if (type === 'radio' && target.name && shouldTrackRadioGroup) {
+      synchronizeRadioGroup(target)
     }
+  }
+
+  function synchronizeRadioGroup(target) {
+    var root = getRadioRoot(target)
+    var groupMap = getRadioGroupMap(root, target.form)
+    var name = target.name
+    var previouslyCheckedRadio = getTrackedRadio(
+      groupMap,
+      name,
+      target,
+      root
+    )
+
+    if (!target.checked) {
+      if (previouslyCheckedRadio === target) {
+        groupMap.delete(name)
+      }
+      return
+    }
+
+    trackRadio(groupMap, name, target)
+    if (
+      previouslyCheckedRadio &&
+      previouslyCheckedRadio !== target &&
+      isInSameRadioGroup(previouslyCheckedRadio, target, root) &&
+      !previouslyCheckedRadio.checked
+    ) {
+      cbWithDedup(previouslyCheckedRadio, { isChecked: false })
+    }
+  }
+
+  function getTrackedRadio(groupMap, name, target, root) {
+    var reference = groupMap.get(name)
+    if (!reference) {
+      return undefined
+    }
+    var radio = reference.weakRef
+      ? reference.weakRef.deref()
+      : reference.radio
+    if (
+      !radio ||
+      !radio.isConnected ||
+      !isInSameRadioGroup(radio, target, root)
+    ) {
+      groupMap.delete(name)
+      return undefined
+    }
+    return radio
+  }
+
+  function trackRadio(groupMap, name, radio) {
+    if (groupMap.has(name)) {
+      groupMap.delete(name)
+    }
+    groupMap.set(
+      name,
+      typeof WeakRef === 'function'
+        ? { weakRef: new WeakRef(radio) }
+        : { radio: radio }
+    )
+    if (groupMap.size > MAX_TRACKED_RADIO_GROUPS) {
+      groupMap.delete(groupMap.keys().next().value)
+    }
+  }
+
+  function getRadioGroupMap(root, form) {
+    var rootState = radioGroupStateByRoot.get(root)
+    if (!rootState) {
+      rootState = {
+        groupsWithoutForm: new Map(),
+        groupsByForm: new WeakMap()
+      }
+      radioGroupStateByRoot.set(root, rootState)
+    }
+    if (!form) {
+      return rootState.groupsWithoutForm
+    }
+    var formGroups = rootState.groupsByForm.get(form)
+    if (!formGroups) {
+      formGroups = new Map()
+      rootState.groupsByForm.set(form, formGroups)
+    }
+    return formGroups
+  }
+
+  function getRadioRoot(input) {
+    if (typeof input.getRootNode === 'function') {
+      var root = input.getRootNode()
+      if (root) {
+        return root
+      }
+    }
+    return input.ownerDocument || document
+  }
+
+  function isInSameRadioGroup(candidate, target, root) {
+    return (
+      candidate.type === 'radio' &&
+      candidate.name === target.name &&
+      candidate.form === target.form &&
+      getRadioRoot(candidate) === root
+    )
   }
 
   /**
    * There can be multiple changes on the same node within the same batched mutation observation.
    */
   function cbWithDedup(target, inputState) {
-    if (!hasSerializedNode(target)) {
-      return
+    if (isNodeIgnored(target) || !hasSerializedNode(target)) {
+      return false
     }
     var lastInputState = lastInputStateMap.get(target)
     if (
@@ -437,12 +660,22 @@ export function initInputObserver(cb, configuration, target) {
         )
       )
     }
+    return true
   }
 }
 
-export function initStyleSheetObserver(cb, configuration) {
+export function initStyleSheetObserver(
+  cb,
+  configuration,
+  isNodeIgnored
+) {
+  isNodeIgnored = isNodeIgnored || neverIgnoreNode
   function checkStyleSheetAndCallback(styleSheet, callback) {
-    if (styleSheet && hasSerializedNode(styleSheet.ownerNode)) {
+    if (
+      styleSheet &&
+      !isNodeIgnored(styleSheet.ownerNode) &&
+      hasSerializedNode(styleSheet.ownerNode)
+    ) {
       callback(getSerializedNodeId(styleSheet.ownerNode))
     }
   }
@@ -511,11 +744,17 @@ export function initStyleSheetObserver(cb, configuration) {
   }
 }
 
-function initMediaInteractionObserver(mediaInteractionCb, configuration) {
+function initMediaInteractionObserver(
+  mediaInteractionCb,
+  configuration,
+  isNodeIgnored
+) {
+  isNodeIgnored = isNodeIgnored || neverIgnoreNode
   var handler = function (event) {
     var target = getEventTarget(event)
     if (
       !target ||
+      isNodeIgnored(target) ||
       getNodePrivacyLevel(target, configuration.defaultPrivacyLevel) ===
         NodePrivacyLevel.HIDDEN ||
       !hasSerializedNode(target)
@@ -580,8 +819,10 @@ function initVisualViewportResizeObserver(cb, configuration) {
 export function initFrustrationObserver(
   lifeCycle,
   frustrationCb,
-  configuration
+  configuration,
+  isNodeIgnored
 ) {
+  isNodeIgnored = isNodeIgnored || neverIgnoreNode
   return lifeCycle.subscribe(
     LifeCycleEventType.RAW_RUM_EVENT_COLLECTED,
     function (data) {
@@ -595,12 +836,22 @@ export function initFrustrationObserver(
         data.domainContext.events &&
         data.domainContext.events.length
       ) {
+        var replayEvents = data.domainContext.events.filter(function (event) {
+          try {
+            return !isNodeIgnored(getEventTarget(event))
+          } catch (_) {
+            return false
+          }
+        })
+        if (!replayEvents.length) {
+          return
+        }
         frustrationCb({
           timestamp: data.rawRumEvent.date,
           type: RecordType.FrustrationRecord,
           data: {
             frustrationTypes: data.rawRumEvent.action.frustration.type,
-            recordIds: data.domainContext.events.map(function (e) {
+            recordIds: replayEvents.map(function (e) {
               return getRecordIdForEvent(e)
             })
           }

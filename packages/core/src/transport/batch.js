@@ -127,11 +127,17 @@ export var processedMessageByDataMap = function (message) {
 
 export function createBatch(options) {
   var encoder = options.encoder
+  var encoderFallback = options.encoderFallback
   var request = options.request
+  var bytesLimit = options.bytesLimit
   var messageBytesLimit = options.messageBytesLimit
   var sendContentTypeByJson = options.sendContentTypeByJson
   var flushController = options.flushController
   var upsertBuffer = {}
+  var upsertMessageBytesCountByKey = {}
+  var fallbackMessagesBuffer = []
+  var rawFallbackBatchActive = false
+  var pendingRawBatches = []
   var flushSubscription = flushController.flushObservable.subscribe(function (
     event
   ) {
@@ -157,14 +163,31 @@ export function createBatch(options) {
 
     if (key !== undefined) {
       upsertBuffer[key] = serializedMessage
+      upsertMessageBytesCountByKey[key] = estimatedMessageBytesCount
       flushController.notifyAfterAddMessage()
     } else {
-      encoder.write(
-        getMessageText([serializedMessage], encoder.isEmpty()),
-        function (realMessageBytesCount) {
+      if (
+        encoder.isAsync ||
+        encoderFallback ||
+        rawFallbackBatchActive
+      ) {
+        fallbackMessagesBuffer.push(serializedMessage)
+      }
+      var writeEncoder = encoder
+      writeEncoder.write(
+        getMessageText([serializedMessage], writeEncoder.isEmpty()),
+        function (realMessageBytesCount, error) {
           flushController.notifyAfterAddMessage(
-            realMessageBytesCount - estimatedMessageBytesCount
+            error
+              ? undefined
+              : realMessageBytesCount - estimatedMessageBytesCount
           )
+          if (error) {
+            // A stream-scoped worker error may recover before finish(). Switch
+            // immediately so a later successful compressed chunk cannot hide
+            // the loss of messages written before the error.
+            switchToFallbackEncoder(writeEncoder)
+          }
         }
       )
     }
@@ -175,9 +198,9 @@ export function createBatch(options) {
   }
 
   function remove(key) {
-    var removedMessage = upsertBuffer[key]
     delete upsertBuffer[key]
-    var messageBytesCount = encoder.estimateEncodedBytesCount(removedMessage)
+    var messageBytesCount = upsertMessageBytesCountByKey[key]
+    delete upsertMessageBytesCountByKey[key]
     flushController.notifyAfterRemoveMessage(messageBytesCount)
   }
   function process(message) {
@@ -212,13 +235,27 @@ export function createBatch(options) {
   }
 
   function flush(event) {
-    var upsertMessages = values(upsertBuffer).join(
+    var flushedEncoder = encoder
+    var upsertMessageValues = values(upsertBuffer)
+    var upsertMessages = upsertMessageValues.join(
       sendContentTypeByJson ? ',' : '\n'
     )
     upsertBuffer = {}
+    upsertMessageBytesCountByKey = {}
+    var rawFallbackFlush = rawFallbackBatchActive
+    var fallbackMessages =
+      flushedEncoder.isAsync || encoderFallback || rawFallbackFlush
+      ? fallbackMessagesBuffer.concat(upsertMessageValues)
+      : undefined
+    fallbackMessagesBuffer = []
+    rawFallbackBatchActive = false
 
     var isPageExit = isPageExitReason(event.reason)
     var send = isPageExit ? request.sendOnExit : request.send
+    var pendingRawBatch =
+      !isPageExit && flushedEncoder.isAsync
+        ? addPendingRawBatch(fallbackMessages)
+        : undefined
 
     if (
       isPageExit &&
@@ -226,40 +263,138 @@ export function createBatch(options) {
       // if the encoder is async we need to send two requests in some cases (one for encoded data
       // and the other for non-encoded data). But if it's not async, we don't have to worry about
       // it and always send a single request.
-      encoder.isAsync
+      flushedEncoder.isAsync
     ) {
-      var encoderResult = encoder.finishSync()
+      var encoderResult = flushedEncoder.finishSync()
+      var pendingMessages = consumePendingRawMessages().concat(
+        fallbackMessages || []
+      )
 
-      // Send encoded messages
-      if (encoderResult.outputBytesCount) {
-        send(formatPayloadFromEncoder(encoderResult, sendContentTypeByJson))
+      if (encoderResult.error) {
+        switchToFallbackEncoder(flushedEncoder)
       }
-      // Send messages that are not yet encoded at this point
-      var pendingMessages = [...encoderResult.pendingData, upsertMessages]
-        .filter(Boolean)
-        .join('\n')
 
-      if (pendingMessages) {
-        send({
-          data: pendingMessages,
-          bytesCount: computeBytesCount(pendingMessages)
-        })
-      }
+      // A synchronous finish can contain a compressed prefix from an older
+      // unfinished batch and raw framing from a newer one. Neither part is a
+      // valid standalone payload. Send the raw journal instead; it preserves
+      // complete original messages and exact finish boundaries.
+      sendMessages(
+        send,
+        pendingMessages,
+        sendContentTypeByJson,
+        bytesLimit
+      )
     } else {
       if (upsertMessages) {
-        var text = getMessageText([upsertMessages], encoder.isEmpty())
+        var text = getMessageText(
+          [upsertMessages],
+          flushedEncoder.isEmpty()
+        )
         if (sendContentTypeByJson) {
           text += ']'
         }
-        encoder.write(text)
+        flushedEncoder.write(text)
       } else {
         if (sendContentTypeByJson) {
-          encoder.write(']')
+          flushedEncoder.write(']')
         }
       }
-      encoder.finish(function (encoderResult) {
-        send(formatPayloadFromEncoder(encoderResult))
+      flushedEncoder.finish(function (encoderResult) {
+        if (
+          pendingRawBatch &&
+          !releasePendingRawBatch(pendingRawBatch)
+        ) {
+          // A page-exit flush already sent this batch from the raw journal.
+          return
+        }
+        if (encoderResult.error) {
+          switchToFallbackEncoder(flushedEncoder)
+          sendMessages(
+            send,
+            fallbackMessages,
+            sendContentTypeByJson,
+            bytesLimit
+          )
+          return
+        }
+        if (rawFallbackFlush) {
+          sendMessages(
+            send,
+            fallbackMessages,
+            sendContentTypeByJson,
+            bytesLimit
+          )
+          return
+        }
+        if (encoderResult.outputBytesCount) {
+          send(
+            formatPayloadFromEncoder(
+              encoderResult,
+              sendContentTypeByJson
+            )
+          )
+        } else {
+          sendMessages(
+            send,
+            fallbackMessages,
+            sendContentTypeByJson,
+            bytesLimit
+          )
+        }
       })
+    }
+  }
+
+  function addPendingRawBatch(messages) {
+    var batch = {
+      messages: messages || [],
+      isActive: true
+    }
+    pendingRawBatches.push(batch)
+    return batch
+  }
+
+  function releasePendingRawBatch(batch) {
+    if (!batch.isActive) {
+      return false
+    }
+    batch.isActive = false
+    var index = pendingRawBatches.indexOf(batch)
+    if (index !== -1) {
+      pendingRawBatches.splice(index, 1)
+    }
+    return true
+  }
+
+  function consumePendingRawMessages() {
+    var messages = []
+    pendingRawBatches.forEach(function (batch) {
+      batch.isActive = false
+      messages = messages.concat(batch.messages)
+    })
+    pendingRawBatches = []
+    return messages
+  }
+
+  function switchToFallbackEncoder(failedEncoder) {
+    if (!encoderFallback || encoder !== failedEncoder) {
+      return
+    }
+    var createFallbackEncoder = encoderFallback
+    encoderFallback = undefined
+    encoder = createFallbackEncoder()
+    // The flush controller accounted the current batch with the failed
+    // encoder's estimate. Keep its original messages until the identity
+    // encoder flushes so the raw payload can still honor the batch limit.
+    rawFallbackBatchActive =
+      fallbackMessagesBuffer.length > 0 || !isEmptyObject(upsertBuffer)
+    if (fallbackMessagesBuffer.length) {
+      encoder.write(
+        getMessageText(fallbackMessagesBuffer, encoder.isEmpty())
+      )
+    }
+    if (failedEncoder.stop) {
+      failedEncoder.stop()
     }
   }
 
@@ -269,6 +404,74 @@ export function createBatch(options) {
     upsert: addOrUpdate,
     stop: flushSubscription.unsubscribe
   }
+}
+
+function sendMessages(
+  send,
+  messages,
+  sendContentTypeByJson,
+  bytesLimit
+) {
+  if (!messages) {
+    return
+  }
+  var filteredMessages = messages.filter(Boolean)
+  if (!filteredMessages.length) {
+    return
+  }
+
+  var messagesBuffer = []
+  var messagesBufferBytesCount = sendContentTypeByJson ? 2 : 0
+  filteredMessages.forEach(function (message) {
+    var separatorBytesCount = messagesBuffer.length ? 1 : 0
+    var messageBytesCount = computeBytesCount(message)
+    if (
+      messagesBuffer.length &&
+      typeof bytesLimit === 'number' &&
+      messagesBufferBytesCount +
+        separatorBytesCount +
+        messageBytesCount >
+        bytesLimit
+    ) {
+      sendMessagesBuffer(
+        send,
+        messagesBuffer,
+        messagesBufferBytesCount,
+        sendContentTypeByJson
+      )
+      messagesBuffer = []
+      messagesBufferBytesCount = sendContentTypeByJson ? 2 : 0
+      separatorBytesCount = 0
+    }
+    messagesBuffer.push(message)
+    messagesBufferBytesCount +=
+      separatorBytesCount + messageBytesCount
+  })
+  sendMessagesBuffer(
+    send,
+    messagesBuffer,
+    messagesBufferBytesCount,
+    sendContentTypeByJson
+  )
+}
+
+function sendMessagesBuffer(
+  send,
+  messages,
+  messagesBytesCount,
+  sendContentTypeByJson
+) {
+  var data = sendContentTypeByJson
+    ? '[' + messages.join(',') + ']'
+    : messages.join('\n')
+  if (!data) {
+    return
+  }
+  send({
+    data: data,
+    type: sendContentTypeByJson ? 'application/json;UTF-8' : undefined,
+    bytesCount: messagesBytesCount
+  })
 }
 
 function formatPayloadFromEncoder(encoderResult, sendContentTypeByJson) {

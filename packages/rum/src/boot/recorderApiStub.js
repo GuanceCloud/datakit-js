@@ -7,10 +7,10 @@ export function makeRecorderApiStub() {
   recorderApi.stop = noop
   recorderApi.takeSubsequentFullSnapshot = noop
   recorderApi.snapshotCanvas = function () {
-    return {
+    return Promise.resolve({
       ok: false,
       reason: 'not_recording'
-    }
+    })
   }
   recorderApi.getSerializedNodeIdForDebug = function () {
     return undefined

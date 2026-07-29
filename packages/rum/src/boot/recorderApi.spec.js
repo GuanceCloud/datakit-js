@@ -10,7 +10,8 @@ import {
 import {
   getDeflateWorkerStatus,
   resetDeflateWorkerState,
-  DeflateWorkerStatus
+  DeflateWorkerStatus,
+  startDeflateWorker
 } from '../domain/deflate'
 
 describe('recorderApi', () => {
@@ -20,6 +21,34 @@ describe('recorderApi', () => {
     constructor() {
       super()
       this.postMessage = jasmine.createSpy('postMessage')
+      this.terminate = jasmine.createSpy('terminate')
+    }
+  }
+
+  class SnapshotDispatchWorker {
+    constructor() {
+      this.listeners = {}
+      this.postMessage = jasmine.createSpy('postMessage')
+      this.terminate = jasmine.createSpy('terminate')
+    }
+
+    addEventListener(type, listener) {
+      if (!this.listeners[type]) {
+        this.listeners[type] = []
+      }
+      this.listeners[type].push(listener)
+    }
+
+    removeEventListener(type, listener) {
+      this.listeners[type] = (this.listeners[type] || []).filter(
+        (candidate) => candidate !== listener
+      )
+    }
+
+    dispatchEvent(event) {
+      ;(this.listeners[event.type] || [])
+        .slice()
+        .forEach((listener) => listener(event))
     }
   }
 
@@ -155,7 +184,6 @@ describe('recorderApi', () => {
     )
 
     expect(startRecordingImpl).toHaveBeenCalled()
-    expect(getDeflateWorkerStatus()).toBe(DeflateWorkerStatus.Loading)
     expect(recorderApi.isRecording()).toBeFalse()
 
     worker.dispatchEvent(
@@ -164,7 +192,6 @@ describe('recorderApi', () => {
       })
     )
 
-    expect(getDeflateWorkerStatus()).toBe(DeflateWorkerStatus.Initialized)
     expect(recorderApi.isRecording()).toBeTrue()
 
     recorderApi.takeSubsequentFullSnapshot()
@@ -239,7 +266,159 @@ describe('recorderApi', () => {
     lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
       reason: PageExitReason.UNLOADING
     })
-    expect(stopRecording).toHaveBeenCalled()
+    expect(stopRecording).toHaveBeenCalledWith(PageExitReason.UNLOADING)
+
+    recorderApi.takeSubsequentFullSnapshot()
+    expect(takeSubsequentFullSnapshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('should not enter started state when recording stopped during initialization', () => {
+    const worker = new FakeWorker()
+    const stop = jasmine.createSpy('stop')
+    const takeSubsequentFullSnapshot = jasmine.createSpy(
+      'takeSubsequentFullSnapshot'
+    )
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.callFake(function () {
+        arguments[6]()
+        return {
+          stop,
+          isStopped: () => true,
+          takeSubsequentFullSnapshot
+        }
+      })
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      { workerUrl: '/worker.js' },
+      {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      undefined
+    )
+    worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
+    expect(recorderApi.isRecording()).toBeFalse()
+    expect(stop).toHaveBeenCalledTimes(1)
+    recorderApi.takeSubsequentFullSnapshot()
+    expect(takeSubsequentFullSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('should clear stopped recording state immediately and ignore a stale stop callback', async () => {
+    const worker = new FakeWorker()
+    const stoppedCallbacks = []
+    const getReplayPerformanceForDebug = jasmine.createSpy(
+      'getReplayPerformanceForDebug'
+    )
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.callFake(function () {
+        stoppedCallbacks.push(arguments[6])
+        return {
+          stop: jasmine.createSpy('stop'),
+          takeSubsequentFullSnapshot: jasmine.createSpy(
+            'takeSubsequentFullSnapshot'
+          ),
+          getReplayPerformanceForDebug
+        }
+      })
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      { workerUrl: '/worker.js' },
+      {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      undefined
+    )
+    worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+    expect(recorderApi.isRecording()).toBeTrue()
+
+    stoppedCallbacks[0]('full_snapshot_failure')
+
+    // Verify the callback changed state without relying on isRecording() to
+    // reconcile the stopped implementation first.
+    expect(recorderApi.getReplayPerformanceForDebug()).toBeUndefined()
+    expect(
+      await recorderApi.snapshotCanvas(document.createElement('canvas'))
+    ).toEqual({
+      ok: false,
+      reason: 'not_recording'
+    })
+
+    recorderApi.start()
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+    expect(recorderApi.isRecording()).toBeTrue()
+
+    stoppedCallbacks[0]('late_old_recording_stop')
+    expect(recorderApi.isRecording()).toBeTrue()
+  })
+
+  it('should restart after runtime replay reset exhaustion without requiring an explicit stop', () => {
+    const worker = new FakeWorker()
+    const recordingStates = []
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.callFake(() => {
+        const recordingState = { stopped: false }
+        recordingStates.push(recordingState)
+        return {
+          stop: jasmine.createSpy('stop'),
+          isStopped: () => recordingState.stopped,
+          takeSubsequentFullSnapshot: jasmine.createSpy(
+            'takeSubsequentFullSnapshot'
+          )
+        }
+      })
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      { workerUrl: '/worker.js' },
+      {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      undefined
+    )
+    worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+    expect(recorderApi.isRecording()).toBeTrue()
+
+    // startRecording also marks itself stopped after repeated baseline reset
+    // failures. The next public start must reconcile that state first.
+    recordingStates[0].stopped = true
+    recorderApi.start()
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+    expect(recordingStates.length).toBe(2)
+    expect(recorderApi.isRecording()).toBeTrue()
   })
 
   it('should go back to intent-to-start on session expiration and restart on renewal', () => {
@@ -296,15 +475,545 @@ describe('recorderApi', () => {
     expect(startRecordingImpl.calls.count()).toBe(2)
   })
 
-  it('should keep snapshotCanvas as a no-op before the recorder starts', () => {
+  it('should stop recording and recreate the worker after a terminal encoder error', () => {
+    const worker = new FakeWorker()
+    const removeEventListenerSpy = spyOn(
+      EventTarget.prototype,
+      'removeEventListener'
+    ).and.callThrough()
+    const stopRecording = jasmine.createSpy('stopRecording')
+    const createDeflateWorkerImpl = jasmine
+      .createSpy('createDeflateWorkerImpl')
+      .and.returnValue(worker)
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.callFake(function () {
+        return {
+          stop: function () {
+            stopRecording()
+          },
+          takeSubsequentFullSnapshot: jasmine.createSpy(
+            'takeSubsequentFullSnapshot'
+          )
+        }
+      })
+    const recorderApi = makeRecorderApi(
+      startRecordingImpl,
+      createDeflateWorkerImpl
+    )
+    const lifeCycle = new LifeCycle()
+    const sessionManager = {
+      findTrackedSession: () => ({
+        sessionReplayAllowed: true
+      })
+    }
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      lifeCycle,
+      { workerUrl: '/worker.js' },
+      sessionManager,
+      {},
+      undefined
+    )
+    worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+
+    expect(recorderApi.isRecording()).toBeTrue()
+
+    worker.dispatchEvent(new Event('error'))
+
+    expect(stopRecording).toHaveBeenCalledTimes(1)
+    expect(recorderApi.isRecording()).toBeFalse()
+    expect(getDeflateWorkerStatus()).toBe(DeflateWorkerStatus.Nil)
+    expect(worker.terminate).toHaveBeenCalledTimes(1)
+    expect(removeEventListenerSpy).toHaveBeenCalledTimes(4)
+
+    recorderApi.start()
+
+    expect(createDeflateWorkerImpl).toHaveBeenCalledTimes(2)
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+
+    worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.1' }
+      })
+    )
+
+    expect(recorderApi.isRecording()).toBeTrue()
+  })
+
+  it('should recover when the recording implementation throws while starting', () => {
+    const worker = new FakeWorker()
+    const startupError = new Error('recording startup failed')
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.callFake(function () {
+        if (startRecordingImpl.calls.count() === 1) {
+          throw startupError
+        }
+        return {
+          stop: jasmine.createSpy('stop'),
+          takeSubsequentFullSnapshot: jasmine.createSpy(
+            'takeSubsequentFullSnapshot'
+          )
+        }
+      })
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+    const sessionManager = {
+      findTrackedSession: () => ({
+        sessionReplayAllowed: true
+      })
+    }
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      { workerUrl: '/worker.js' },
+      sessionManager,
+      {},
+      undefined
+    )
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
+    expect(recorderApi.isRecording()).toBeFalse()
+
+    worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+    recorderApi.start()
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+    expect(recorderApi.isRecording()).toBeTrue()
+  })
+
+  it('should retry with a new owned worker after an initialization error', () => {
+    // Model an event source that already snapshotted both listeners before the
+    // controller failure callback removes the encoder listener.
+    const firstWorker = new SnapshotDispatchWorker()
+    const secondWorker = new FakeWorker()
+    const createDeflateWorkerImpl = jasmine
+      .createSpy('createDeflateWorkerImpl')
+      .and.returnValues(firstWorker, secondWorker)
+    const stopRecording = jasmine.createSpy('stopRecording')
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.returnValue({
+        stop: stopRecording,
+        takeSubsequentFullSnapshot: jasmine.createSpy(
+          'takeSubsequentFullSnapshot'
+        )
+      })
+    const recorderApi = makeRecorderApi(
+      startRecordingImpl,
+      createDeflateWorkerImpl
+    )
+    const sessionManager = {
+      findTrackedSession: () => ({
+        sessionReplayAllowed: true
+      })
+    }
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      { workerUrl: '/worker.js' },
+      sessionManager,
+      {},
+      undefined
+    )
+    firstWorker.dispatchEvent(new Event('error'))
+
+    expect(stopRecording).toHaveBeenCalledTimes(1)
+    expect(firstWorker.terminate).toHaveBeenCalledTimes(1)
+    expect(recorderApi.isRecording()).toBeFalse()
+
+    recorderApi.start()
+
+    expect(createDeflateWorkerImpl).toHaveBeenCalledTimes(2)
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+    secondWorker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.1' }
+      })
+    )
+    expect(recorderApi.isRecording()).toBeTrue()
+  })
+
+  it('should not revive recording when the encoder fails while starting', () => {
+    const worker = new FakeWorker()
+    const terminalError = new Error('worker post failed')
+    worker.postMessage.and.callFake(function (message) {
+      if (message.action === 'write') {
+        throw terminalError
+      }
+    })
+    const stopRecording = jasmine.createSpy('stopRecording')
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.callFake(function (
+        lifeCycle,
+        configuration,
+        sessionManager,
+        viewContexts,
+        deflateEncoder
+      ) {
+        deflateEncoder.write('first replay record')
+        return {
+          stop: function () {
+            stopRecording()
+            deflateEncoder.stop()
+          },
+          takeSubsequentFullSnapshot: jasmine.createSpy(
+            'takeSubsequentFullSnapshot'
+          )
+        }
+      })
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      { workerUrl: '/worker.js' },
+      {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      undefined
+    )
+
+    expect(stopRecording).toHaveBeenCalledTimes(1)
+    expect(recorderApi.isRecording()).toBeFalse()
+    expect(getDeflateWorkerStatus()).toBe(DeflateWorkerStatus.Nil)
+  })
+
+  it('should remain stopped when the final encoder write fails synchronously', () => {
+    const worker = new FakeWorker()
+    const terminalError = new Error('footer write failed')
+    worker.postMessage.and.callFake(function (message) {
+      if (message.action === 'write' && message.data === 'footer') {
+        throw terminalError
+      }
+    })
+    const stopRecording = jasmine.createSpy('stopRecording')
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.callFake(function (
+        lifeCycle,
+        configuration,
+        sessionManager,
+        viewContexts,
+        deflateEncoder
+      ) {
+        return {
+          stop: function (flushReason) {
+            stopRecording(flushReason)
+            deflateEncoder.write('footer')
+          },
+          takeSubsequentFullSnapshot: jasmine.createSpy(
+            'takeSubsequentFullSnapshot'
+          )
+        }
+      })
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+    const lifeCycle = new LifeCycle()
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      lifeCycle,
+      { workerUrl: '/worker.js' },
+      {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      undefined
+    )
+    worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.UNLOADING
+    })
+
+    expect(stopRecording).toHaveBeenCalledOnceWith(PageExitReason.UNLOADING)
+    expect(recorderApi.isRecording()).toBeFalse()
+    expect(getDeflateWorkerStatus()).toBe(DeflateWorkerStatus.Nil)
+  })
+
+  it('should fall back to an owned replay worker after a shared stream failure', () => {
+    const sharedWorker = new FakeWorker()
+    const fallbackWorker = new FakeWorker()
+    startDeflateWorker(
+      {},
+      'RUM',
+      jasmine.createSpy('rumFailure'),
+      () => sharedWorker
+    )
+    sharedWorker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+    const createDeflateWorkerImpl = jasmine
+      .createSpy('createDeflateWorkerImpl')
+      .and.returnValue(fallbackWorker)
+    const stopRecording = jasmine.createSpy('stopRecording')
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.returnValue({
+        stop: stopRecording,
+        takeSubsequentFullSnapshot: jasmine.createSpy(
+          'takeSubsequentFullSnapshot'
+        )
+      })
+    const recorderApi = makeRecorderApi(
+      startRecordingImpl,
+      createDeflateWorkerImpl
+    )
+    const sessionManager = {
+      findTrackedSession: () => ({
+        sessionReplayAllowed: true
+      })
+    }
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      {},
+      sessionManager,
+      {},
+      sharedWorker
+    )
+
+    expect(recorderApi.isRecording()).toBeTrue()
+    expect(createDeflateWorkerImpl).not.toHaveBeenCalled()
+    expect(startRecordingImpl.calls.mostRecent().args[4]).toEqual(
+      jasmine.objectContaining({
+        isAsync: true
+      })
+    )
+
+    sharedWorker.dispatchEvent(new Event('error'))
+
+    expect(stopRecording).toHaveBeenCalledTimes(1)
+    expect(recorderApi.isRecording()).toBeFalse()
+    expect(sharedWorker.terminate).not.toHaveBeenCalled()
+    expect(getDeflateWorkerStatus()).toBe(DeflateWorkerStatus.Initialized)
+
+    recorderApi.start()
+
+    expect(createDeflateWorkerImpl).toHaveBeenCalledTimes(1)
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+    expect(recorderApi.isRecording()).toBeFalse()
+    fallbackWorker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.1' }
+      })
+    )
+    expect(recorderApi.isRecording()).toBeTrue()
+    expect(sharedWorker.terminate).not.toHaveBeenCalled()
+  })
+
+  it('should stop a shared replay stream without terminating the RUM worker', () => {
+    const sharedWorker = new FakeWorker()
+    startDeflateWorker(
+      {},
+      'RUM',
+      jasmine.createSpy('rumFailure'),
+      () => sharedWorker
+    )
+    sharedWorker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+    const createDeflateWorkerImpl = jasmine.createSpy(
+      'createDeflateWorkerImpl'
+    )
+    const stopRecording = jasmine.createSpy('stopRecording')
+    const recorderApi = makeRecorderApi(
+      jasmine.createSpy('startRecordingImpl').and.returnValue({
+        stop: stopRecording,
+        takeSubsequentFullSnapshot: jasmine.createSpy(
+          'takeSubsequentFullSnapshot'
+        )
+      }),
+      createDeflateWorkerImpl
+    )
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      {},
+      {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      sharedWorker
+    )
+    expect(recorderApi.isRecording()).toBeTrue()
+
+    recorderApi.stop()
+
+    expect(stopRecording).toHaveBeenCalledTimes(1)
+    expect(sharedWorker.terminate).not.toHaveBeenCalled()
+    expect(createDeflateWorkerImpl).not.toHaveBeenCalled()
+    expect(recorderApi.isRecording()).toBeFalse()
+  })
+
+  it('should preserve an owned worker on a normal stop and reuse it', () => {
+    const ownedWorker = new FakeWorker()
+    const createDeflateWorkerImpl = jasmine
+      .createSpy('createDeflateWorkerImpl')
+      .and.returnValue(ownedWorker)
+    const stopRecording = jasmine.createSpy('stopRecording')
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.returnValue({
+        stop: stopRecording,
+        takeSubsequentFullSnapshot: jasmine.createSpy(
+          'takeSubsequentFullSnapshot'
+        )
+      })
+    const recorderApi = makeRecorderApi(
+      startRecordingImpl,
+      createDeflateWorkerImpl
+    )
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      {},
+      {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      undefined
+    )
+    ownedWorker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+    expect(recorderApi.isRecording()).toBeTrue()
+
+    recorderApi.stop()
+    recorderApi.start()
+
+    expect(stopRecording).toHaveBeenCalledTimes(1)
+    expect(ownedWorker.terminate).not.toHaveBeenCalled()
+    expect(createDeflateWorkerImpl).toHaveBeenCalledTimes(1)
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+    expect(recorderApi.isRecording()).toBeTrue()
+  })
+
+  it('should terminate an owned replay worker when initialization times out', () => {
+    jasmine.clock().install()
+    try {
+      const replayWorker = new FakeWorker()
+      const stopRecording = jasmine.createSpy('stopRecording')
+      const startRecordingImpl = jasmine
+        .createSpy('startRecordingImpl')
+        .and.returnValue({
+          stop: stopRecording,
+          takeSubsequentFullSnapshot: jasmine.createSpy(
+            'takeSubsequentFullSnapshot'
+          )
+        })
+      const createDeflateWorkerImpl = jasmine
+        .createSpy('createDeflateWorkerImpl')
+        .and.returnValue(replayWorker)
+      const recorderApi = makeRecorderApi(
+        startRecordingImpl,
+        createDeflateWorkerImpl
+      )
+      const sessionManager = {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      }
+
+      recorderApi.start()
+      recorderApi.onRumStart(
+        new LifeCycle(),
+        {},
+        sessionManager,
+        {},
+        undefined
+      )
+
+      jasmine.clock().tick(10000)
+
+      expect(stopRecording).toHaveBeenCalledTimes(1)
+      expect(replayWorker.terminate).toHaveBeenCalledTimes(1)
+      expect(getDeflateWorkerStatus()).toBe(DeflateWorkerStatus.Nil)
+      expect(createDeflateWorkerImpl).toHaveBeenCalledTimes(1)
+      expect(recorderApi.isRecording()).toBeFalse()
+    } finally {
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should reset owned worker state after a synchronous creation failure', () => {
+    const createDeflateWorkerImpl = jasmine
+      .createSpy('createDeflateWorkerImpl')
+      .and.throwError('worker creation failed')
+    const startRecordingImpl = jasmine.createSpy('startRecordingImpl')
+    const recorderApi = makeRecorderApi(
+      startRecordingImpl,
+      createDeflateWorkerImpl
+    )
+
+    recorderApi.start()
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      {},
+      {
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      undefined
+    )
+
+    expect(createDeflateWorkerImpl).toHaveBeenCalledTimes(1)
+    expect(startRecordingImpl).not.toHaveBeenCalled()
+    expect(recorderApi.isRecording()).toBeFalse()
+
+    recorderApi.start()
+
+    expect(createDeflateWorkerImpl).toHaveBeenCalledTimes(2)
+    expect(startRecordingImpl).not.toHaveBeenCalled()
+  })
+
+  it('should keep snapshotCanvas as an async no-op before the recorder starts', async () => {
     const recorderApi = makeRecorderApi(jasmine.createSpy('startRecordingImpl'))
 
-    expect(recorderApi.snapshotCanvas(document.createElement('canvas'))).toEqual(
-      {
-        ok: false,
-        reason: 'not_recording'
-      }
+    const snapshotPromise = recorderApi.snapshotCanvas(
+      document.createElement('canvas')
     )
+    expect(snapshotPromise).toEqual(jasmine.any(Promise))
+    expect(await snapshotPromise).toEqual({
+      ok: false,
+      reason: 'not_recording'
+    })
     expect(
       recorderApi.getSerializedNodeIdForDebug(document.createElement('canvas'))
     ).toBeUndefined()

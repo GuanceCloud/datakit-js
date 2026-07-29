@@ -743,7 +743,7 @@
       })(window, document, 'script', './dataflux-rum.js', 'DATAFLUX_RUM')
       window.DATAFLUX_RUM.onReady(() => {
         const replayCanvasMode =
-          window.localStorage.getItem('demoReplayCanvasMode') || 'manual'
+          window.localStorage.getItem('demoReplayCanvasMode') || 'auto'
         const replayCanvasScheduler =
           window.localStorage.getItem('demoReplayCanvasScheduler') ||
           'continuous_snapshot'
@@ -755,21 +755,18 @@
           'http://testing-ft2x-api.dataflux.cn'
         ]
         window.DATAFLUX_RUM.init({
-          applicationId: 'test_sourcemap',
+          applicationId: 'test_dcl',
           site: 'https://cn3-rum-openway.guance.com',
-          clientToken: 'd90cd647e3c94442810cd7747a83fb72',
+          clientToken: 'b806cd20126446c4848605cb254f92ed',
           service: 'browser',
           env: 'production',
           version: '1.0.0',
           sessionSampleRate: 100,
           traceType: 'ddtrace',
-          sessionReplaySampleRate: 100,
+          sessionReplaySampleRate: 70,
           trackInteractions: true,
           //   workerUrl: 'http://localhost:8082/worker.js',
-          //   compressIntakeRequests: true,
-          allowFallbackToLocalStorage: true,
-          usePartitionedCrossSiteSessionCookie: true,
-          trackSessionAcrossSubdomains: true,
+          compressIntakeRequests: true,
           telemetryEnabled: true,
           enableLongAnimationFrame: true,
           retryMaxSize: 10,
@@ -782,7 +779,6 @@
             replayCanvasWorkerMode === 'external'
               ? window.location.origin + '/canvas-worker.js'
               : undefined,
-          remoteConfiguration: true,
 
           beforeSend: function (event, context) {
             if (event.type === 'resource' && event.resource.type === 'xhr') {
@@ -791,11 +787,23 @@
             }
             return true // 这里代表需要上报数据
           },
-          allowedDDTracingOrigins: allowedTracingOrigins
+          allowedTracingOrigins: allowedTracingOrigins
         })
+        // Keep the requested 70% configuration while making the acceptance
+        // run deterministic.
+        window.DATAFLUX_RUM.setForcedSession()
         window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
         window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
-        whenSessionReplayRecordingReady(captureInitialCanvasReplayBaseline)
+        if (
+          typeof window.whenSessionReplayRecordingReady === 'function' &&
+          typeof window.captureInitialCanvasReplayBaseline === 'function'
+        ) {
+          window.whenSessionReplayRecordingReady(
+            window.captureInitialCanvasReplayBaseline
+          )
+        } else {
+          window.__demoCanvasReplayBaselinePending = true
+        }
       })
     </script>
     <script>
@@ -1100,6 +1108,7 @@
         <p class="demo-shell__desc">
           这个页面把回放录制、资源追踪和大 DOM 压测整合成一套调试面板。
           每个区块都按“状态、动作、输出”组织，方便快速定位当前实验状态。
+          <a href="/webgl-replay-game.html">打开 WebGL 游戏 Replay 场景</a>
         </p>
       </div>
       <div class="cls-demo">
@@ -1130,6 +1139,10 @@
                 <div class="canvas-demo__status demo-status-grid">
                   <div class="canvas-demo__status-label">isRecording</div>
                   <div id="canvas-status-recording" class="canvas-demo__status-value">unknown</div>
+                  <div class="canvas-demo__status-label">session</div>
+                  <div id="canvas-status-session" class="canvas-demo__status-value">waiting</div>
+                  <div class="canvas-demo__status-label">view</div>
+                  <div id="canvas-status-view" class="canvas-demo__status-value">waiting</div>
                   <div class="canvas-demo__status-label">mode</div>
                   <div id="canvas-status-mode" class="canvas-demo__status-value">manual</div>
                   <div class="canvas-demo__status-label">scheduler</div>
@@ -1381,7 +1394,7 @@
             <div>
               <div class="demo-section__title">Large DOM Stress Bench</div>
               <div class="demo-section__desc">
-                用来对比 replay on/off 在大 DOM 生成场景下的额外成本，优先使用 dashboard 2500 和 benchmark。
+                dashboard 2500 用于分批增量录制与性能对比；Full Snapshot 请使用 50 行基线场景。
               </div>
               <div class="demo-flow">
                 <div class="demo-flow__step">1. toggle replay</div>
@@ -1407,7 +1420,7 @@
                   <div id="large-dom-status-elements">0</div>
                   <div>generate ms</div>
                   <div id="large-dom-status-generate-ms">0</div>
-                  <div>snapshot ms</div>
+                  <div>snapshot request ms</div>
                   <div id="large-dom-status-snapshot-ms">0</div>
                   <div>last action</div>
                   <div id="large-dom-status-last-action">none</div>
@@ -1425,13 +1438,14 @@
                   <div class="demo-toolbar-group__actions">
                     <button delay="largeDomReplayOn">replay on</button>
                     <button delay="largeDomReplayOff">replay off</button>
-                    <button delay="largeDomTakeFullSnapshot">take full snapshot</button>
+                    <button delay="largeDomTakeFullSnapshot">request safe full snapshot</button>
                   </div>
                 </div>
                 <div class="demo-toolbar-group">
                   <div class="demo-toolbar-group__title">Generate</div>
                   <div class="demo-toolbar-group__actions">
-                    <button delay="largeDomGenerateDashboard2500">generate dashboard 2500</button>
+                    <button delay="largeDomGenerateDashboard50">generate dashboard 50 (baseline)</button>
+                    <button delay="largeDomGenerateDashboard2500">generate dashboard 2500 (incremental)</button>
                     <button delay="largeDomClear">clear large dom</button>
                   </div>
                 </div>
@@ -1624,6 +1638,8 @@
       const replayCanvas = document.getElementById('replay-canvas')
       const replayCanvasLog = document.getElementById('canvas-demo-log')
       const replayCanvasRecordingStatus = document.getElementById('canvas-status-recording')
+      const replayCanvasSessionStatus = document.getElementById('canvas-status-session')
+      const replayCanvasViewStatus = document.getElementById('canvas-status-view')
       const replayCanvasModeStatus = document.getElementById('canvas-status-mode')
       const replayCanvasSchedulerStatus = document.getElementById(
         'canvas-status-scheduler'
@@ -1692,7 +1708,7 @@
         'dashboard-canvas-export'
       )
       const demoReplayCanvasMode =
-        window.localStorage.getItem('demoReplayCanvasMode') || 'manual'
+        window.localStorage.getItem('demoReplayCanvasMode') || 'auto'
       const demoReplayCanvasScheduler =
         window.localStorage.getItem('demoReplayCanvasScheduler') ||
         'continuous_snapshot'
@@ -1801,20 +1817,23 @@
       }
 
       function setResourceHookStatus(element, value) {
-        if (element) {
-          element.textContent = String(value)
-        }
+        setTextContentIfChanged(element, value)
       }
 
       function setCanvasStatus(element, value) {
-        if (element) {
-          element.textContent = String(value)
-        }
+        setTextContentIfChanged(element, value)
       }
 
       function setLargeDomStatus(element, value) {
+        setTextContentIfChanged(element, value)
+      }
+
+      function setTextContentIfChanged(element, value) {
         if (element) {
-          element.textContent = String(value)
+          const nextValue = String(value)
+          if (element.textContent !== nextValue) {
+            element.textContent = nextValue
+          }
         }
       }
 
@@ -1822,11 +1841,25 @@
         const rum = window.DATAFLUX_RUM
         const isRecording =
           rum && typeof rum.isRecording === 'function' ? rum.isRecording() : 'unavailable'
+        const internalContext =
+          rum && typeof rum.getInternalContext === 'function'
+            ? rum.getInternalContext()
+            : undefined
         const autoDebugResult =
           rum &&
           typeof rum.getLastAutoCanvasSnapshotResultForDebug === 'function' &&
           rum.getLastAutoCanvasSnapshotResultForDebug()
         setCanvasStatus(replayCanvasRecordingStatus, isRecording)
+        setCanvasStatus(
+          replayCanvasSessionStatus,
+          internalContext && internalContext.session
+            ? internalContext.session.id
+            : 'waiting'
+        )
+        setCanvasStatus(
+          replayCanvasViewStatus,
+          internalContext && internalContext.view ? internalContext.view.id : 'waiting'
+        )
         setCanvasStatus(replayCanvasModeStatus, demoReplayCanvasMode)
         setCanvasStatus(
           replayCanvasSchedulerStatus,
@@ -1975,9 +2008,7 @@
       function renderResourceHookSnapshot() {
         const snapshot = getResourceHookSnapshot()
         if (!snapshot) {
-          if (resourceHookSnapshot) {
-            resourceHookSnapshot.textContent = 'No tracker snapshot yet.'
-          }
+          setTextContentIfChanged(resourceHookSnapshot, 'No tracker snapshot yet.')
           setResourceHookStatus(resourceHookTrackerIdStatus, resourceHookTrackerId || 'none')
           setResourceHookStatus(
             resourceHookTrackerStateStatus,
@@ -1989,9 +2020,10 @@
           return
         }
 
-        if (resourceHookSnapshot) {
-          resourceHookSnapshot.textContent = JSON.stringify(snapshot, null, 2)
-        }
+        setTextContentIfChanged(
+          resourceHookSnapshot,
+          JSON.stringify(snapshot, null, 2)
+        )
         setResourceHookStatus(resourceHookTrackerIdStatus, snapshot.trackerId || 'none')
         setResourceHookStatus(resourceHookTrackerStateStatus, snapshot.status || 'unknown')
         setResourceHookStatus(
@@ -2971,7 +3003,11 @@
         setLargeDomLastAction('generating dashboard ' + rowCount)
 
         let appendedRows = 0
-        const chunkSize = 20
+        // One row contains about 57 referenced nodes. Keep each native
+        // MutationObserver callback below the recorder's 1,000-node admission
+        // watermark so this stress case exercises streaming incrementals
+        // instead of immediately forcing an impossible 142k-node baseline.
+        const chunkSize = 4
 
         return new Promise((resolve) => {
           function appendChunk() {
@@ -3011,10 +3047,16 @@
           setLargeDomLastAction('full snapshot api unavailable')
           return
         }
+        if (largeDomCurrentRows > 50) {
+          setLargeDomLastAction(
+            'snapshot blocked: use dashboard 50; dashboard 2500 is incremental-only'
+          )
+          return
+        }
         const start = performance.now()
         rum.takeSubsequentFullSnapshot()
         largeDomLastSnapshotMs = Math.round((performance.now() - start) * 10) / 10
-        setLargeDomLastAction('full snapshot taken')
+        setLargeDomLastAction('full snapshot requested')
       }
 
       function setLargeDomReplayRecording(enabled) {
@@ -3024,6 +3066,9 @@
           return
         }
         if (enabled && typeof rum.startSessionReplayRecording === 'function') {
+          if (typeof rum.setForcedSession === 'function') {
+            rum.setForcedSession()
+          }
           rum.startSessionReplayRecording({ force: true })
           setLargeDomLastAction('replay on')
         } else if (!enabled && typeof rum.stopSessionReplayRecording === 'function') {
@@ -4984,6 +5029,10 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
       createDashboardCanvasTiles()
       drawCanvasScene('initial')
       drawDashboardCanvasChart('initial-board')
+      if (window.__demoCanvasReplayBaselinePending) {
+        window.__demoCanvasReplayBaselinePending = false
+        whenSessionReplayRecordingReady(captureInitialCanvasReplayBaseline)
+      }
       refreshCanvasStatusPanel()
       refreshDashboardCanvasStatusPanel()
       refreshLargeDomStatus()
@@ -5245,6 +5294,8 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
           renderResourceHookSnapshot()
         } else if (delay === 'resourceHookReset') {
           resetResourceHookDemo()
+        } else if (delay === 'largeDomGenerateDashboard50') {
+          generateDashboardDom(50)
         } else if (delay === 'largeDomGenerateDashboard2500') {
           generateDashboardDom(2500)
         } else if (delay === 'largeDomBenchmarkReplayOn') {

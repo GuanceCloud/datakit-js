@@ -1,12 +1,14 @@
 describe('recorderApiStub', () => {
-  it('should expose no-op recording behavior', () => {
+  it('should expose no-op recording behavior', async () => {
     const { makeRecorderApiStub } = require('./recorderApiStub')
 
     const recorderApi = makeRecorderApiStub()
 
     expect(recorderApi.isRecording()).toBeFalse()
     expect(recorderApi.getReplayStats()).toBeUndefined()
-    expect(recorderApi.snapshotCanvas()).toEqual({
+    const snapshotPromise = recorderApi.snapshotCanvas()
+    expect(snapshotPromise).toEqual(jasmine.any(Promise))
+    expect(await snapshotPromise).toEqual({
       ok: false,
       reason: 'not_recording'
     })

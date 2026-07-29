@@ -16,7 +16,7 @@ canvas 录制要真正生效，至少还需要同时满足下面这些前置条�
   - 也就是调用 `startSessionReplayRecording()`
 - 已开启 canvas 录制
   - 也就是 `replayCanvasEnabled: true`
-- 页面里的目标元素确实是 `2d canvas`
+- 页面里的目标元素是 `2d canvas`，或在 `auto` 模式下使用 `webgl` / `webgl2`
 - 如果是 `manual` 模式，业务代码还必须主动调用 `snapshotCanvas(canvas)`
 
 当前版本的能力边界是：
@@ -26,12 +26,14 @@ canvas 录制要真正生效，至少还需要同时满足下面这些前置条�
 - 自动录制支持两条正式路径：
   - snapshot sampling
   - higher-fidelity auto recording
-- 仅支持 `2d canvas`
+- 完整支持 `2d canvas`
+- `webgl` / `webgl2` 支持绘制驱动的自动像素快照
 - 录制结果会进入 Session Replay 事件流
 
 当前版本暂不覆盖的范围：
 
-- `webgl` / `webgl2`
+- WebGL command-level replay
+- `OffscreenCanvas`
 - 对所有复杂 2D 场景都做完全一致的还原
 
 ## 快速选择
@@ -223,15 +225,18 @@ datafluxRum.init({
 `replayCanvasSampling` 的正式语义：
 
 - `2`：推荐默认值。自动 snapshot，稳定性和成本更平衡，建议从这里开始。
-- `1`：更频繁的自动 snapshot，适合画面变化更密集的 2D canvas，但编码和上报成本更高。
-- 更大的数字：自动 snapshot 更稀疏，成本更低，但更容易丢掉中间变化。
+- 任意正数：选择 snapshot sampling 路径；数值本身不替代采集间隔配置。
 - `'all'`：更高还原度的自动录制，尽量保留绘制过程；复杂场景下仍可能自动回退为 snapshot。
+
+需要调整 snapshot 频率时，使用 `replayCanvasAutoInterval`；间隔越小，
+采集越频繁，编码和上报成本也越高。
 
 简单选择建议：
 
 - 不确定怎么配：先用 `replayCanvasSampling: 2`
-- 更看重成本：把数值调大
-- 更看重还原度：先尝试 `1`，再评估是否真的需要 `'all'`
+- 更看重成本：增大 `replayCanvasAutoInterval`
+- 更看重 snapshot 连贯度：逐步减小 `replayCanvasAutoInterval`
+- 更看重 2D 绘制还原度：评估是否需要 `'all'`
 - 只有在你明确接受更高复杂度和更高数据成本时，才使用 `'all'`
 
 适合：
@@ -524,9 +529,12 @@ datafluxRum.init({
 - `replayCanvasMimeType`
   编码格式，默认 `image/webp`
 - `replayCanvasMaxCanvasSize`
-  编码前允许的最大边长，默认 `1280`
+  编码前允许的最大边长，默认 `1280`、最大 `2048`；更大的配置值会被限制为
+  `2048`，从而把单个编码目标 backing store 控制在 `16 MiB` 以内
 - `replayCanvasMaxEncodedBytes`
-  单帧允许进入 replay 的最大字节数，默认 `40000`
+  单帧允许进入 replay 的最大字节数，默认且最大为 `40000`；更大的配置值会
+  被限制为 `40000`，超过该预算的帧会被拒绝。若频繁超限，应降低
+  `replayCanvasQuality` 或 `replayCanvasMaxCanvasSize`
 - `replayCanvasMaxConcurrentEncodes`
   并发编码上限，默认 `1`
 - `replayCanvasFlushImmediately`
@@ -555,6 +563,30 @@ datafluxRum.init({
 
 - `toggle auto draw`: 周期性重绘 canvas，方便观察 auto 模式下是否持续产生变化
 - `export last canvas event`: 导出最近一次成功手动 snapshot 对应的调试事件
+
+WebGL 场景使用单独的 `/webgl-replay-game.html`：
+
+- 持续运行 shader 背景、星场、陨石、子弹和碰撞粒子
+- `Stress` 可以把场景提高到约 800 个动态对象
+- 侧栏直接展示 `webgl_snapshot` 次数、编码字节数和采集耗时
+- `Replay: on/off` 可以在同一游戏负载下对比开启和关闭录制
+- `sampling=all` 仍会让 WebGL 走像素快照，只把 2D canvas 交给 command capture
+
+WebGL 动画如果回放跳帧，优先调整采集节奏，而不是单独提高图片质量。可以从
+下面这组约 4 FPS 的配置开始：
+
+```js
+replayCanvasSampling: 2,
+replayCanvasQuality: 0.4,
+replayCanvasMaxCanvasSize: 960,
+replayCanvasAutoInterval: 250,
+replayCanvasAutoCooldown: 50,
+replayCanvasAutoUnchangedBackoff: 1000,
+replayCanvasAutoFailureBackoff: 3000
+```
+
+降低 quality 或最大尺寸能减少编码耗时和单帧体积，但时间上的连贯度主要由
+interval 控制。像素快照回放不会在相邻采集帧之间插帧。
 
 需要注意：
 
@@ -619,7 +651,7 @@ canvas 录制是高成本能力，建议保守使用。
 - snapshot sampling 本质上仍然是采样
 - 更高还原度的自动录制虽然更接近真实绘制，但仍然会受到复杂场景边界和自动回退约束
 - canvas 编码和上传成本仍然明显高于普通 DOM replay
-- WebGL 和高频动画场景仍然不适合走这条路径
+- WebGL 采用有预算和退避的像素快照，不是逐条 GL 命令回放
 
 所以当前自动模式的设计目标是：
 
@@ -627,11 +659,23 @@ canvas 录制是高成本能力，建议保守使用。
 - 在还原度和成本之间做平衡
 - 不把 Session Replay 变成视频录制
 
-### 3. 为什么不支持 WebGL？
+### 3. WebGL 是怎么录制的？
 
-当前版本只支持 2D canvas。
+`auto` 模式会 hook WebGL / WebGL2 的绘制入口，在同一轮任务的 microtask
+阶段合并多次 draw，并立刻创建像素快照。这样可以在浏览器合成和清空默认
+drawing buffer 之前取到画面，同时避免把 shader、buffer、texture 和 typed
+array 全量序列化进 replay。
 
-WebGL / WebGL2 的上下文状态更复杂，自动录制和回放都需要额外处理，后续版本再考虑。
+这条路径的边界是：
+
+- 输出仍是 rrweb-compatible 的 2D image `CanvasMutation`
+- 受 `replayCanvasAutoInterval`、cooldown 和 failure backoff 控制
+- 要获得完整的 draw-driven 捕获，应在业务创建 WebGL context、查询 extension
+  之前启动 Replay；对启动前已缓存的 extension 对象，后续 draw 只能 best-effort 捕获
+- 不支持 `OffscreenCanvas`
+- 不是 WebGL command-level replay，也不是逐帧视频
+- `manual` 模式下如果 `preserveDrawingBuffer: false`，应在业务绘制函数内立即调用
+  `snapshotCanvas()`；绘制函数返回后再调用可能得到空白帧
 
 ### 4. canvas 录制是单独上传的吗？
 

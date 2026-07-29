@@ -22,6 +22,7 @@ import {
 export var MAX_ATTRIBUTE_VALUE_CHAR_LENGTH = 100_000
 
 var TEXT_MASKING_CHAR = 'x'
+export var MAX_PRIVACY_ANCESTOR_DEPTH = 1000
 
 /**
  * Get node privacy level by iterating over its ancestors. When the direct parent privacy level is
@@ -33,19 +34,40 @@ export function getNodePrivacyLevel(node, defaultPrivacyLevel, cache) {
   if (cache && cache.has(node)) {
     return cache.get(node)
   }
-  var parentNode = getParentNode(node)
-  var parentNodePrivacyLevel = parentNode
-    ? getNodePrivacyLevel(parentNode, defaultPrivacyLevel)
-    : defaultPrivacyLevel
-  var selfNodePrivacyLevel = getNodeSelfPrivacyLevel(node)
-  var nodePrivacyLevel = reducePrivacyLevel(
-    selfNodePrivacyLevel,
-    parentNodePrivacyLevel
-  )
-  if (cache) {
-    cache.set(node, nodePrivacyLevel)
+
+  // Resolve ancestors iteratively so an adversarially deep DOM cannot grow the
+  // JavaScript stack. If the watermark is crossed, fail closed: hiding the
+  // branch is safer than spending unbounded time resolving its privacy chain.
+  var unresolvedNodes = []
+  var currentNode = node
+  var inheritedPrivacyLevel
+  while (currentNode) {
+    if (cache && cache.has(currentNode)) {
+      inheritedPrivacyLevel = cache.get(currentNode)
+      break
+    }
+    if (unresolvedNodes.length >= MAX_PRIVACY_ANCESTOR_DEPTH) {
+      inheritedPrivacyLevel = NodePrivacyLevel.HIDDEN
+      break
+    }
+    unresolvedNodes.push(currentNode)
+    currentNode = getParentNode(currentNode)
   }
-  return nodePrivacyLevel
+  if (inheritedPrivacyLevel === undefined) {
+    inheritedPrivacyLevel = defaultPrivacyLevel
+  }
+
+  while (unresolvedNodes.length) {
+    var unresolvedNode = unresolvedNodes.pop()
+    inheritedPrivacyLevel = reducePrivacyLevel(
+      getNodeSelfPrivacyLevel(unresolvedNode),
+      inheritedPrivacyLevel
+    )
+    if (cache) {
+      cache.set(unresolvedNode, inheritedPrivacyLevel)
+    }
+  }
+  return inheritedPrivacyLevel
 }
 
 /**

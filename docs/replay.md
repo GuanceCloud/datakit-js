@@ -73,7 +73,8 @@ For `canvas`, the current SDK already supports 2D canvas recording:
 - manual recording is supported
 - automatic recording is supported
 - automatic recording can use either snapshot sampling or higher-fidelity automatic recording
-- `webgl` / `webgl2` are still not supported
+- `webgl` / `webgl2` are captured in auto mode through draw-driven,
+  budgeted pixel snapshots; command-level WebGL replay is not supported
 
 For canvas-specific configuration and usage, refer to [Canvas Replay Recording Guide](./replay-canvas.md).
 

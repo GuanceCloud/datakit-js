@@ -7,6 +7,7 @@ describe('startBatchWithReplica', () => {
     const add = jasmine.createSpy('add')
     const upsert = jasmine.createSpy('upsert')
     const stop = jasmine.createSpy('stop')
+    const encoderFallback = jasmine.createSpy('encoderFallback')
     const batchFactory = jasmine.createSpy('batchFactory').and.returnValue({
       flushController: { flushObservable },
       add,
@@ -25,7 +26,8 @@ describe('startBatchWithReplica', () => {
       },
       {
         endpoint: 'https://example.com/rum',
-        encoder: { isAsync: false }
+        encoder: { isAsync: false },
+        encoderFallback
       },
       jasmine.createSpy('reportError'),
       new Observable(),
@@ -36,6 +38,7 @@ describe('startBatchWithReplica', () => {
     expect(batchFactory).toHaveBeenCalledWith(
       jasmine.objectContaining({
         encoder: { isAsync: false },
+        encoderFallback,
         request: jasmine.objectContaining({
           send: jasmine.any(Function),
           sendOnExit: jasmine.any(Function)

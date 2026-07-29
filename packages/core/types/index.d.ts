@@ -258,7 +258,8 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    */
   replayCanvasMode?: 'manual' | 'auto' | undefined
   /**
-   * Canvas replay sampling strategy. A number means snapshot sampling at the configured rate.
+   * Canvas replay capture strategy. A number selects snapshot sampling; tune
+   * its cadence with replayCanvasAutoInterval and the cooldown/backoff options.
    * `'all'` enables 2D command capture, with automatic snapshot fallback for
    * unsupported replay-fidelity cases. Defaults to a numeric sampling mode.
    */
@@ -273,11 +274,13 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    */
   replayCanvasQuality?: 'low' | 'medium' | 'high' | number | undefined
   /**
-   * Maximum canvas edge size before downscaling for encoding.
+   * Maximum canvas edge size before downscaling for encoding. Values above
+   * 2,048 are clamped to 2,048 to bound the target backing store to 16 MiB.
    */
   replayCanvasMaxCanvasSize?: number | undefined
   /**
-   * Maximum encoded bytes allowed for a single canvas snapshot.
+   * Maximum encoded bytes allowed for a single canvas snapshot. Values above
+   * 40,000 are clamped to 40,000 so a frame can fit in a replay segment.
    */
   replayCanvasMaxEncodedBytes?: number | undefined
   /**

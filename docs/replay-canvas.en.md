@@ -16,7 +16,7 @@ Canvas recording only works when all of the following are true:
   - call `startSessionReplayRecording()`
 - canvas recording is enabled
   - `replayCanvasEnabled: true`
-- the target element is a `2d canvas`
+- the target is a `2d canvas`, or uses `webgl` / `webgl2` in `auto` mode
 - in `manual` mode, your app must also call `snapshotCanvas(canvas)`
 
 Current capability boundaries:
@@ -26,12 +26,14 @@ Current capability boundaries:
 - automatic recording has two formal paths:
   - snapshot sampling
   - higher-fidelity auto recording
-- only `2d canvas` is supported
+- `2d canvas` is fully supported
+- `webgl` / `webgl2` use draw-driven automatic pixel snapshots
 - recording output is sent through the Session Replay event stream
 
 Current scope limitations:
 
-- `webgl` / `webgl2`
+- WebGL command-level replay
+- `OffscreenCanvas`
 - full-fidelity reconstruction for every complex 2D scene
 
 ## Minimum Working Configurations
@@ -132,7 +134,8 @@ datafluxRum.startSessionReplayRecording()
 - `replayCanvasMode: 'auto'`
 - strongly recommended to set `replayCanvasSampling` explicitly
   - `2`: recommended starting value, safer automatic snapshot sampling
-  - `1`: more frequent automatic snapshots, with higher cost
+  - a number: snapshot sampling; tune frequency with the auto interval and
+    cooldown/backoff options
   - `'all'`: higher-fidelity auto recording
 
 ### When to configure `replayCanvasWorkerUrl`
@@ -174,6 +177,12 @@ Notes:
 - the concrete strategy depends on `replayCanvasSampling`
 - recording pauses while the page is hidden and resumes when it becomes visible again
 
+A positive numeric `replayCanvasSampling` value selects the snapshot path; the
+number does not replace the cadence setting. Use
+`replayCanvasAutoInterval` to tune snapshot frequency: a smaller interval is
+more frequent and costs more encoding and upload work. Use `'all'` when the
+higher-fidelity 2D command path is worth the extra complexity.
+
 ## Current Fallback Boundaries
 
 In auto high-fidelity mode, some cases may still fall back to snapshot-based recording. Typical examples include:
@@ -190,6 +199,39 @@ This is a current product boundary, not a separate user configuration.
 - Use `manual` if you only need stable checkpoints.
 - Use `auto + replayCanvasSampling: number` if you want the safer default.
 - Use `auto + replayCanvasSampling: 'all'` only when higher fidelity is worth the extra complexity.
+
+## WebGL Game Demo
+
+Run `npm run dev`, then open `/webgl-replay-game.html`. The scene continuously
+draws a shader background, star field, asteroids, projectiles, and collision
+particles. Its inspector shows `webgl_snapshot` count, encoded bytes, and
+capture latency. `Stress` increases the scene to roughly 800 dynamic objects,
+while `Replay: on/off` makes it possible to compare the same game load with and
+without recording.
+
+For complete draw-driven capture, start Replay before application code creates
+the WebGL context or queries extensions. Draws made through extension objects
+cached before Replay starts can only be captured on a best-effort basis.
+
+For a smoother WebGL animation profile, start with:
+
+```js
+replayCanvasSampling: 2,
+replayCanvasQuality: 0.4,
+replayCanvasMaxCanvasSize: 960,
+replayCanvasAutoInterval: 250,
+replayCanvasAutoCooldown: 50,
+replayCanvasAutoUnchangedBackoff: 1000,
+replayCanvasAutoFailureBackoff: 3000
+```
+
+This targets about 4 captured frames per second. Lowering quality or maximum
+size reduces encode latency and payload size, but cadence—not image quality—is
+the primary control for temporal smoothness. Snapshot replay does not
+interpolate between captured frames.
+
+`replayCanvasMaxCanvasSize` defaults to `1280` and is capped at `2048`, keeping
+each encode target backing store within `16 MiB`.
 
 ## FAQ
 

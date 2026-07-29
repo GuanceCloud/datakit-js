@@ -8,7 +8,19 @@ import { CENSORED_STRING_MARK } from '../../../constants'
 import { shouldMaskNode } from './privacy'
 
 var serializedNodeIds = new WeakMap()
-var serializedCanvasNodes = new Set()
+export var MAX_SERIALIZED_CANVAS_REGISTRY_SIZE = 2048
+export var MAX_SERIALIZED_NODE_ANCESTOR_DEPTH = 1000
+export var STYLESHEET_SERIALIZATION_MAX_RULE_COUNT = 5000
+export var STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT = 256 * 1024
+export var STYLESHEET_SERIALIZATION_MAX_DURATION_MS = 4
+var serializedCanvasEntries = []
+var serializedCanvasFreeEntryIndexes = []
+var serializedCanvasEntryByNode = new WeakMap()
+var serializedCanvasEntryCount = 0
+var serializedCanvasNextEvictionIndex = 0
+var serializedCanvasScanCursor = 0
+var serializedCanvasScanRemaining = 0
+var serializedCanvasTrackingCount = 0
 var anchorElementByDocument = new WeakMap()
 var hrefByDocument = new WeakMap()
 
@@ -34,10 +46,15 @@ export function hasSerializedNode(node) {
 
 export function nodeAndAncestorsHaveSerializedNode(node) {
   var current = node
+  var depth = 0
   while (current) {
+    if (depth >= MAX_SERIALIZED_NODE_ANCESTOR_DEPTH) {
+      return false
+    }
     if (!hasSerializedNode(current) && !isNodeShadowRoot(current)) {
       return false
     }
+    depth += 1
     current = getParentNode(current)
   }
   return true
@@ -49,14 +66,34 @@ export function getSerializedNodeId(node) {
 
 export function setSerializedNodeId(node, serializeNodeId) {
   serializedNodeIds.set(node, serializeNodeId)
-  if (node instanceof HTMLCanvasElement) {
-    serializedCanvasNodes.add(node)
+  if (
+    serializedCanvasTrackingCount > 0 &&
+    node instanceof HTMLCanvasElement
+  ) {
+    registerSerializedCanvasNode(node)
+  }
+}
+
+export function startSerializedCanvasTracking() {
+  serializedCanvasTrackingCount += 1
+  var stopped = false
+
+  return function stopSerializedCanvasTracking() {
+    if (stopped) {
+      return
+    }
+    stopped = true
+    serializedCanvasTrackingCount -= 1
+    if (serializedCanvasTrackingCount === 0) {
+      clearSerializedCanvasRegistry()
+    }
   }
 }
 
 function isSerializedCanvasConnectedToDocument(node) {
-  if (document.documentElement && document.documentElement.contains) {
-    return document.documentElement.contains(node)
+  var isConnected = node.isConnected
+  if (typeof isConnected === 'boolean') {
+    return isConnected
   }
 
   var current = node
@@ -71,17 +108,178 @@ function isSerializedCanvasConnectedToDocument(node) {
   return false
 }
 
-export function getSerializedCanvasNodes() {
-  var connectedSerializedCanvasNodes = []
+function registerSerializedCanvasNode(node) {
+  var existingEntry = serializedCanvasEntryByNode.get(node)
+  if (existingEntry && existingEntry.active) {
+    return
+  }
 
-  serializedCanvasNodes.forEach(function (node) {
+  var entry = {
+    active: true,
+    weakRef:
+      typeof WeakRef === 'function' ? new WeakRef(node) : undefined,
+    node: typeof WeakRef === 'function' ? undefined : node
+  }
+  var entryIndex
+  if (serializedCanvasFreeEntryIndexes.length) {
+    entryIndex = serializedCanvasFreeEntryIndexes.pop()
+  } else if (
+    serializedCanvasEntries.length <
+    MAX_SERIALIZED_CANVAS_REGISTRY_SIZE
+  ) {
+    entryIndex = serializedCanvasEntries.length
+  } else {
+    entryIndex = serializedCanvasNextEvictionIndex
+    serializedCanvasNextEvictionIndex =
+      (serializedCanvasNextEvictionIndex + 1) %
+      MAX_SERIALIZED_CANVAS_REGISTRY_SIZE
+    var evictedEntry = serializedCanvasEntries[entryIndex]
+    if (evictedEntry && evictedEntry.active) {
+      evictedEntry.active = false
+      serializedCanvasEntryCount -= 1
+    }
+  }
+
+  entry.index = entryIndex
+  serializedCanvasEntries[entryIndex] = entry
+  serializedCanvasEntryByNode.set(node, entry)
+  serializedCanvasEntryCount += 1
+}
+
+function getSerializedCanvasEntryNode(entry) {
+  if (!entry || !entry.active) {
+    return
+  }
+  return entry.weakRef ? entry.weakRef.deref() : entry.node
+}
+
+function pruneSerializedCanvasEntry(entry) {
+  if (!entry || !entry.active) {
+    return
+  }
+  entry.active = false
+  entry.node = undefined
+  if (serializedCanvasEntries[entry.index] === entry) {
+    serializedCanvasEntries[entry.index] = undefined
+    serializedCanvasFreeEntryIndexes.push(entry.index)
+  }
+  serializedCanvasEntryCount = Math.max(
+    serializedCanvasEntryCount - 1,
+    0
+  )
+}
+
+function clearSerializedCanvasRegistry() {
+  serializedCanvasEntries = []
+  serializedCanvasFreeEntryIndexes = []
+  serializedCanvasEntryByNode = new WeakMap()
+  serializedCanvasEntryCount = 0
+  serializedCanvasNextEvictionIndex = 0
+  resetSerializedCanvasScan()
+}
+
+function resetSerializedCanvasScan() {
+  serializedCanvasScanCursor = 0
+  serializedCanvasScanRemaining = 0
+}
+
+export function getSerializedCanvasNodes(maxScanCount) {
+  if (typeof maxScanCount === 'number') {
+    return getSerializedCanvasNodesWithinScanLimit(maxScanCount)
+  }
+
+  var connectedSerializedCanvasNodes = []
+  for (
+    var entryIndex = 0;
+    entryIndex < serializedCanvasEntries.length;
+    entryIndex += 1
+  ) {
+    var entry = serializedCanvasEntries[entryIndex]
+    var node = getSerializedCanvasEntryNode(entry)
     if (hasSerializedNode(node) && isSerializedCanvasConnectedToDocument(node)) {
       connectedSerializedCanvasNodes.push(node)
-      return
+    } else {
+      pruneSerializedCanvasEntry(entry)
     }
-    serializedCanvasNodes.delete(node)
-  })
+  }
+  resetSerializedCanvasScan()
 
+  return connectedSerializedCanvasNodes
+}
+
+export function getSerializedCanvasNodesSnapshot(maxScanCount) {
+  var resultLimit = Math.max(Math.floor(maxScanCount), 0)
+  if (
+    !isFinite(resultLimit) ||
+    resultLimit === 0 ||
+    !serializedCanvasEntryCount ||
+    !serializedCanvasEntries.length
+  ) {
+    return []
+  }
+
+  // Full-snapshot bitmap baselines need a complete bounded view independent
+  // from the partial round-robin pass shared by continuous and command
+  // schedulers. Scan the bounded registry until enough active canvases are
+  // collected so sparse/disconnected slots cannot hide later canvases, without
+  // reading or updating the shared cursor.
+  var connectedSerializedCanvasNodes = []
+  for (
+    var entryIndex = 0;
+    entryIndex < serializedCanvasEntries.length &&
+    connectedSerializedCanvasNodes.length < resultLimit;
+    entryIndex += 1
+  ) {
+    var entry = serializedCanvasEntries[entryIndex]
+    var node = getSerializedCanvasEntryNode(entry)
+    if (hasSerializedNode(node) && isSerializedCanvasConnectedToDocument(node)) {
+      connectedSerializedCanvasNodes.push(node)
+    } else {
+      pruneSerializedCanvasEntry(entry)
+    }
+  }
+  return connectedSerializedCanvasNodes
+}
+
+function getSerializedCanvasNodesWithinScanLimit(maxScanCount) {
+  var scanLimit = Math.max(Math.floor(maxScanCount), 0)
+  if (
+    !isFinite(scanLimit) ||
+    scanLimit === 0 ||
+    !serializedCanvasEntryCount ||
+    !serializedCanvasEntries.length
+  ) {
+    return []
+  }
+  if (!serializedCanvasScanRemaining) {
+    serializedCanvasScanCursor = 0
+    serializedCanvasScanRemaining = serializedCanvasEntries.length
+  }
+
+  var connectedSerializedCanvasNodes = []
+  var scannedNodeCount = 0
+  while (
+    scannedNodeCount < scanLimit &&
+    serializedCanvasScanRemaining > 0
+  ) {
+    var entry = serializedCanvasEntries[serializedCanvasScanCursor]
+    serializedCanvasScanCursor =
+      (serializedCanvasScanCursor + 1) %
+      serializedCanvasEntries.length
+    scannedNodeCount += 1
+    serializedCanvasScanRemaining -= 1
+
+    var node = getSerializedCanvasEntryNode(entry)
+    if (hasSerializedNode(node) && isSerializedCanvasConnectedToDocument(node)) {
+      connectedSerializedCanvasNodes.push(node)
+    } else {
+      pruneSerializedCanvasEntry(entry)
+    }
+  }
+
+  if (serializedCanvasScanRemaining === 0) {
+    resetSerializedCanvasScan()
+  }
   return connectedSerializedCanvasNodes
 }
 
@@ -201,22 +399,191 @@ export function getCssRulesString(cssStyleSheet) {
   if (!cssStyleSheet) {
     return null
   }
-  var rules
-  try {
-    rules = cssStyleSheet.rules || cssStyleSheet.cssRules
-  } catch {
-    // if css is protected by CORS we cannot access cssRules see: https://www.w3.org/TR/cssom-1/#the-cssstylesheet-interface
+  var rootRules = getReadableStyleSheetRules(cssStyleSheet)
+  if (!rootRules) {
+    return null
   }
-  if (!rules) {
+  var serializationState = {
+    parts: [],
+    visitedStyleSheets: new Set(),
+    ruleCount: 0,
+    characterCount: 0,
+    deadline:
+      getSerializationTime() + STYLESHEET_SERIALIZATION_MAX_DURATION_MS,
+    exceeded: false
+  }
+  if (
+    !appendStyleSheetRules(
+      cssStyleSheet,
+      serializationState,
+      cssStyleSheet.href,
+      rootRules
+    )
+  ) {
     return null
   }
   var styleSheetCssText = fixBrowserCompatibilityIssuesInCSS(
-    Array.from(
-      rules,
-      isSafari() ? getCssRuleStringForSafari : getCssRuleString
-    ).join('')
+    serializationState.parts.join('')
   )
-  return switchToAbsoluteUrl(styleSheetCssText, cssStyleSheet.href)
+  if (
+    styleSheetCssText.length >
+    STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT
+  ) {
+    return null
+  }
+  return styleSheetCssText
+}
+
+function appendStyleSheetRules(
+  cssStyleSheet,
+  serializationState,
+  inheritedHref,
+  knownRules
+) {
+  if (
+    !cssStyleSheet ||
+    serializationState.visitedStyleSheets.has(cssStyleSheet)
+  ) {
+    return true
+  }
+  if (!hasStyleSheetSerializationBudget(serializationState)) {
+    return false
+  }
+  serializationState.visitedStyleSheets.add(cssStyleSheet)
+  var styleSheetHref = cssStyleSheet.href || inheritedHref
+  var rules = knownRules || getReadableStyleSheetRules(cssStyleSheet)
+  if (!rules) {
+    return false
+  }
+  for (var ruleIndex = 0; ruleIndex < rules.length; ruleIndex += 1) {
+    var rule = rules[ruleIndex]
+    if (isCSSImportRule(rule)) {
+      var importedHref =
+        (rule.styleSheet && rule.styleSheet.href) ||
+        (rule.href && styleSheetHref
+          ? makeUrlAbsolute(rule.href, styleSheetHref)
+          : rule.href)
+      var importedRules = getReadableStyleSheetRules(rule.styleSheet)
+      if (importedRules) {
+        if (
+          !appendStyleSheetRules(
+            rule.styleSheet,
+            serializationState,
+            importedHref,
+            importedRules
+          )
+        ) {
+          return false
+        }
+      } else if (
+        !appendStyleSheetRuleText(
+          rule,
+          serializationState,
+          styleSheetHref,
+          false
+        )
+      ) {
+        return false
+      }
+      continue
+    }
+    if (
+      !appendStyleSheetRuleText(
+        rule,
+        serializationState,
+        styleSheetHref,
+        true
+      )
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+function getReadableStyleSheetRules(cssStyleSheet) {
+  if (!cssStyleSheet) {
+    return
+  }
+  try {
+    return cssStyleSheet.rules || cssStyleSheet.cssRules
+  } catch (_) {
+    // If CSS is protected by CORS we cannot access cssRules. The containing
+    // @import rule itself is still useful and is retained by the caller.
+    // See https://www.w3.org/TR/cssom-1/#the-cssstylesheet-interface.
+  }
+}
+
+function appendStyleSheetRuleText(
+  rule,
+  serializationState,
+  styleSheetHref,
+  shouldPatchSafari
+) {
+  var rawRuleText = rule && rule.cssText
+  if (typeof rawRuleText !== 'string') {
+    return true
+  }
+  if (
+    !hasStyleSheetSerializationBudget(
+      serializationState,
+      rawRuleText.length
+    )
+  ) {
+    return false
+  }
+  var ruleText =
+    shouldPatchSafari && isSafari()
+      ? getCssRuleStringForSafari(rule)
+      : rawRuleText
+  ruleText = switchToAbsoluteUrl(ruleText, styleSheetHref)
+  if (
+    ruleText.length !== rawRuleText.length &&
+    !hasStyleSheetSerializationBudget(
+      serializationState,
+      ruleText.length - rawRuleText.length,
+      false
+    )
+  ) {
+    return false
+  }
+  serializationState.ruleCount += 1
+  serializationState.characterCount += ruleText.length
+  serializationState.parts.push(ruleText)
+  return true
+}
+
+function hasStyleSheetSerializationBudget(
+  serializationState,
+  additionalCharacterCount,
+  shouldCountRule
+) {
+  if (additionalCharacterCount === undefined) {
+    additionalCharacterCount = 0
+  }
+  if (shouldCountRule === undefined) {
+    shouldCountRule = true
+  }
+  if (
+    serializationState.exceeded ||
+    (shouldCountRule &&
+      serializationState.ruleCount >=
+        STYLESHEET_SERIALIZATION_MAX_RULE_COUNT) ||
+    serializationState.characterCount + additionalCharacterCount >
+      STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT ||
+    getSerializationTime() > serializationState.deadline
+  ) {
+    serializationState.exceeded = true
+    return false
+  }
+  return true
+}
+
+function getSerializationTime() {
+  if (typeof performance !== 'undefined' && performance.now) {
+    return performance.now()
+  }
+  return Date.now()
 }
 export function isCSSImportRule(rule) {
   return 'styleSheet' in rule
@@ -257,11 +624,50 @@ export function serializeStyleSheets(cssStyleSheets) {
   if (cssStyleSheets === undefined || cssStyleSheets.length === 0) {
     return undefined
   }
-  return cssStyleSheets.map(function (cssStyleSheet) {
-    var rules = cssStyleSheet.cssRules || cssStyleSheet.rules
-    var cssRules = Array.from(rules, function (cssRule) {
-      return cssRule.cssText
-    })
+  var serializedStyleSheets = []
+  var serializationState = {
+    ruleCount: 0,
+    characterCount: 0,
+    deadline:
+      getSerializationTime() + STYLESHEET_SERIALIZATION_MAX_DURATION_MS,
+    exceeded: false
+  }
+  for (
+    var styleSheetIndex = 0;
+    styleSheetIndex < cssStyleSheets.length;
+    styleSheetIndex += 1
+  ) {
+    var cssStyleSheet = cssStyleSheets[styleSheetIndex]
+    if (!hasStyleSheetSerializationBudget(serializationState, 0, false)) {
+      break
+    }
+    var rules = getReadableStyleSheetRules(cssStyleSheet)
+    if (!rules) {
+      continue
+    }
+    var cssRules = []
+    var completed = true
+    for (var ruleIndex = 0; ruleIndex < rules.length; ruleIndex += 1) {
+      var cssText = rules[ruleIndex].cssText
+      if (typeof cssText !== 'string') {
+        continue
+      }
+      if (
+        !hasStyleSheetSerializationBudget(
+          serializationState,
+          cssText.length
+        )
+      ) {
+        completed = false
+        break
+      }
+      serializationState.ruleCount += 1
+      serializationState.characterCount += cssText.length
+      cssRules.push(cssText)
+    }
+    if (!completed) {
+      break
+    }
 
     var styleSheet = {
       cssRules: cssRules,
@@ -271,8 +677,9 @@ export function serializeStyleSheets(cssStyleSheets) {
           ? Array.from(cssStyleSheet.media)
           : undefined
     }
-    return styleSheet
-  })
+    serializedStyleSheets.push(styleSheet)
+  }
+  return serializedStyleSheets
 }
 export function absoluteToDoc(doc, attributeValue) {
   if (!attributeValue || attributeValue.trim() === '') {

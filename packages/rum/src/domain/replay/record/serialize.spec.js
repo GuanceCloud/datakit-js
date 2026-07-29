@@ -8,6 +8,12 @@ import {
 import { NodeType } from '../../../types'
 import {
   SerializationContextStatus,
+  SERIALIZATION_MAX_ATTRIBUTE_COUNT,
+  SERIALIZATION_MAX_APPROX_BYTES,
+  SERIALIZATION_MAX_DEPTH,
+  SERIALIZATION_MAX_NODE_SOURCE_LENGTH,
+  SERIALIZATION_MAX_STRING_LENGTH,
+  createMutationSerializerTask,
   serializeAttribute,
   serializeDocument,
   serializeElementNode,
@@ -225,9 +231,10 @@ describe('replay/record/serialize', () => {
   })
 
   it('should serialize deep mutation subtrees without recursive stack growth', () => {
+    const weakSetConstructor = spyOn(window, 'WeakSet').and.callThrough()
     const root = document.createElement('div')
     let current = root
-    for (let i = 0; i < 1500; i += 1) {
+    for (let i = 0; i < 900; i += 1) {
       const child = document.createElement('div')
       current.appendChild(child)
       current = child
@@ -259,7 +266,268 @@ describe('replay/record/serialize', () => {
       depth += 1
       node = node.childNodes[0]
     }
-    expect(depth).toBe(1500)
+    expect(depth).toBe(900)
+    expect(weakSetConstructor).not.toHaveBeenCalled()
+  })
+
+  it('should stop before a serialized root exceeds the bounded stringify watermark', () => {
+    expect(SERIALIZATION_MAX_APPROX_BYTES).toBe(1024 * 1024)
+    const root = document.createElement('div')
+    for (let index = 0; index < 30; index += 1) {
+      const child = document.createElement('span')
+      child.setAttribute('data-payload', 'x'.repeat(100000))
+      root.appendChild(child)
+    }
+    spyOn(performance, 'now').and.returnValue(0)
+
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(
+      task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)
+    ).toBeFalse()
+    expect(task.isMaxApproxBytesReached).toBeTrue()
+  })
+
+  it('should reject a single serialized string before scanning or stringifying an unbounded value', () => {
+    const root = document.createElement('div')
+    root.setAttribute(
+      'data-payload',
+      'x'.repeat(SERIALIZATION_MAX_STRING_LENGTH + 1)
+    )
+    spyOn(performance, 'now').and.returnValue(0)
+
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(
+      task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)
+    ).toBeFalse()
+    expect(task.isMaxNodeComplexityReached).toBeTrue()
+  })
+
+  it('should reject an element with an unbounded attribute list before describing it', () => {
+    const root = document.createElement('div')
+    for (
+      let index = 0;
+      index < SERIALIZATION_MAX_ATTRIBUTE_COUNT + 1;
+      index += 1
+    ) {
+      root.setAttribute(`data-${index}`, 'x')
+    }
+
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(task.serializedNode).toBeNull()
+    expect(task.isMaxNodeComplexityReached).toBeTrue()
+    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeFalse()
+  })
+
+  it('should reject a shadow-root baseline when its observer cannot be registered', () => {
+    const host = document.createElement('div')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const task = createMutationSerializerTask(shadowRoot, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine
+            .createSpy('addShadowRoot')
+            .and.returnValue(false)
+        }
+      }
+    })
+
+    expect(task.serializedNode).toBeNull()
+    expect(task.isMaxNodeComplexityReached).toBeTrue()
+    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeFalse()
+  })
+
+  it('should preserve an empty shadow-root placeholder when observation capacity is reached', () => {
+    const host = document.createElement('div')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    shadowRoot.appendChild(document.createElement('span'))
+    Object.defineProperty(shadowRoot, 'adoptedStyleSheets', {
+      configurable: true,
+      get: jasmine
+        .createSpy('getAdoptedStyleSheets')
+        .and.throwError('should not inspect skipped shadow styles')
+    })
+    const task = createMutationSerializerTask(shadowRoot, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine
+            .createSpy('addShadowRoot')
+            .and.returnValue(null)
+        }
+      }
+    })
+
+    expect(
+      task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)
+    ).toBeTrue()
+    expect(task.isMaxNodeComplexityReached).toBeFalsy()
+    expect(task.serializedNode).toEqual(
+      jasmine.objectContaining({
+        type: NodeType.DocumentFragment,
+        isShadowRoot: true,
+        adoptedStyleSheets: undefined,
+        childNodes: []
+      })
+    )
+  })
+
+  it('should stop a task when one child text node exceeds the source watermark', () => {
+    const root = document.createElement('div')
+    root.appendChild(
+      document.createTextNode(
+        'x'.repeat(SERIALIZATION_MAX_NODE_SOURCE_LENGTH + 1)
+      )
+    )
+    spyOn(performance, 'now').and.returnValue(0)
+
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeFalse()
+    expect(task.isMaxNodeComplexityReached).toBeTrue()
+    expect(task.processedNodeCount).toBe(1)
+  })
+
+  it('should report overflow when a partial task exactly reaches its byte watermark', () => {
+    const root = document.createElement('div')
+    root.appendChild(document.createElement('span'))
+    spyOn(performance, 'now').and.returnValue(0)
+
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+    const rootOnlyApproxBytes = task.approxBytes
+
+    expect(task.advance(1000, 50000, rootOnlyApproxBytes)).toBeFalse()
+    expect(task.isMaxApproxBytesReached).toBeTrue()
+    expect(task.processedNodeCount).toBe(1)
+
+    // A completed root at exactly the same watermark remains valid.
+    const leafTask = createMutationSerializerTask(
+      document.createElement('div'),
+      {
+        configuration: {},
+        parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+        serializationContext: {
+          status: SerializationContextStatus.MUTATION,
+          shadowRootsController: {
+            addShadowRoot: jasmine.createSpy('addLeafShadowRoot')
+          }
+        }
+      }
+    )
+    expect(
+      leafTask.advance(1000, 50000, leafTask.approxBytes)
+    ).toBeTrue()
+    expect(leafTask.isMaxApproxBytesReached).toBeFalse()
+  })
+
+  it('should reject a deeply nested full document before JSON serialization can overflow the call stack', () => {
+    const htmlDocument = document.implementation.createHTMLDocument('deep')
+    let current = htmlDocument.body
+    for (let depth = 0; depth < SERIALIZATION_MAX_DEPTH + 10; depth += 1) {
+      const child = htmlDocument.createElement('div')
+      current.appendChild(child)
+      current = child
+    }
+    current.setAttribute('data-last-node', 'true')
+
+    let serializedDocument
+    expect(() => {
+      serializedDocument = serializeDocument(
+        htmlDocument,
+        { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+        {
+          status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+          elementsScrollPositions: new Map(),
+          shadowRootsController: {
+            addShadowRoot: jasmine.createSpy('addShadowRoot')
+          }
+        }
+      )
+    }).not.toThrow()
+
+    expect(serializedDocument).toBeNull()
+  })
+
+  it('should serialize a full snapshot root with five thousand siblings', () => {
+    const root = document.createElement('main')
+    for (let index = 0; index < 5000; index += 1) {
+      const child = document.createElement('span')
+      child.setAttribute('data-index', String(index))
+      root.appendChild(child)
+    }
+
+    const serializedNode = serializeNodeWithId(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(serializedNode.childNodes.length).toBe(5000)
+    expect(serializedNode.childNodes[4999].attributes['data-index']).toBe(
+      '4999'
+    )
   })
 
   it('should serialize element runtime state during initial full snapshots', () => {
@@ -501,6 +769,68 @@ describe('replay/record/serialize', () => {
     )
   })
 
+  it('should serialize wide mutation subtrees across multiple time slices', () => {
+    const root = document.createElement('div')
+    for (let index = 0; index < 100; index += 1) {
+      const child = document.createElement('span')
+      child.setAttribute('data-index', String(index))
+      root.appendChild(child)
+    }
+    let now = 0
+    spyOn(performance, 'now').and.callFake(() => now++)
+
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(task.advance(4)).toBeFalse()
+    expect(task.serializedNode.childNodes.length).toBeGreaterThan(0)
+    expect(task.serializedNode.childNodes.length).toBeLessThan(100)
+
+    expect(task.advance(10000, 50000)).toBeTrue()
+    expect(
+      task.serializedNode.childNodes.map((child) => child.attributes['data-index'])
+    ).toEqual(Array.from({ length: 100 }, (_, index) => String(index)))
+  })
+
+  it('should skip a cached child removed between mutation serialization slices without truncating later siblings', () => {
+    const root = document.createElement('div')
+    for (let index = 0; index < 10; index += 1) {
+      const child = document.createElement('span')
+      child.setAttribute('data-index', String(index))
+      root.appendChild(child)
+    }
+    let now = 0
+    spyOn(performance, 'now').and.callFake(() => now++)
+
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(task.advance(4)).toBeFalse()
+    const removedChild = root.children[4]
+    root.removeChild(removedChild)
+
+    expect(task.advance(10000, 50000)).toBeTrue()
+    expect(
+      task.serializedNode.childNodes.map((child) => child.attributes['data-index'])
+    ).toEqual(['0', '1', '2', '3', '5', '6', '7', '8', '9'])
+  })
+
   it('should censor script text nodes during serialization', () => {
     const script = document.createElement('script')
     script.textContent = 'window.__secret__ = true;'
@@ -627,6 +957,60 @@ describe('replay/record/serialize', () => {
     })
 
     expect(serializedNode.attributes._cssText).toContain('color: green')
+  })
+
+  it('should retain bounded CSSOM text above the source-node limit', () => {
+    const style = document.createElement('style')
+    const cssText = 'x'.repeat(SERIALIZATION_MAX_NODE_SOURCE_LENGTH + 1)
+    Object.defineProperty(style, 'sheet', {
+      configurable: true,
+      value: {
+        cssRules: [{ cssText }]
+      }
+    })
+
+    const serializedNode = serializeNodeWithId(style, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(serializedNode).not.toBeNull()
+    expect(serializedNode.attributes._cssText).toBe(cssText)
+  })
+
+  it('should degrade an oversized style without failing the full serializer task', () => {
+    const style = document.createElement('style')
+    const cssText = 'x'.repeat(SERIALIZATION_MAX_STRING_LENGTH + 1)
+    style.textContent = cssText
+    Object.defineProperty(style, 'sheet', {
+      configurable: true,
+      value: {
+        cssRules: [{ cssText }]
+      }
+    })
+
+    const serializedNode = serializeNodeWithId(style, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(serializedNode).not.toBeNull()
+    expect(serializedNode.attributes._cssText).toBeUndefined()
+    expect(serializedNode.childNodes).toEqual([])
   })
 
   it('should serialize media playback state for video elements', () => {
@@ -1216,6 +1600,35 @@ describe('replay/record/serialize', () => {
     })
 
     expect(serializedNode.childNodes).toEqual([])
+  })
+
+  it('should retain style text when CSSOM serialization is unavailable', () => {
+    const style = document.createElement('style')
+    style.textContent = 'body { color: red; }'
+    Object.defineProperty(style, 'sheet', {
+      configurable: true,
+      value: {}
+    })
+
+    const serializedNode = serializeNodeWithId(style, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(serializedNode.attributes._cssText).toBeUndefined()
+    expect(serializedNode.childNodes).toEqual([
+      jasmine.objectContaining({
+        type: NodeType.Text,
+        textContent: 'body { color: red; }'
+      })
+    ])
   })
 
   it('should fall back to div for invalid tag names', () => {

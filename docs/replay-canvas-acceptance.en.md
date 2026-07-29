@@ -20,7 +20,8 @@ This checklist covers:
 
 Out of scope for this stage:
 
-- `webgl` / `webgl2`
+- WebGL command-level replay
+- `OffscreenCanvas`
 - perfect reconstruction for every complex 2D scene
 
 ## Preconditions
@@ -30,7 +31,7 @@ Before running acceptance, confirm:
 - Session Replay is sampled in
 - `startSessionReplayRecording()` has been called
 - `replayCanvasEnabled: true`
-- the target is a `2d canvas`
+- the target is a `2d canvas`, or a `webgl` / `webgl2` canvas in `auto` mode
 - the demo or business page is already running in the target mode
 
 ## Core Acceptance Items

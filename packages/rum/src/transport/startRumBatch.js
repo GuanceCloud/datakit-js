@@ -1,4 +1,5 @@
 import {
+  createIdentityEncoder,
   LifeCycleEventType,
   RumEventType,
   startBatchWithReplica
@@ -13,11 +14,15 @@ export function startRumBatch(
   sessionExpireObservable,
   createEncoder
 ) {
+  const rumEncoder = createEncoder(EncoderStreamId.RUM)
   const batch = startBatchWithReplica(
     configuration,
     {
       endpoint: configuration.rumEndpoint,
-      encoder: createEncoder(EncoderStreamId.RUM)
+      encoder: rumEncoder,
+      encoderFallback: rumEncoder.isAsync
+        ? createIdentityEncoder
+        : undefined
     },
     reportError,
     pageExitObservable,

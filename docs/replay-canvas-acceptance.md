@@ -20,7 +20,8 @@
 
 当前不在本轮验收主目标中的能力：
 
-- `webgl` / `webgl2`
+- WebGL command-level replay
+- `OffscreenCanvas`
 - 对所有复杂 2D 场景的完全一致重放
 
 ## 验收前提
@@ -30,8 +31,11 @@
 - Session Replay 已被采样到
 - 已调用 `startSessionReplayRecording()`
 - `replayCanvasEnabled: true`
-- 目标元素是 `2d canvas`
+- 目标元素是 `2d canvas`，或在 `auto` 模式下使用 `webgl` / `webgl2`
 - demo 或业务页面已切到待验收模式
+
+WebGL/WebGL2 验收时，目标必须使用 `auto` 模式；SDK 会在 draw 后、浏览器
+合成前采集受预算控制的像素快照。
 
 ## 核心验收项
 

@@ -1,4 +1,5 @@
 import {
+  createCanvasCommandObjectRefRegistry,
   serializeCanvasCommandArg,
   serializeCanvasCommandArgs
 } from './canvasCommandSerializeArgs'
@@ -46,14 +47,30 @@ describe('replay/record/canvasCommandSerializeArgs', () => {
     })
   })
 
-  it('should serialize html canvas elements as image sources', () => {
-    var canvas = document.createElement('canvas')
-    spyOn(canvas, 'toDataURL').and.returnValue('data:image/png;base64,QUJD')
-
-    expect(serializeCanvasCommandArg(canvas)).toEqual({
-      rr_type: 'HTMLImageElement',
-      src: 'data:image/png;base64,QUJD'
+  it('should serialize the selected currentSrc image resource', () => {
+    var image = document.createElement('img')
+    image.src = 'https://example.com/chart-1x.png'
+    Object.defineProperty(image, 'currentSrc', {
+      configurable: true,
+      value: 'https://example.com/chart-2x.png'
     })
+
+    expect(serializeCanvasCommandArg(image)).toEqual({
+      rr_type: 'HTMLImageElement',
+      src: 'https://example.com/chart-2x.png'
+    })
+  })
+
+  it('should reject html canvas elements without synchronously exporting them', () => {
+    var canvas = document.createElement('canvas')
+    spyOn(canvas, 'toDataURL')
+
+    expect(function () {
+      serializeCanvasCommandArg(canvas)
+    }).toThrowError(
+      'HTMLCanvasElement command arguments require snapshot fallback'
+    )
+    expect(canvas.toDataURL).not.toHaveBeenCalled()
   })
 
   it('should serialize mixed drawImage-style arguments', () => {
@@ -119,6 +136,34 @@ describe('replay/record/canvasCommandSerializeArgs', () => {
     })
     expect(serializeCanvasCommandArg(path, { id: 2 })).toEqual({
       rr_type: 'FakePath2D',
+      index: 0
+    })
+  })
+
+  it('should reset weak object reference indexes without retaining prior objects', () => {
+    function FakeCanvasGradient() {}
+    var registry = createCanvasCommandObjectRefRegistry()
+    var context = {}
+
+    expect(
+      registry.serializeArg(new FakeCanvasGradient(), context)
+    ).toEqual({
+      rr_type: 'FakeCanvasGradient',
+      index: 0
+    })
+    expect(
+      registry.serializeArg(new FakeCanvasGradient(), context)
+    ).toEqual({
+      rr_type: 'FakeCanvasGradient',
+      index: 1
+    })
+
+    registry.reset()
+
+    expect(
+      registry.serializeArg(new FakeCanvasGradient(), context)
+    ).toEqual({
+      rr_type: 'FakeCanvasGradient',
       index: 0
     })
   })

@@ -1,21 +1,16 @@
+import { markReplayInternalCanvas } from './canvasContext'
+
 var AUTO_CANVAS_SIGNATURE_SIZE = 8
 var AUTO_CANVAS_SIGNATURE_DIFF_THRESHOLD = 8
 
 export function createCanvasFrameSignatureExtractor() {
-  var signatureCanvas = document.createElement('canvas')
-  signatureCanvas.width = AUTO_CANVAS_SIGNATURE_SIZE
-  signatureCanvas.height = AUTO_CANVAS_SIGNATURE_SIZE
-  var signatureContext = signatureCanvas.getContext('2d', {
-    willReadFrequently: true
-  })
-
-  if (!signatureContext) {
-    return function () {
-      return undefined
-    }
-  }
+  var signatureContext
+  resetSignatureContext()
 
   return function (canvas) {
+    if (!signatureContext) {
+      return undefined
+    }
     try {
       signatureContext.clearRect(
         0,
@@ -40,8 +35,27 @@ export function createCanvasFrameSignatureExtractor() {
         ).data
       )
     } catch (_) {
+      // Drawing a cross-origin canvas taints the destination permanently;
+      // clearRect() cannot make that internal surface origin-clean again.
+      // Replace both canvas and context so later safe frames can resume
+      // signature-based deduplication.
+      resetSignatureContext()
       return undefined
     }
+  }
+
+  function resetSignatureContext() {
+    signatureContext = undefined
+    try {
+      var signatureCanvas = markReplayInternalCanvas(
+        document.createElement('canvas')
+      )
+      signatureCanvas.width = AUTO_CANVAS_SIGNATURE_SIZE
+      signatureCanvas.height = AUTO_CANVAS_SIGNATURE_SIZE
+      signatureContext = signatureCanvas.getContext('2d', {
+        willReadFrequently: true
+      })
+    } catch (_) {}
   }
 }
 

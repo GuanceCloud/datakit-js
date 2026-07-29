@@ -37,6 +37,8 @@
     "scripts": {
         "build": "lerna run build --stream",
         "build:bundle": "lerna run build:bundle --stream",
+        "check:bundle-size": "npm run build:bundle --workspace @cloudcare/browser-rum",
+        "check:bundle-size:artifact": "node scripts/check-bundle-size.js",
         "publish:npm": "npm run build && lerna publish from-package",
         "publish:oss:current": "lerna run publish:oss:current --stream",
         "publish:oss:lts": "lerna run publish:oss:lts --stream",

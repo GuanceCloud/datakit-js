@@ -1,6 +1,7 @@
 import {
   CanvasEncodeWorkerStatus,
   CANVAS_WORKER_INITIALIZATION_TIME_OUT_DELAY,
+  createCanvasEncodeWorker,
   createCanvasEncodeWorkerManager
 } from './canvasEncodeWorker'
 
@@ -50,6 +51,53 @@ describe('replay/record/canvasEncodeWorker', () => {
     emit(worker, 'message', { data: { action: 'initialized', version: '1.0.0' } })
 
     expect(manager.getStatus()).toBe(CanvasEncodeWorkerStatus.Initialized)
+  })
+
+  it('should revoke an inline worker URL immediately after initialization and not revoke it again on stop', () => {
+    var worker = createWorker()
+    var revokeObjectURL = jasmine.createSpy('revokeObjectURL')
+    var manager = createCanvasEncodeWorkerManager(
+      {},
+      {
+        createWorker: function () {
+          return {
+            worker: worker,
+            workerUrl: 'blob:canvas-worker',
+            usesExternalUrl: false,
+            urlObject: {
+              revokeObjectURL: revokeObjectURL
+            }
+          }
+        }
+      }
+    )
+
+    manager.ensureWorker()
+    emit(worker, 'message', { data: { action: 'initialized', version: '1.0.0' } })
+
+    expect(revokeObjectURL).toHaveBeenCalledOnceWith('blob:canvas-worker')
+
+    manager.stop()
+
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('should revoke an inline worker URL when worker construction throws', () => {
+    var revokeObjectURL = jasmine.createSpy('revokeObjectURL')
+    var urlObject = {
+      createObjectURL: jasmine
+        .createSpy('createObjectURL')
+        .and.returnValue('blob:failed-canvas-worker'),
+      revokeObjectURL: revokeObjectURL
+    }
+    var workerCtor = function () {
+      throw new Error('worker construction failed')
+    }
+
+    expect(function () {
+      createCanvasEncodeWorker({}, workerCtor, urlObject)
+    }).toThrowError('worker construction failed')
+    expect(revokeObjectURL).toHaveBeenCalledOnceWith('blob:failed-canvas-worker')
   })
 
   it('should move to error state on initialization timeout', () => {

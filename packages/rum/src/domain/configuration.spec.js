@@ -145,6 +145,45 @@ describe('rum configuration', () => {
     expect(highConfiguration.replayCanvasFlushImmediately).toBeFalse()
   })
 
+  it('should apply bounded auto canvas defaults without a named quality preset', () => {
+    const configuration = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      replayCanvasEnabled: true,
+      replayCanvasMode: 'auto',
+      replayCanvasQuality: 0.5
+    })
+
+    expect(configuration.replayCanvasSampling).toBe(2)
+    expect(configuration.replayCanvasAutoInterval).toBe(1000)
+    expect(configuration.replayCanvasAutoCooldown).toBe(1000)
+    expect(configuration.replayCanvasAutoUnchangedBackoff).toBe(3000)
+    expect(configuration.replayCanvasAutoFailureBackoff).toBe(5000)
+    expect(configuration.replayCanvasAutoMaxPerRun).toBe(2)
+  })
+
+  it('should clamp the canvas encoded byte budget to a deliverable segment size', () => {
+    const configuration = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      replayCanvasEnabled: true,
+      replayCanvasMaxEncodedBytes: 120000
+    })
+
+    expect(configuration.replayCanvasMaxEncodedBytes).toBe(40000)
+  })
+
+  it('should clamp the canvas target edge to the 16 MiB backing-store budget', () => {
+    const configuration = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      replayCanvasEnabled: true,
+      replayCanvasMaxCanvasSize: 8192
+    })
+
+    expect(configuration.replayCanvasMaxCanvasSize).toBe(2048)
+  })
+
   it('should let explicit auto canvas overrides win over quality presets', () => {
     const configuration = validateAndBuildRumConfiguration({
       applicationId: 'app-1',

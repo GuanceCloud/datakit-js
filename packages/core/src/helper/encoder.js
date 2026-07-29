@@ -37,7 +37,7 @@ export function createIdentityEncoder() {
     },
 
     estimateEncodedBytesCount: function (data) {
-      return data.length
+      return typeof data === 'number' ? data : data.length
     }
   }
 }

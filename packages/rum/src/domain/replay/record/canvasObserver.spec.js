@@ -19,6 +19,10 @@ describe('replay/record/canvasObserver', () => {
     canvas.remove()
   })
 
+  function getCommand(commands, property) {
+    return commands.find((command) => command.property === property)
+  }
+
   it('should emit a canvas mutation when snapshot succeeds', async () => {
     const onMutationDebug = jasmine.createSpy('onMutationDebug')
     const observer = createCanvasObserver({
@@ -63,6 +67,42 @@ describe('replay/record/canvasObserver', () => {
       width: 20,
       height: 10
     })
+  })
+
+  it('should not emit when publication membership changes during encoding', async () => {
+    let releaseEncode
+    let isNodeActive = true
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      isNodeActive: () => isNodeActive,
+      encodeBridge: {
+        encode: () =>
+          new Promise((resolve) => {
+            releaseEncode = resolve
+          }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    const snapshotPromise = observer.snapshot(canvas)
+    isNodeActive = false
+    releaseEncode({
+      dataUrl: 'data:image/webp;base64,QUJD',
+      width: 20,
+      height: 10
+    })
+
+    expect(await snapshotPromise).toEqual({
+      ok: false,
+      reason: 'not_serialized'
+    })
+    expect(emit).not.toHaveBeenCalled()
   })
 
   it('should not emit when canvas replay is disabled', async () => {
@@ -116,6 +156,33 @@ describe('replay/record/canvasObserver', () => {
             dataUrl: 'data:image/webp;base64,QUJD',
             width: 20,
             height: 10
+          }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(await observer.snapshot(canvas)).toEqual({
+      ok: false,
+      reason: 'encode_too_large'
+    })
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('should preserve a typed oversize result returned by the encode layer', async () => {
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 2
+      },
+      emit,
+      encodeBridge: {
+        encode: () =>
+          Promise.resolve({
+            ok: false,
+            reason: 'encode_too_large',
+            encodedBytesCount: 3
           }),
         stop: jasmine.createSpy('stop')
       }
@@ -205,21 +272,130 @@ describe('replay/record/canvasObserver', () => {
         data: jasmine.objectContaining({
           id: 42,
           encodedBytesCount: 3,
-          commands: [
-            jasmine.objectContaining({
+          commands: jasmine.arrayContaining([
+            {
               property: 'clearRect',
               args: [0, 0, 20, 10]
-            }),
+            },
             jasmine.objectContaining({
               property: 'drawImage'
             })
-          ]
+          ])
         })
       })
     )
   })
 
-  it('should emit snapshot drawImage commands with the configured target size', async () => {
+  it('should replay a bitmap after a legacy player skips the reset command', async () => {
+    const sourceContext = canvas.getContext('2d')
+    sourceContext.fillStyle = 'rgb(255, 0, 0)'
+    sourceContext.fillRect(0, 0, 10, 10)
+    sourceContext.fillStyle = 'rgb(0, 0, 255)'
+    sourceContext.fillRect(10, 0, 10, 10)
+    const dataUrl = canvas.toDataURL('image/png')
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/png',
+        replayCanvasMaxEncodedBytes: 10000
+      },
+      emit,
+      encodeBridge: {
+        encode: () =>
+          Promise.resolve({
+            dataUrl,
+            width: 20,
+            height: 10
+          }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(
+      await observer.snapshot(canvas, {
+        trigger: 'auto',
+        scheduler: 'command_capture'
+      })
+    ).toEqual({ ok: true })
+    expect(emit.calls.count()).toBe(2)
+    const stateResetCommands = emit.calls.argsFor(0)[0].data.commands
+    const bitmapCommands = emit.calls.mostRecent().args[0].data.commands
+    const commands = stateResetCommands.concat(bitmapCommands)
+    const replayCanvas = document.createElement('canvas')
+    replayCanvas.width = 20
+    replayCanvas.height = 10
+    const replayContext = replayCanvas.getContext('2d')
+    replayContext.fillStyle = 'rgb(0, 255, 0)'
+    replayContext.fillRect(0, 0, 20, 10)
+    replayContext.setTransform(1, 0, 0, 1, 7, 0)
+    replayContext.globalAlpha = 0
+    replayContext.globalCompositeOperation = 'destination-out'
+    replayContext.filter = 'blur(2px)'
+    replayContext.shadowColor = 'rgb(255, 0, 0)'
+    replayContext.shadowBlur = 10
+    replayContext.shadowOffsetX = 4
+    replayContext.shadowOffsetY = 4
+    replayContext.imageSmoothingEnabled = false
+
+    const snapshotImage = new Image()
+    await new Promise((resolve, reject) => {
+      snapshotImage.onload = resolve
+      snapshotImage.onerror = reject
+      snapshotImage.src = dataUrl
+    })
+
+    function applyCommands(context) {
+      commands.forEach((command) => {
+        try {
+          if (command.property === 'reset') {
+            throw new Error('legacy player context does not expose reset()')
+          }
+          if (command.setter) {
+            context[command.property] = command.args[0]
+            return
+          }
+          const args = command.args.slice()
+          if (command.property === 'drawImage') {
+            args[0] = snapshotImage
+          }
+          context[command.property].apply(context, args)
+        } catch (_) {
+          // rrweb isolates unsupported canvas commands and continues the batch.
+        }
+      })
+    }
+
+    expect(stateResetCommands.map((command) => command.property)).toEqual([
+      'reset',
+      'setTransform',
+      'globalAlpha',
+      'globalCompositeOperation',
+      'filter',
+      'shadowColor',
+      'shadowBlur',
+      'shadowOffsetX',
+      'shadowOffsetY',
+      'imageSmoothingEnabled'
+    ])
+    expect(bitmapCommands.map((command) => command.property)).toEqual([
+      'clearRect',
+      'drawImage'
+    ])
+    expect(getCommand(commands, 'clearRect').args).toEqual([0, 0, 20, 10])
+
+    applyCommands(replayContext)
+
+    expect(
+      Array.from(replayContext.getImageData(1, 1, 1, 1).data)
+    ).toEqual([255, 0, 0, 255])
+    expect(
+      Array.from(replayContext.getImageData(18, 8, 1, 1).data)
+    ).toEqual([0, 0, 255, 255])
+
+  })
+
+  it('should keep the bitmap event replaceable after a player-compatible state reset', async () => {
     const observer = createCanvasObserver({
       configuration: {
         replayCanvasEnabled: true,
@@ -239,12 +415,356 @@ describe('replay/record/canvasObserver', () => {
       }
     })
 
+    expect(
+      await observer.snapshot(canvas, {
+        trigger: 'auto',
+        scheduler: 'command_capture'
+      })
+    ).toEqual({ ok: true })
+    const stateResetCommands = emit.calls.argsFor(0)[0].data.commands
+    const bitmapCommands = emit.calls.mostRecent().args[0].data.commands
+
+    expect(stateResetCommands[0]).toEqual({
+      property: 'reset',
+      args: []
+    })
+    expect(getCommand(stateResetCommands, 'setTransform')).toEqual({
+      property: 'setTransform',
+      args: [1, 0, 0, 1, 0, 0]
+    })
+    expect(getCommand(stateResetCommands, 'globalAlpha')).toEqual({
+      property: 'globalAlpha',
+      args: [1],
+      setter: true
+    })
+    expect(getCommand(stateResetCommands, 'globalCompositeOperation')).toEqual({
+      property: 'globalCompositeOperation',
+      args: ['source-over'],
+      setter: true
+    })
+    expect(bitmapCommands).toEqual([
+      {
+        property: 'clearRect',
+        args: [0, 0, 20, 10]
+      },
+      jasmine.objectContaining({
+        property: 'drawImage'
+      })
+    ])
+    expect(getCommand(bitmapCommands, 'clearRect')).toEqual({
+      property: 'clearRect',
+      args: [0, 0, 20, 10]
+    })
+    expect(getCommand(bitmapCommands, 'drawImage')).toEqual(
+      jasmine.objectContaining({
+        property: 'drawImage'
+      })
+    )
+    stateResetCommands.concat(bitmapCommands).forEach((command) => {
+      expect(command).toEqual(
+        jasmine.objectContaining({
+          property: jasmine.any(String),
+          args: jasmine.any(Array)
+        })
+      )
+    })
+  })
+
+  const replaceableSnapshotSchedulers = [
+    'continuous_snapshot',
+    'webgl_snapshot'
+  ]
+  replaceableSnapshotSchedulers.forEach((scheduler) => {
+    it('should keep the first ' + scheduler + ' bitmap frame replaceable', async () => {
+      const observer = createCanvasObserver({
+        configuration: {
+          replayCanvasEnabled: true,
+          replayCanvasMode: 'auto',
+          replayCanvasMimeType: 'image/webp',
+          replayCanvasMaxEncodedBytes: 1000
+        },
+        emit,
+        encodeBridge: {
+          encode: () =>
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            }),
+          stop: jasmine.createSpy('stop')
+        }
+      })
+
+      expect(
+        await observer.snapshot(canvas, {
+          trigger: 'auto',
+          scheduler: scheduler
+        })
+      ).toEqual({ ok: true })
+      expect(emit.calls.count()).toBe(1)
+      expect(
+        emit.calls.mostRecent().args[0].data.commands.map(
+          (command) => command.property
+        )
+      ).toEqual(['clearRect', 'drawImage'])
+    })
+  })
+
+  it('should not emit a standalone reset after an admitted full snapshot bitmap baseline', async () => {
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: jasmine
+          .createSpy('encode')
+          .and.returnValues(
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            }),
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,REVG',
+              width: 20,
+              height: 10
+            })
+          ),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(
+      await observer.snapshot(canvas, {
+        trigger: 'auto',
+        scheduler: 'full_snapshot_baseline'
+      })
+    ).toEqual({ ok: true })
+    expect(
+      await observer.snapshot(canvas, {
+        trigger: 'auto',
+        scheduler: 'command_capture',
+        force: true
+      })
+    ).toEqual({ ok: true })
+
+    expect(emit.calls.count()).toBe(2)
+    emit.calls.allArgs().forEach((args) => {
+      expect(
+        args[0].data.commands.map((command) => command.property)
+      ).toEqual(['clearRect', 'drawImage'])
+    })
+  })
+
+  it('should still reset command-capture state after a rejected full snapshot bitmap baseline', async () => {
+    emit.and.returnValues(false, true, true)
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: jasmine
+          .createSpy('encode')
+          .and.returnValues(
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,QUJD',
+              width: 20,
+              height: 10
+            }),
+            Promise.resolve({
+              dataUrl: 'data:image/webp;base64,REVG',
+              width: 20,
+              height: 10
+            })
+          ),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(
+      await observer.snapshot(canvas, {
+        trigger: 'auto',
+        scheduler: 'full_snapshot_baseline'
+      })
+    ).toEqual({ ok: false, reason: 'record_rejected' })
+    expect(
+      await observer.snapshot(canvas, {
+        trigger: 'auto',
+        scheduler: 'command_capture',
+        force: true
+      })
+    ).toEqual({ ok: true })
+
+    expect(emit.calls.count()).toBe(3)
+    expect(emit.calls.argsFor(1)[0].data.commands[0].property).toBe(
+      'reset'
+    )
+    expect(
+      emit.calls.argsFor(2)[0].data.commands.map(
+        (command) => command.property
+      )
+    ).toEqual(['clearRect', 'drawImage'])
+  })
+
+  it('should scale a downsampled snapshot back to the canvas backing size', async () => {
+    canvas.style.width = '100px'
+    canvas.style.height = '50px'
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: () =>
+          Promise.resolve({
+            dataUrl: 'data:image/webp;base64,QUJD',
+            width: 10,
+            height: 5
+          }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
     await observer.snapshot(canvas)
 
-    expect(emit.calls.mostRecent().args[0].data.commands[1]).toEqual(
+    expect(emit.calls.mostRecent().args[0].data.commands).toEqual(
+      jasmine.arrayContaining([
+        jasmine.objectContaining({
+          property: 'drawImage',
+          args: [jasmine.any(Object), 0, 0, 20, 10]
+        })
+      ])
+    )
+  })
+
+  it('should discard a stale async snapshot after the canvas backing size changes', async () => {
+    let resolveEncode
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValues(
+        new Promise(function (resolve) {
+          resolveEncode = resolve
+        }),
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: encode,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    const snapshotPromise = observer.snapshot(canvas)
+    canvas.width = 40
+    canvas.height = 20
+    resolveEncode({
+      dataUrl: 'data:image/webp;base64,QUJD',
+      width: 10,
+      height: 5
+    })
+
+    expect(await snapshotPromise).toEqual({
+      ok: false,
+      reason: 'resized_during_snapshot'
+    })
+    expect(emit).not.toHaveBeenCalled()
+
+    expect(await observer.snapshot(canvas)).toEqual({ ok: true })
+    expect(
+      getCommand(
+        emit.calls.mostRecent().args[0].data.commands,
+        'drawImage'
+      )
+    ).toEqual(
       jasmine.objectContaining({
         property: 'drawImage',
-        args: [jasmine.any(Object), 0, 0, 20, 10]
+        args: [jasmine.any(Object), 0, 0, 40, 20]
+      })
+    )
+  })
+
+  it('should not emit an older canvas snapshot after a newer one resolves first', async () => {
+    var pendingEncodes = []
+    var observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: jasmine.createSpy('encode').and.callFake(function () {
+          return new Promise(function (resolve) {
+            pendingEncodes.push(resolve)
+          })
+        }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    var firstSnapshotPromise = observer.snapshot(canvas)
+    var secondSnapshotPromise = observer.snapshot(canvas)
+
+    pendingEncodes[1]({
+      dataUrl: 'data:image/webp;base64,REVG',
+      width: 20,
+      height: 10
+    })
+    expect(await secondSnapshotPromise).toEqual({ ok: true })
+
+    pendingEncodes[0]({
+      dataUrl: 'data:image/webp;base64,QUJD',
+      width: 20,
+      height: 10
+    })
+    expect(await firstSnapshotPromise).toEqual({
+      ok: false,
+      reason: 'superseded'
+    })
+
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(
+      getCommand(
+        emit.calls.mostRecent().args[0].data.commands,
+        'drawImage'
+      ).args[0]
+    ).toEqual(
+      jasmine.objectContaining({
+        rr_type: 'ImageBitmap',
+        args: [
+          jasmine.objectContaining({
+            rr_type: 'Blob',
+            data: [
+              {
+                rr_type: 'ArrayBuffer',
+                base64: 'REVG'
+              }
+            ]
+          })
+        ]
       })
     )
   })
@@ -272,7 +792,7 @@ describe('replay/record/canvasObserver', () => {
     await observer.snapshot(canvas)
 
     var mutation = emit.calls.mostRecent().args[0]
-    expect(mutation.data.commands[1].args[0]).toEqual({
+    expect(getCommand(mutation.data.commands, 'drawImage').args[0]).toEqual({
       rr_type: 'ImageBitmap',
       args: [
         {
@@ -290,6 +810,25 @@ describe('replay/record/canvasObserver', () => {
         replayCanvasEnabled: true,
         replayCanvasMode: 'manual',
         shouldRecordCanvas: () => false
+      },
+      emit
+    })
+
+    expect(await observer.snapshot(canvas)).toEqual({
+      ok: false,
+      reason: 'rejected_by_should_record_canvas'
+    })
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('should fail closed when shouldRecordCanvas throws', async () => {
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        shouldRecordCanvas: () => {
+          throw new Error('customer hook failed')
+        }
       },
       emit
     })
@@ -357,6 +896,37 @@ describe('replay/record/canvasObserver', () => {
 
     expect(await observer.snapshot(canvas)).toEqual({ ok: true })
     expect(emit).toHaveBeenCalled()
+  })
+
+  it('should avoid a synchronous frame-signature readback for WebGL snapshots', async () => {
+    const frameSignatureExtractor = jasmine.createSpy('frameSignatureExtractor')
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: () =>
+          Promise.resolve({
+            dataUrl: 'data:image/webp;base64,QUJD',
+            width: 20,
+            height: 10
+          }),
+        stop: jasmine.createSpy('stop')
+      },
+      frameSignatureExtractor: frameSignatureExtractor
+    })
+
+    expect(
+      await observer.snapshot(canvas, {
+        trigger: 'auto',
+        scheduler: 'webgl_snapshot'
+      })
+    ).toEqual({ ok: true })
+    expect(frameSignatureExtractor).not.toHaveBeenCalled()
   })
 
   it('should keep allowing duplicate manual snapshots when auto mode is enabled', async () => {
@@ -482,6 +1052,54 @@ describe('replay/record/canvasObserver', () => {
     expect(emit.calls.count()).toBe(1)
   })
 
+  it('should force an authoritative auto snapshot past signature and encoded-frame deduplication', async () => {
+    let nowTime = 1000
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValue(
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      now: () => nowTime,
+      emit,
+      encodeBridge: {
+        encode,
+        stop: jasmine.createSpy('stop')
+      },
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValues([1, 1, 1], [1, 1, 1], [1, 1, 1])
+    })
+
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    nowTime = 1100
+    expect(
+      await observer.snapshot(canvas, { trigger: 'auto', force: true })
+    ).toEqual({
+      ok: true
+    })
+    nowTime = 1200
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: false,
+      reason: 'below_threshold'
+    })
+    expect(encode).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledTimes(2)
+  })
+
   it('should skip below-threshold frames before encoding in auto mode', async () => {
     let nowTime = 1000
     const encode = jasmine
@@ -580,6 +1198,51 @@ describe('replay/record/canvasObserver', () => {
       ok: true
     })
     expect(emit.calls.count()).toBe(2)
+  })
+
+  it('should retry an unchanged auto frame when the previous record was rejected', async () => {
+    emit.and.returnValues(false, true)
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValues(
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        }),
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      emit,
+      encodeBridge: {
+        encode,
+        stop: jasmine.createSpy('stop')
+      },
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValues([0, 0, 0], [0, 0, 0])
+    })
+
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: false,
+      reason: 'record_rejected'
+    })
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    expect(encode).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledTimes(2)
   })
 
   it('should apply adaptive encode overrides for large continuous auto snapshots only', async () => {
@@ -744,6 +1407,7 @@ describe('replay/record/canvasObserver', () => {
     const firstEncode = new Promise((resolve) => {
       releaseFirstEncode = resolve
     })
+    const resetEncodeBridge = jasmine.createSpy('reset')
     const observer = createCanvasObserver({
       configuration: {
         replayCanvasEnabled: true,
@@ -764,6 +1428,7 @@ describe('replay/record/canvasObserver', () => {
               height: 10
             })
           ),
+        reset: resetEncodeBridge,
         stop: jasmine.createSpy('stop')
       },
       frameSignatureExtractor: jasmine
@@ -785,6 +1450,7 @@ describe('replay/record/canvasObserver', () => {
     })
     expect(await observer.snapshot(canvas)).toEqual({ ok: true })
     expect(emit.calls.count()).toBe(1)
+    expect(resetEncodeBridge).toHaveBeenCalledTimes(1)
   })
 
   it('should return encode_failed when the encode bridge rejects', async () => {

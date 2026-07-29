@@ -7,8 +7,6 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary)
 }
 
-var canvasObjectRefMap = new WeakMap()
-
 function isTypedArray(value) {
   return (
     value instanceof Float32Array ||
@@ -23,41 +21,10 @@ function isTypedArray(value) {
   )
 }
 
-function variableListFor(context, constructorName) {
-  var contextMap = canvasObjectRefMap.get(context)
-  if (!contextMap) {
-    contextMap = new Map()
-    canvasObjectRefMap.set(context, contextMap)
-  }
-  if (!contextMap.has(constructorName)) {
-    contextMap.set(constructorName, [])
-  }
-  return contextMap.get(constructorName)
-}
-
-function serializeCanvasObjectRef(value, context) {
-  if (!value || typeof value !== 'object' || !context || !value.constructor) {
-    return value
-  }
-
-  var constructorName = value.constructor.name || 'Object'
-  var objectList = variableListFor(context, constructorName)
-  var objectIndex = objectList.indexOf(value)
-  if (objectIndex === -1) {
-    objectIndex = objectList.length
-    objectList.push(value)
-  }
-
-  return {
-    rr_type: constructorName,
-    index: objectIndex
-  }
-}
-
-export function serializeCanvasCommandArg(value, context) {
+function serializeCanvasCommandArgWithRegistry(value, context, registry) {
   if (Array.isArray(value)) {
     return value.map(function (item) {
-      return serializeCanvasCommandArg(item, context)
+      return serializeCanvasCommandArgWithRegistry(item, context, registry)
     })
   }
 
@@ -89,7 +56,7 @@ export function serializeCanvasCommandArg(value, context) {
     return {
       rr_type: 'DataView',
       args: [
-        serializeCanvasCommandArg(value.buffer, context),
+        serializeCanvasCommandArgWithRegistry(value.buffer, context, registry),
         value.byteOffset,
         value.byteLength
       ]
@@ -100,7 +67,7 @@ export function serializeCanvasCommandArg(value, context) {
     return {
       rr_type: 'ImageData',
       args: [
-        serializeCanvasCommandArg(value.data, context),
+        serializeCanvasCommandArgWithRegistry(value.data, context, registry),
         value.width,
         value.height
       ]
@@ -110,15 +77,85 @@ export function serializeCanvasCommandArg(value, context) {
   if (typeof HTMLImageElement !== 'undefined' && value instanceof HTMLImageElement) {
     return {
       rr_type: 'HTMLImageElement',
-      src: value.src
+      src: value.currentSrc || value.src
     }
   }
 
-  return serializeCanvasObjectRef(value, context)
+  if (typeof HTMLCanvasElement !== 'undefined' && value instanceof HTMLCanvasElement) {
+    throw new Error('HTMLCanvasElement command arguments require snapshot fallback')
+  }
+
+  return registry.serializeObjectRef(value, context)
+}
+
+export function createCanvasCommandObjectRefRegistry() {
+  var objectRefsByContext = new WeakMap()
+  var registry = {
+    serializeArg: function (value, context) {
+      return serializeCanvasCommandArgWithRegistry(
+        value,
+        context,
+        registry
+      )
+    },
+    serializeArgs: function (args, context) {
+      return Array.prototype.slice.call(args).map(function (arg) {
+        return serializeCanvasCommandArgWithRegistry(
+          arg,
+          context,
+          registry
+        )
+      })
+    },
+    serializeObjectRef: function (value, context) {
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        !context ||
+        !value.constructor
+      ) {
+        return value
+      }
+
+      var constructorName = value.constructor.name || 'Object'
+      var contextRefs = objectRefsByContext.get(context)
+      if (!contextRefs) {
+        contextRefs = new Map()
+        objectRefsByContext.set(context, contextRefs)
+      }
+      var constructorRefs = contextRefs.get(constructorName)
+      if (!constructorRefs) {
+        constructorRefs = {
+          indexByObject: new WeakMap(),
+          nextIndex: 0
+        }
+        contextRefs.set(constructorName, constructorRefs)
+      }
+      var objectIndex = constructorRefs.indexByObject.get(value)
+      if (objectIndex === undefined) {
+        objectIndex = constructorRefs.nextIndex
+        constructorRefs.nextIndex += 1
+        constructorRefs.indexByObject.set(value, objectIndex)
+      }
+
+      return {
+        rr_type: constructorName,
+        index: objectIndex
+      }
+    },
+    reset: function () {
+      objectRefsByContext = new WeakMap()
+    }
+  }
+  return registry
+}
+
+var defaultObjectRefRegistry = createCanvasCommandObjectRefRegistry()
+
+export function serializeCanvasCommandArg(value, context) {
+  return defaultObjectRefRegistry.serializeArg(value, context)
 }
 
 export function serializeCanvasCommandArgs(args, context) {
-  return Array.prototype.slice.call(args).map(function (arg) {
-    return serializeCanvasCommandArg(arg, context)
-  })
+  return defaultObjectRefRegistry.serializeArgs(args, context)
 }

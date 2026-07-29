@@ -23,6 +23,7 @@ const buildEnvFactories = {
       return lernaJson.version
     }
   },
+  REPLAY_DEBUG_ENABLED: (mode) => mode === 'development',
   WORKER_STRING: () => {
     const workerPath = path.join(__dirname, '../packages/worker')
     // Make sure the worker is built

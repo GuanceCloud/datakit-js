@@ -1,7 +1,12 @@
-import { LifeCycle, LifeCycleEventType } from '@cloudcare/browser-core'
+import {
+  LifeCycle,
+  LifeCycleEventType,
+  PageExitReason
+} from '@cloudcare/browser-core'
 import { startRecording } from './startRecording'
 import { RecordType } from '../types'
 import { setSerializedNodeId } from '../domain/replay/record/serializationUtils'
+import { SEGMENT_DURATION_LIMIT } from '../domain/replay/segmentCollection/segmentCollection'
 
 describe('startRecording', () => {
   let originalBridge
@@ -36,13 +41,16 @@ describe('startRecording', () => {
 
   beforeEach(() => {
     originalBridge = window.FTWebViewJavascriptBridge
+    // Initial snapshots use a hard production budget, so stale fixtures from
+    // other randomized suites must not become part of these test baselines.
+    document.body.textContent = ''
   })
 
   afterEach(() => {
     window.FTWebViewJavascriptBridge = originalBridge
   })
 
-  it('should send replay records through the event bridge and react to view lifecycle events', () => {
+  it('should send replay records through the event bridge and react to view lifecycle events', (done) => {
     const sendEvent = jasmine.createSpy('sendEvent')
     const lifeCycle = new LifeCycle()
 
@@ -85,22 +93,26 @@ describe('startRecording', () => {
       startClocks: { timeStamp: 1234 }
     })
 
-    payloads = parseBridgePayloads(sendEvent)
-    expect(
-      payloads.some(
-        (payload) =>
-          payload.name === 'session_replay' &&
-          payload.data.type === RecordType.FullSnapshot &&
-          payload.data.timestamp === 1234
-      )
-    ).toBeTrue()
+    setTimeout(() => {
+      payloads = parseBridgePayloads(sendEvent)
+      expect(
+        payloads.some(
+          (payload) =>
+            payload.name === 'session_replay' &&
+            payload.data.type === RecordType.FullSnapshot &&
+            payload.data.timestamp === 1234
+        )
+      ).toBeTrue()
 
-    recording.stop()
+      recording.stop()
+      done()
+    }, 0)
   })
 
   it('should stop forwarding lifecycle-triggered replay records after stop is called', () => {
     const sendEvent = jasmine.createSpy('sendEvent')
     const lifeCycle = new LifeCycle()
+    const onStopped = jasmine.createSpy('onStopped')
 
     window.FTWebViewJavascriptBridge = {
       getAllowedWebViewHosts: () => '["localhost"]',
@@ -115,16 +127,69 @@ describe('startRecording', () => {
       {},
       {
         findView: () => ({ id: 'view-current' })
-      }
+      },
+      undefined,
+      undefined,
+      onStopped
     )
 
     sendEvent.calls.reset()
-    recording.stop()
+    recording.stop('manual_stop')
+    recording.stop('duplicate_stop')
 
     lifeCycle.notify(LifeCycleEventType.VIEW_ENDED)
     lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
       startClocks: { timeStamp: 4567 }
     })
+
+    expect(sendEvent).not.toHaveBeenCalled()
+    expect(onStopped).toHaveBeenCalledOnceWith('manual_stop')
+  })
+
+  it('should report stopped and suppress records when the initial full snapshot exceeds its sync budget', () => {
+    const sendEvent = jasmine.createSpy('sendEvent')
+    const lifeCycle = new LifeCycle()
+    const onStopped = jasmine.createSpy('onStopped')
+    let now = 0
+    spyOn(performance, 'now').and.callFake(() => {
+      now += 40
+      return now
+    })
+
+    window.FTWebViewJavascriptBridge = {
+      getAllowedWebViewHosts: () => '["localhost"]',
+      sendEvent
+    }
+
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {},
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      undefined,
+      undefined,
+      onStopped
+    )
+
+    expect(recording.isStopped()).toBeTrue()
+    expect(onStopped).toHaveBeenCalledTimes(1)
+    expect(
+      parseBridgePayloads(sendEvent).some(
+        (payload) =>
+          payload.data.type === RecordType.FullSnapshot ||
+          payload.data.type === RecordType.IncrementalSnapshot
+      )
+    ).toBeFalse()
+
+    sendEvent.calls.reset()
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
+      startClocks: { timeStamp: 4567 }
+    })
+    document.body.dispatchEvent(new Event('input', { bubbles: true }))
 
     expect(sendEvent).not.toHaveBeenCalled()
   })
@@ -269,5 +334,516 @@ describe('startRecording', () => {
     }).not.toThrow()
 
     recording.stop()
+  })
+
+  it('should flush pending DOM mutations before stopping the segment', (done) => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    const httpRequest = {
+      send: jasmine.createSpy('send'),
+      sendOnExit: jasmine.createSpy('sendOnExit')
+    }
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      httpRequest
+    )
+    const addedNode = document.createElement('div')
+
+    encoder.write.calls.reset()
+    document.body.appendChild(addedNode)
+
+    setTimeout(() => {
+      recording.stop()
+
+      expect(
+        encoder.write.calls
+          .allArgs()
+          .some(
+            (args) =>
+              typeof args[0] === 'string' &&
+              args[0].indexOf('"source":0') !== -1
+          )
+      ).toBeTrue()
+
+      addedNode.remove()
+      done()
+    }, 0)
+  })
+
+  it('should flush same-task DOM mutations before ending a view', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      }
+    )
+    const addedNode = document.createElement('div')
+
+    encoder.write.calls.reset()
+    document.body.appendChild(addedNode)
+    lifeCycle.notify(LifeCycleEventType.VIEW_ENDED)
+
+    const writes = encoder.write.calls
+      .allArgs()
+      .map((args) => args[0])
+      .filter((data) => typeof data === 'string')
+    const mutationIndex = writes.findIndex(
+      (data) => data.indexOf('"source":0') !== -1
+    )
+    const viewEndIndex = writes.findIndex(
+      (data) => data.indexOf('"type":' + RecordType.ViewEnd) !== -1
+    )
+
+    expect(mutationIndex).toBeGreaterThanOrEqual(0)
+    expect(viewEndIndex).toBeGreaterThan(mutationIndex)
+
+    recording.stop()
+    addedNode.remove()
+  })
+
+  it('should recover DOM publication after synchronous structural admission rejection', () => {
+    jasmine.clock().install()
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    let pendingRawBytesCount = 0
+    encoder.getPendingRawBytesCount = () => pendingRawBytesCount
+    const onStopped = jasmine.createSpy('onStopped')
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      onStopped
+    )
+
+    const rejectedChild = document.createElement('div')
+    let acceptedSibling
+    try {
+      pendingRawBytesCount = 4 * 1024 * 1024
+      document.body.appendChild(rejectedChild)
+      recording.flushReplayMutationsForDebug()
+
+      expect(
+        recording.getSerializedNodeIdForDebug(rejectedChild)
+      ).toBeUndefined()
+      expect(recording.isStopped()).toBeFalse()
+      expect(onStopped).not.toHaveBeenCalled()
+
+      pendingRawBytesCount = 0
+      jasmine.clock().tick(32)
+      expect(
+        recording.getSerializedNodeIdForDebug(rejectedChild)
+      ).toEqual(jasmine.any(Number))
+      const writesBeforeRecovery = encoder.write.calls.count()
+      acceptedSibling = document.createElement('div')
+      document.body.appendChild(acceptedSibling)
+      recording.flushReplayMutationsForDebug()
+
+      expect(
+        recording.getSerializedNodeIdForDebug(acceptedSibling)
+      ).toEqual(jasmine.any(Number))
+      expect(encoder.write.calls.count()).toBeGreaterThan(writesBeforeRecovery)
+    } finally {
+      recording.stop()
+      rejectedChild.remove()
+      if (acceptedSibling) {
+        acceptedSibling.remove()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  ;[
+    PageExitReason.HIDDEN,
+    PageExitReason.FROZEN,
+    PageExitReason.PAGEHIDE
+  ].forEach((pageExitReason) => {
+    it(
+      'should preserve a pending DOM recovery snapshot while the page is resumable: ' +
+        pageExitReason,
+      () => {
+        jasmine.clock().install()
+        const recoveryRoot = document.createElement('div')
+        const recoverySibling = document.createElement('div')
+        document.body.appendChild(recoveryRoot)
+        document.body.appendChild(recoverySibling)
+        const lifeCycle = new LifeCycle()
+        const encoder = createEncoder()
+        const recording = startRecording(
+          lifeCycle,
+          {
+            defaultPrivacyLevel: 'mask-user-input'
+          },
+          {
+            findTrackedSession: () => ({
+              id: 'session-1',
+              sessionReplayAllowed: true
+            })
+          },
+          {
+            findView: () => ({ id: 'view-current' })
+          },
+          encoder,
+          {
+            send: jasmine.createSpy('send'),
+            sendOnExit: jasmine.createSpy('sendOnExit')
+          }
+        )
+
+        try {
+          encoder.write.calls.reset()
+          for (let index = 0; index < 1001; index += 1) {
+            const target =
+              index % 2 === 0 ? recoveryRoot : recoverySibling
+            target.setAttribute(
+              'data-overflow-' + Math.floor(index / 2),
+              String(index)
+            )
+          }
+          recording.flushReplayMutationsForDebug()
+
+          lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+            reason: pageExitReason
+          })
+          jasmine.clock().tick(1)
+
+          expect(
+            encoder.write.calls
+              .allArgs()
+              .some(
+                (args) =>
+                  typeof args[0] === 'string' &&
+                  args[0].indexOf(
+                    '"type":' + RecordType.FullSnapshot
+                  ) !== -1
+              )
+          ).toBeTrue()
+        } finally {
+          recording.stop()
+          recoveryRoot.remove()
+          recoverySibling.remove()
+          jasmine.clock().uninstall()
+        }
+      }
+    )
+  })
+
+  it('should use the page-exit transport when stopped during unload', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    const httpRequest = {
+      send: jasmine.createSpy('send'),
+      sendOnExit: jasmine.createSpy('sendOnExit')
+    }
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      httpRequest
+    )
+
+    // A large initialization snapshot can flush before stop when the full
+    // suite runs with a different DOM/test order. This assertion only covers
+    // the transport selected by stop itself.
+    httpRequest.send.calls.reset()
+    httpRequest.sendOnExit.calls.reset()
+    recording.stop('before_unload')
+
+    expect(httpRequest.sendOnExit).toHaveBeenCalledTimes(1)
+    expect(httpRequest.send).not.toHaveBeenCalled()
+  })
+
+  it('should retry the final mutation after unload releases encoder backpressure', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    let pendingRawBytesCount = 0
+    encoder.getPendingRawBytesCount = () => pendingRawBytesCount
+    encoder.getPendingEncodedBytesCount = () => 0
+    encoder.estimateEncodedBytesCount = () => 1
+    encoder.flushPendingActionsSync = jasmine
+      .createSpy('flushPendingActionsSync')
+      .and.callFake(() => {
+        pendingRawBytesCount = 0
+      })
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      }
+    )
+    encoder.write.calls.reset()
+
+    const child = document.createElement('div')
+    child.setAttribute('data-final-unload-mutation', 'captured')
+    document.body.appendChild(child)
+    pendingRawBytesCount = 4 * 1024 * 1024
+
+    recording.stop(PageExitReason.UNLOADING)
+
+    expect(encoder.flushPendingActionsSync).toHaveBeenCalled()
+    expect(
+      encoder.write.calls
+        .allArgs()
+        .some(
+          (args) =>
+            typeof args[0] === 'string' &&
+            args[0].indexOf('data-final-unload-mutation') !== -1
+        )
+    ).toBeTrue()
+  })
+
+  it('should unsubscribe from error-session updates when stopping', () => {
+    const unsubscribe = jasmine.createSpy('unsubscribe')
+    const recording = startRecording(
+      new LifeCycle(),
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true,
+          errorSessionReplayAllowed: true,
+          sessionHasError: false
+        }),
+        sessionStateUpdateObservable: {
+          subscribe: () => ({ unsubscribe })
+        }
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      createEncoder(),
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      }
+    )
+
+    recording.stop()
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('should roll back initialized resources when startup throws midway', () => {
+    const lifeCycle = new LifeCycle()
+    const originalSubscribe = lifeCycle.subscribe.bind(lifeCycle)
+    const startupError = new Error('view subscription failed')
+    const trackedUnsubscribes = []
+    let subscribeCount = 0
+    spyOn(lifeCycle, 'subscribe').and.callFake(function (eventType, callback) {
+      subscribeCount += 1
+      if (subscribeCount === 5) {
+        throw startupError
+      }
+      const subscription = originalSubscribe(eventType, callback)
+      const unsubscribe = jasmine
+        .createSpy('unsubscribe')
+        .and.callFake(subscription.unsubscribe)
+      trackedUnsubscribes.push(unsubscribe)
+      return { unsubscribe }
+    })
+    const disconnectSpy = spyOn(
+      MutationObserver.prototype,
+      'disconnect'
+    ).and.callThrough()
+    const onStopped = jasmine.createSpy('onStopped')
+
+    expect(() =>
+      startRecording(
+        lifeCycle,
+        {
+          defaultPrivacyLevel: 'mask-user-input'
+        },
+        {
+          findTrackedSession: () => ({
+            id: 'session-1',
+            sessionReplayAllowed: true
+          })
+        },
+        {
+          findView: () => ({ id: 'view-current' })
+        },
+        createEncoder(),
+        {
+          send: jasmine.createSpy('send'),
+          sendOnExit: jasmine.createSpy('sendOnExit')
+        },
+        onStopped
+      )
+    ).toThrow(startupError)
+
+    expect(trackedUnsubscribes.length).toBe(4)
+    trackedUnsubscribes.forEach((unsubscribe) => {
+      expect(unsubscribe).toHaveBeenCalledTimes(1)
+    })
+    expect(disconnectSpy).toHaveBeenCalled()
+    expect(onStopped).toHaveBeenCalledOnceWith('start_failure')
+  })
+
+  it('should finish every cleanup task when one cleanup throws', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    const unsubscribe = jasmine
+      .createSpy('unsubscribe')
+      .and.throwError('unsubscribe failed')
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true,
+          errorSessionReplayAllowed: true,
+          sessionHasError: false
+        }),
+        sessionStateUpdateObservable: {
+          subscribe: () => ({ unsubscribe })
+        }
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      }
+    )
+
+    expect(() => recording.stop()).not.toThrow()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+
+    const finishCountAfterStop = encoder.finish.calls.count()
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: 'hidden'
+    })
+
+    expect(encoder.finish.calls.count()).toBe(finishCountAfterStop)
+  })
+
+  it('should tear down recording after repeated full snapshot failures', () => {
+    jasmine.clock().install()
+    jasmine.clock().mockDate(new Date(0))
+    try {
+      const lifeCycle = new LifeCycle()
+      const encoder = createEncoder()
+      encoder.finish.and.callFake((callback) => {
+        callback({
+          rawBytesCount: 100,
+          output: new Uint8Array([1, 2, 3]),
+          outputBytesCount: 60001
+        })
+      })
+      const recording = startRecording(
+        lifeCycle,
+        {
+          defaultPrivacyLevel: 'mask-user-input'
+        },
+        {
+          findTrackedSession: () => ({
+            id: 'session-1',
+            sessionReplayAllowed: true
+          })
+        },
+        {
+          findView: () => ({ id: 'view-current' })
+        },
+        encoder,
+        {
+          send: jasmine.createSpy('send'),
+          sendOnExit: jasmine.createSpy('sendOnExit')
+        }
+      )
+
+      for (let failure = 0; failure < 3; failure += 1) {
+        jasmine.clock().tick(SEGMENT_DURATION_LIMIT)
+        jasmine.clock().tick(0)
+      }
+
+      const fullSnapshotCount =
+        recording.getReplayPerformanceForDebug().fullSnapshotCount
+      lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
+        startClocks: { timeStamp: 20000 }
+      })
+      jasmine.clock().tick(0)
+
+      expect(
+        recording.getReplayPerformanceForDebug().fullSnapshotCount
+      ).toBe(fullSnapshotCount)
+      recording.stop()
+    } finally {
+      jasmine.clock().uninstall()
+    }
   })
 })

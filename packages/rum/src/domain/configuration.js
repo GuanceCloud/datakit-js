@@ -18,6 +18,9 @@ import {
 import { buildEnv } from '../boot/buildEnv'
 import { isTracingOption } from '../domain/tracing/tracer'
 
+var REPLAY_CANVAS_MAX_ENCODED_BYTES = 40000
+var REPLAY_CANVAS_MAX_CANVAS_SIZE = 2048
+
 var REPLAY_CANVAS_QUALITY_PRESETS = {
   low: {
     quality: 0.25,
@@ -306,13 +309,19 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         initConfiguration.replayCanvasMimeType,
         'image/webp'
       ),
-      replayCanvasMaxCanvasSize: isNullUndefinedDefaultValue(
-        initConfiguration.replayCanvasMaxCanvasSize,
-        1280
+      replayCanvasMaxCanvasSize: Math.min(
+        isNullUndefinedDefaultValue(
+          initConfiguration.replayCanvasMaxCanvasSize,
+          1280
+        ),
+        REPLAY_CANVAS_MAX_CANVAS_SIZE
       ),
-      replayCanvasMaxEncodedBytes: isNullUndefinedDefaultValue(
-        initConfiguration.replayCanvasMaxEncodedBytes,
-        40000
+      replayCanvasMaxEncodedBytes: Math.min(
+        isNullUndefinedDefaultValue(
+          initConfiguration.replayCanvasMaxEncodedBytes,
+          REPLAY_CANVAS_MAX_ENCODED_BYTES
+        ),
+        REPLAY_CANVAS_MAX_ENCODED_BYTES
       ),
       replayCanvasMaxConcurrentEncodes: isNullUndefinedDefaultValue(
         initConfiguration.replayCanvasMaxConcurrentEncodes,
@@ -322,36 +331,31 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         initConfiguration.replayCanvasAutoInterval,
         replayCanvasQualityPreset
           ? replayCanvasQualityPreset.autoInterval
-          : undefined,
-        1000
+          : 1000
       ),
       replayCanvasAutoCooldown: isNullUndefinedDefaultValue(
         initConfiguration.replayCanvasAutoCooldown,
         replayCanvasQualityPreset
           ? replayCanvasQualityPreset.autoCooldown
-          : undefined,
-        1000
+          : 1000
       ),
       replayCanvasAutoUnchangedBackoff: isNullUndefinedDefaultValue(
         initConfiguration.replayCanvasAutoUnchangedBackoff,
         replayCanvasQualityPreset
           ? replayCanvasQualityPreset.autoUnchangedBackoff
-          : undefined,
-        3000
+          : 3000
       ),
       replayCanvasAutoFailureBackoff: isNullUndefinedDefaultValue(
         initConfiguration.replayCanvasAutoFailureBackoff,
         replayCanvasQualityPreset
           ? replayCanvasQualityPreset.autoFailureBackoff
-          : undefined,
-        5000
+          : 5000
       ),
       replayCanvasAutoMaxPerRun: isNullUndefinedDefaultValue(
         initConfiguration.replayCanvasAutoMaxPerRun,
         replayCanvasQualityPreset
           ? replayCanvasQualityPreset.autoMaxPerRun
-          : undefined,
-        2
+          : 2
       ),
       replayCanvasFlushImmediately: isNullUndefinedDefaultValue(
         initConfiguration.replayCanvasFlushImmediately,

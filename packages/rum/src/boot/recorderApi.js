@@ -5,18 +5,19 @@ import {
   canUseEventBridge,
   bridgeSupports,
   BridgeCapability,
-  PageExitReason
+  PageExitReason,
+  monitorError
 } from '@cloudcare/browser-core'
 
 import { makeRecorderApiStub } from './recorderApiStub'
 import { getReplayStats as getReplayStatsImpl } from '../domain/replay/replayStats'
 import {
   createDeflateEncoder,
-  startDeflateWorker,
   DeflateWorkerStatus,
   getDeflateWorkerStatus,
   DeflateEncoderStreamId
 } from '../domain/deflate'
+import { createDeflateWorkerController } from '../domain/deflate/deflateWorker'
 var RecorderStatus = {
   // The recorder is stopped.
   Stopped: 0,
@@ -29,6 +30,13 @@ var RecorderStatus = {
   Started: 3
 }
 
+function createNotRecordingCanvasResult() {
+  return Promise.resolve({
+    ok: false,
+    reason: 'not_recording'
+  })
+}
+
 export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
   if (
     (canUseEventBridge() && !bridgeSupports(BridgeCapability.RECORDS)) ||
@@ -38,53 +46,30 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
   }
 
   var state = {
-    status: RecorderStatus.Stopped
+    $rStatus: RecorderStatus.Stopped
+  }
+  var nextRecordingToken = 0
+  var replayDeflateWorkerController = createDeflateWorkerController()
+  var getReplayWorkerStatus = function () {
+    return replayDeflateWorkerController.getStatus()
+  }
+
+  function reconcileStoppedRecordingState() {
+    if (
+      state.$rStatus === RecorderStatus.Started &&
+      state.$rIsStopped &&
+      state.$rIsStopped()
+    ) {
+      state = { $rStatus: RecorderStatus.Stopped }
+    }
   }
 
   var startStrategy = function () {
-    state = { status: RecorderStatus.IntentToStart }
+    state = { $rStatus: RecorderStatus.IntentToStart }
   }
   var stopStrategy = function () {
-    state = { status: RecorderStatus.Stopped }
+    state = { $rStatus: RecorderStatus.Stopped }
   }
-  var takeSubsequentFullSnapshot = function () {}
-  var snapshotCanvas = function () {
-    return {
-      ok: false,
-      reason: 'not_recording'
-    }
-  }
-  var getSerializedNodeIdForDebug = function () {
-    return undefined
-  }
-  var getLastAutoCanvasSnapshotResultForDebug = function () {
-    return undefined
-  }
-  var getAutoCanvasSnapshotDebugHistoryForDebug = function () {
-    return undefined
-  }
-  var getLastCanvasMutationForDebug = function () {
-    return undefined
-  }
-  var getCanvasMutationHistoryForDebug = function () {
-    return undefined
-  }
-  var getLastDomMutationForDebug = function () {
-    return undefined
-  }
-  var getDomMutationHistoryForDebug = function () {
-    return undefined
-  }
-  var getLastReplaySegmentFlushForDebug = function () {
-    return undefined
-  }
-  var getReplaySegmentFlushHistoryForDebug = function () {
-    return undefined
-  }
-  var getReplayPerformanceForDebug = function () {
-    return undefined
-  }
-  var flushReplayMutationsForDebug = noop
   return {
     start: function (options) {
       startStrategy(options)
@@ -98,258 +83,299 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       configuration,
       sessionManager,
       viewContexts,
-      worker
+      compressionWorker
     ) {
       lifeCycle.subscribe(LifeCycleEventType.SESSION_EXPIRED, function () {
         if (
-          state.status === RecorderStatus.Starting ||
-          state.status === RecorderStatus.Started
+          state.$rStatus === RecorderStatus.Starting ||
+          state.$rStatus === RecorderStatus.Started
         ) {
           stopStrategy()
-          state = { status: RecorderStatus.IntentToStart }
+          state = { $rStatus: RecorderStatus.IntentToStart }
         }
       })
       lifeCycle.subscribe(
         LifeCycleEventType.PAGE_EXITED,
         function (pageExitEvent) {
           if (pageExitEvent.reason === PageExitReason.UNLOADING) {
-            stopStrategy()
+            stopStrategy(pageExitEvent.reason)
           }
         }
       )
       lifeCycle.subscribe(LifeCycleEventType.SESSION_RENEWED, function () {
-        if (state.status === RecorderStatus.IntentToStart) {
+        if (state.$rStatus === RecorderStatus.IntentToStart) {
           startStrategy()
         }
       })
       var cachedDeflateEncoder
+      var replayWorker = compressionWorker
+      var replayWorkerOwnership = compressionWorker ? 'shared' : 'none'
+      function handleDeflateWorkerFailure() {
+        var failedDeflateEncoder = cachedDeflateEncoder
+        cachedDeflateEncoder = undefined
+        stopStrategy()
+        if (failedDeflateEncoder) {
+          failedDeflateEncoder.stop()
+        }
+        if (replayWorkerOwnership === 'owned') {
+          replayWorker = undefined
+          replayWorkerOwnership = 'none'
+          replayDeflateWorkerController.reset()
+        } else if (replayWorkerOwnership === 'shared') {
+          // The compression worker belongs to the RUM transport. A replay
+          // stream failure must not terminate or reset that shared worker.
+          // Detach replay from it so an explicit restart can fall back to an
+          // isolated worker instead of remaining disabled for the whole page.
+          replayWorker = undefined
+          replayWorkerOwnership = 'none'
+        }
+      }
       function getOrCreateDeflateEncoder() {
         if (!cachedDeflateEncoder) {
-          if (!worker) {
-            worker = startDeflateWorker(
+          if (!replayWorker) {
+            // Mark ownership before start(): worker creation can fail
+            // synchronously and invoke the failure callback before start()
+            // returns.
+            replayWorkerOwnership = 'owned'
+            replayWorker = replayDeflateWorkerController.start(
               configuration,
               'Session Replay',
-              function () {
-                stopStrategy()
-              },
+              handleDeflateWorkerFailure,
               createDeflateWorkerImpl
             )
           }
-          if (worker) {
+          if (replayWorker) {
             cachedDeflateEncoder = createDeflateEncoder(
-              worker,
-              DeflateEncoderStreamId.REPLAY
+              replayWorker,
+              DeflateEncoderStreamId.REPLAY,
+              handleDeflateWorkerFailure
             )
           }
         }
         return cachedDeflateEncoder
       }
+      getReplayWorkerStatus = function () {
+        if (replayWorkerOwnership === 'shared') {
+          return getDeflateWorkerStatus()
+        }
+        return replayDeflateWorkerController.getStatus()
+      }
       startStrategy = function (options) {
+        reconcileStoppedRecordingState()
         var session = sessionManager.findTrackedSession()
         if (!session || !session.sessionReplayAllowed) {
-          state = { status: RecorderStatus.IntentToStart }
+          state = { $rStatus: RecorderStatus.IntentToStart }
           return
         }
 
         if (
-          state.status === RecorderStatus.Starting ||
-          state.status === RecorderStatus.Started
+          state.$rStatus === RecorderStatus.Starting ||
+          state.$rStatus === RecorderStatus.Started
         ) {
           return
         }
 
-        state = { status: RecorderStatus.Starting }
+        var recordingToken = ++nextRecordingToken
+        state = {
+          $rStatus: RecorderStatus.Starting,
+          $rToken: recordingToken
+        }
 
         runOnReadyState('interactive', function () {
-          if (state.status !== RecorderStatus.Starting) {
+          if (
+            state.$rStatus !== RecorderStatus.Starting ||
+            state.$rToken !== recordingToken
+          ) {
             return
           }
           var deflateEncoder = getOrCreateDeflateEncoder()
           if (!deflateEncoder) {
             state = {
-              status: RecorderStatus.Stopped
+              $rStatus: RecorderStatus.Stopped
             }
             return
           }
-          var recordingImpl = startRecordingImpl(
-            lifeCycle,
-            configuration,
-            sessionManager,
-            viewContexts,
-            deflateEncoder
-          )
-          state = {
-            status: RecorderStatus.Started,
-            stopRecording: recordingImpl.stop,
-            takeSubsequentFullSnapshot: recordingImpl.takeSubsequentFullSnapshot,
-            snapshotCanvas: recordingImpl.snapshotCanvas || noop,
-            getSerializedNodeIdForDebug:
-              recordingImpl.getSerializedNodeIdForDebug || noop,
-            getLastAutoCanvasSnapshotResultForDebug:
-              recordingImpl.getLastAutoCanvasSnapshotResultForDebug || noop,
-            getAutoCanvasSnapshotDebugHistoryForDebug:
-              recordingImpl.getAutoCanvasSnapshotDebugHistoryForDebug || noop,
-            getLastCanvasMutationForDebug:
-              recordingImpl.getLastCanvasMutationForDebug || noop,
-            getCanvasMutationHistoryForDebug:
-              recordingImpl.getCanvasMutationHistoryForDebug || noop,
-            getLastDomMutationForDebug:
-              recordingImpl.getLastDomMutationForDebug || noop,
-            getDomMutationHistoryForDebug:
-              recordingImpl.getDomMutationHistoryForDebug || noop,
-            getLastReplaySegmentFlushForDebug:
-              recordingImpl.getLastReplaySegmentFlushForDebug || noop,
-            getReplaySegmentFlushHistoryForDebug:
-              recordingImpl.getReplaySegmentFlushHistoryForDebug || noop,
-            getReplayPerformanceForDebug:
-              recordingImpl.getReplayPerformanceForDebug || noop,
-            flushReplayMutationsForDebug:
-              recordingImpl.flushReplayMutationsForDebug || noop
+          try {
+            var recordingImpl = startRecordingImpl(
+              lifeCycle,
+              configuration,
+              sessionManager,
+              viewContexts,
+              deflateEncoder,
+              undefined,
+              function () {
+                if (
+                  (state.$rStatus === RecorderStatus.Starting ||
+                    state.$rStatus === RecorderStatus.Started) &&
+                  state.$rToken === recordingToken
+                ) {
+                  state = { $rStatus: RecorderStatus.Stopped }
+                }
+              }
+            )
+            if (
+              state.$rStatus !== RecorderStatus.Starting ||
+              state.$rToken !== recordingToken
+            ) {
+              recordingImpl.stop()
+              return
+            }
+            if (recordingImpl.isStopped && recordingImpl.isStopped()) {
+              state = {
+                $rStatus: RecorderStatus.Stopped
+              }
+              return
+            }
+            state = {
+              $rStatus: RecorderStatus.Started,
+              $rToken: recordingToken,
+              $rStop: recordingImpl.stop,
+              $rIsStopped: recordingImpl.isStopped,
+              $rFullSnapshot:
+                recordingImpl.takeSubsequentFullSnapshot,
+              $rCanvas:
+                recordingImpl.snapshotCanvas ||
+                createNotRecordingCanvasResult,
+              $rNode:
+                recordingImpl.getSerializedNodeIdForDebug || noop,
+              $rLastAutoCanvas:
+                recordingImpl.getLastAutoCanvasSnapshotResultForDebug || noop,
+              $rAutoCanvasHistory:
+                recordingImpl.getAutoCanvasSnapshotDebugHistoryForDebug || noop,
+              $rLastCanvasMutation:
+                recordingImpl.getLastCanvasMutationForDebug || noop,
+              $rCanvasMutationHistory:
+                recordingImpl.getCanvasMutationHistoryForDebug || noop,
+              $rLastDomMutation:
+                recordingImpl.getLastDomMutationForDebug || noop,
+              $rDomMutationHistory:
+                recordingImpl.getDomMutationHistoryForDebug || noop,
+              $rLastSegmentFlush:
+                recordingImpl.getLastReplaySegmentFlushForDebug || noop,
+              $rSegmentFlushHistory:
+                recordingImpl.getReplaySegmentFlushHistoryForDebug || noop,
+              $rPerformance:
+                recordingImpl.getReplayPerformanceForDebug || noop,
+              $rFlushMutations:
+                recordingImpl.flushReplayMutationsForDebug || noop
+            }
+          } catch (error) {
+            if (
+              state.$rStatus === RecorderStatus.Starting &&
+              state.$rToken === recordingToken
+            ) {
+              state = { $rStatus: RecorderStatus.Stopped }
+            }
+            if (
+              cachedDeflateEncoder === deflateEncoder &&
+              !(
+                (state.$rStatus === RecorderStatus.Starting ||
+                  state.$rStatus === RecorderStatus.Started) &&
+                state.$rToken !== recordingToken
+              )
+            ) {
+              cachedDeflateEncoder = undefined
+              deflateEncoder.stop()
+            }
+            monitorError(error)
           }
         })
       }
 
-      stopStrategy = function () {
-        if (state.status === RecorderStatus.Stopped) {
+      stopStrategy = function (flushReason) {
+        if (state.$rStatus === RecorderStatus.Stopped) {
           return
         }
 
-        if (state.status === RecorderStatus.Started) {
-          state.stopRecording()
-        }
-
+        var stopRecording =
+          state.$rStatus === RecorderStatus.Started
+            ? state.$rStop
+            : undefined
         state = {
-          status: RecorderStatus.Stopped
+          $rStatus: RecorderStatus.Stopped
+        }
+        if (stopRecording) {
+          stopRecording(flushReason)
         }
       }
-      takeSubsequentFullSnapshot = function () {
-        state.takeSubsequentFullSnapshot()
-      }
-      snapshotCanvas = function (canvas, options) {
-        if (state.status === RecorderStatus.Started) {
-          return state.snapshotCanvas(canvas, options)
-        }
-        return {
-          ok: false,
-          reason: 'not_recording'
-        }
-      }
-      getSerializedNodeIdForDebug = function (node) {
-        if (state.status === RecorderStatus.Started) {
-          return state.getSerializedNodeIdForDebug(node)
-        }
-        return undefined
-      }
-      getLastAutoCanvasSnapshotResultForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getLastAutoCanvasSnapshotResultForDebug()
-        }
-        return undefined
-      }
-      getAutoCanvasSnapshotDebugHistoryForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getAutoCanvasSnapshotDebugHistoryForDebug()
-        }
-        return undefined
-      }
-      getLastCanvasMutationForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getLastCanvasMutationForDebug()
-        }
-        return undefined
-      }
-      getCanvasMutationHistoryForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getCanvasMutationHistoryForDebug()
-        }
-        return undefined
-      }
-      getLastDomMutationForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getLastDomMutationForDebug()
-        }
-        return undefined
-      }
-      getDomMutationHistoryForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getDomMutationHistoryForDebug()
-        }
-        return undefined
-      }
-      getLastReplaySegmentFlushForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getLastReplaySegmentFlushForDebug()
-        }
-        return undefined
-      }
-      getReplaySegmentFlushHistoryForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getReplaySegmentFlushHistoryForDebug()
-        }
-        return undefined
-      }
-      getReplayPerformanceForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          return state.getReplayPerformanceForDebug()
-        }
-        return undefined
-      }
-      flushReplayMutationsForDebug = function () {
-        if (state.status === RecorderStatus.Started) {
-          state.flushReplayMutationsForDebug()
-        }
-      }
-      if (state.status === RecorderStatus.IntentToStart) {
+      if (state.$rStatus === RecorderStatus.IntentToStart) {
         startStrategy()
       }
     },
     takeSubsequentFullSnapshot() {
-      takeSubsequentFullSnapshot()
+      if (state.$rStatus === RecorderStatus.Started) {
+        state.$rFullSnapshot()
+      }
     },
     snapshotCanvas: function (canvas, options) {
-      return snapshotCanvas(canvas, options)
+      return state.$rStatus === RecorderStatus.Started
+        ? state.$rCanvas(canvas, options)
+        : createNotRecordingCanvasResult()
     },
     getSerializedNodeIdForDebug: function (node) {
-      return getSerializedNodeIdForDebug(node)
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rNode(node)
+      }
     },
     getLastReplaySegmentFlushForDebug: function () {
-      return getLastReplaySegmentFlushForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rLastSegmentFlush()
+      }
     },
     getLastAutoCanvasSnapshotResultForDebug: function () {
-      return getLastAutoCanvasSnapshotResultForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rLastAutoCanvas()
+      }
     },
     getAutoCanvasSnapshotDebugHistoryForDebug: function () {
-      return getAutoCanvasSnapshotDebugHistoryForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rAutoCanvasHistory()
+      }
     },
     getLastCanvasMutationForDebug: function () {
-      return getLastCanvasMutationForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rLastCanvasMutation()
+      }
     },
     getCanvasMutationHistoryForDebug: function () {
-      return getCanvasMutationHistoryForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rCanvasMutationHistory()
+      }
     },
     getLastDomMutationForDebug: function () {
-      return getLastDomMutationForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rLastDomMutation()
+      }
     },
     getDomMutationHistoryForDebug: function () {
-      return getDomMutationHistoryForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rDomMutationHistory()
+      }
     },
     getReplaySegmentFlushHistoryForDebug: function () {
-      return getReplaySegmentFlushHistoryForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rSegmentFlushHistory()
+      }
     },
     getReplayPerformanceForDebug: function () {
-      return getReplayPerformanceForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        return state.$rPerformance()
+      }
     },
     flushReplayMutationsForDebug: function () {
-      flushReplayMutationsForDebug()
+      if (state.$rStatus === RecorderStatus.Started) {
+        state.$rFlushMutations()
+      }
     },
     isRecording: function () {
+      reconcileStoppedRecordingState()
       return (
-        getDeflateWorkerStatus() === DeflateWorkerStatus.Initialized &&
-        state.status === RecorderStatus.Started
+        getReplayWorkerStatus() === DeflateWorkerStatus.Initialized &&
+        state.$rStatus === RecorderStatus.Started
       )
     },
     getReplayStats: function (viewId) {
-      return getDeflateWorkerStatus() === DeflateWorkerStatus.Initialized
+      return getReplayWorkerStatus() === DeflateWorkerStatus.Initialized
         ? getReplayStatsImpl(viewId)
         : undefined
     }

@@ -41,7 +41,7 @@ export interface AutoCanvasSnapshotDebugEntry {
 }
 
 export interface AutoCanvasSnapshotDebugResult {
-  scheduler: 'continuous_snapshot' | 'command_capture'
+  scheduler: 'continuous_snapshot' | 'command_capture' | 'webgl_snapshot'
   status:
     | 'completed'
     | 'fallback'
@@ -59,7 +59,7 @@ export interface AutoCanvasSnapshotDebugResult {
 
 export interface CanvasMutationDebugResult {
   timestamp: number
-  canvasId: number
+  canvasId?: number
   trigger: 'manual' | 'auto'
   reason?: string
   encodedBytesCount?: number
@@ -111,12 +111,16 @@ export interface ReplaySegmentFlushDebugResult {
 export interface ReplayPerformanceDebugResult {
   processMutationsCount: number
   processMutationsDuration: number
+  mutationSerializationCount: number
+  mutationSerializationDuration: number
   mutationCallbackCount: number
   mutationRecordCount: number
   mutationAddCount: number
   mutationRemoveCount: number
   mutationTextCount: number
   mutationAttributeCount: number
+  fullSnapshotCount: number
+  fullSnapshotDuration: number
   replaySegmentFlushCount: number
 }
 

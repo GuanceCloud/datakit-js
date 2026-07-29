@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebGL Replay Game Lab</title>
+    <link rel="stylesheet" href="/webgl-replay-game.css" />
+  </head>
+  <body>
+    <main class="game-shell">
+      <header class="game-header">
+        <div>
+          <div class="game-kicker">Session Replay · WebGL Lab</div>
+          <h1>ORBITAL DRIFT</h1>
+          <p>
+            持续 WebGL 绘制、碰撞粒子和动态负载，用来观察 Replay 的
+            draw-driven snapshot 效果。
+          </p>
+        </div>
+        <a class="back-link" href="/">返回 Demo Workbench</a>
+      </header>
+
+      <section class="game-layout">
+        <div class="game-stage">
+          <canvas
+            id="game-canvas"
+            width="960"
+            height="600"
+            aria-label="WebGL space survival game"
+          ></canvas>
+          <div class="stage-vignette"></div>
+          <div class="game-hud">
+            <div>
+              <span class="hud-label">SCORE</span>
+              <strong id="score">000000</strong>
+            </div>
+            <div>
+              <span class="hud-label">SHIELD</span>
+              <strong id="shield">100%</strong>
+            </div>
+            <div>
+              <span class="hud-label">WAVE</span>
+              <strong id="wave">01</strong>
+            </div>
+          </div>
+          <div id="game-message" class="game-message" hidden>
+            <strong>PAUSED</strong>
+            <span>按 P 或点击继续</span>
+          </div>
+        </div>
+
+        <aside class="inspector">
+          <div class="inspector-head">
+            <div>
+              <span class="status-dot" id="replay-dot"></span>
+              Replay telemetry
+            </div>
+            <span id="recording-status">starting</span>
+          </div>
+
+          <dl class="metric-grid">
+            <div>
+              <dt>WebGL</dt>
+              <dd id="metric-webgl">detecting</dd>
+            </div>
+            <div>
+              <dt>FPS</dt>
+              <dd id="metric-fps">0</dd>
+            </div>
+            <div>
+              <dt>Draw calls</dt>
+              <dd id="metric-draws">0/s</dd>
+            </div>
+            <div>
+              <dt>Scene objects</dt>
+              <dd id="metric-objects">0</dd>
+            </div>
+            <div>
+              <dt>Replay snapshots</dt>
+              <dd id="metric-snapshots">0</dd>
+            </div>
+            <div>
+              <dt>Last mutation</dt>
+              <dd id="metric-bytes">none</dd>
+            </div>
+            <div>
+              <dt>Capture latency</dt>
+              <dd id="metric-latency">none</dd>
+            </div>
+            <div>
+              <dt>Capture cadence</dt>
+              <dd id="metric-scheduler">waiting</dd>
+            </div>
+            <div>
+              <dt>Session</dt>
+              <dd id="metric-session">waiting</dd>
+            </div>
+            <div>
+              <dt>Last segment</dt>
+              <dd id="metric-segment">waiting</dd>
+            </div>
+          </dl>
+
+          <div class="control-group">
+            <div class="control-title">Game controls</div>
+            <div class="button-grid">
+              <button id="replay-button" type="button">Replay: on</button>
+              <button id="pause-button" type="button">Pause</button>
+              <button id="stress-button" type="button">Stress: off</button>
+              <button id="burst-button" type="button">Particle burst</button>
+              <button id="reset-button" type="button">Reset run</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-title">Replay sampling</div>
+            <label for="sampling-select">Capture cadence</label>
+            <select id="sampling-select">
+              <option value="1">Low cost · 2 FPS</option>
+              <option value="2" selected>Balanced · 4 FPS</option>
+              <option value="4">High frequency · 8 FPS</option>
+              <option value="all">All 2D commands · WebGL 4 FPS</option>
+            </select>
+            <p class="control-note">
+              修改后会带 query 参数刷新页面。WebGL 始终走像素快照；FPS
+              是采集目标，不是游戏渲染帧率。
+            </p>
+          </div>
+
+          <div class="capture-log">
+            <div class="control-title">Latest capture</div>
+            <pre id="capture-output">Waiting for the first WebGL draw…</pre>
+          </div>
+        </aside>
+      </section>
+
+      <footer class="game-help">
+        <span><kbd>WASD</kbd> / <kbd>方向键</kbd> 移动</span>
+        <span><kbd>Space</kbd> 发射</span>
+        <span><kbd>P</kbd> 暂停</span>
+        <span>移动鼠标控制飞船，按住指针连续发射</span>
+      </footer>
+    </main>
+
+    <script src="/dataflux-rum.js"></script>
+    <script src="/webgl-replay-game.js"></script>
+  </body>
+</html>

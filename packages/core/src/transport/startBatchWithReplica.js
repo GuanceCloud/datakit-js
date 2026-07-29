@@ -17,6 +17,7 @@ export function startBatchWithReplica(
   function createBatchFromConfig(configuration, batchConfiguration) {
     return batchFactoryImp({
       encoder: batchConfiguration.encoder,
+      encoderFallback: batchConfiguration.encoderFallback,
       request: createHttpRequest(
         batchConfiguration.endpoint,
         configuration.batchBytesLimit,
@@ -30,6 +31,7 @@ export function startBatchWithReplica(
         pageExitObservable: pageExitObservable,
         sessionExpireObservable: sessionExpireObservable
       }),
+      bytesLimit: configuration.batchBytesLimit,
       messageBytesLimit: configuration.messageBytesLimit,
       sendContentTypeByJson: configuration.sendContentTypeByJson
     })

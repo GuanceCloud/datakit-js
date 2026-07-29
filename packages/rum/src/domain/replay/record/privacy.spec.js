@@ -12,6 +12,7 @@ import {
   getNodePrivacyLevel,
   getNodeSelfPrivacyLevel,
   getTextContent,
+  MAX_PRIVACY_ANCESTOR_DEPTH,
   reducePrivacyLevel,
   shouldMaskNode
 } from './privacy'
@@ -46,15 +47,36 @@ describe('replay/record/privacy', () => {
 
   it('should compute inherited privacy levels and cache them', () => {
     const cache = new WeakMap()
+    const grandParent = document.createElement('section')
     const parent = document.createElement('div')
     parent.setAttribute(PRIVACY_ATTR_NAME, PRIVACY_ATTR_VALUE_MASK)
     const child = document.createElement('span')
+    grandParent.appendChild(parent)
     parent.appendChild(child)
 
     expect(getNodePrivacyLevel(child, NodePrivacyLevel.ALLOW, cache)).toBe(
       NodePrivacyLevel.MASK
     )
+    expect(cache.get(grandParent)).toBe(NodePrivacyLevel.ALLOW)
+    expect(cache.get(parent)).toBe(NodePrivacyLevel.MASK)
     expect(cache.get(child)).toBe(NodePrivacyLevel.MASK)
+  })
+
+  it('should fail closed without recursive stack growth on excessive ancestor depth', () => {
+    const root = document.createElement('div')
+    let current = root
+    for (let depth = 0; depth <= MAX_PRIVACY_ANCESTOR_DEPTH; depth += 1) {
+      const child = document.createElement('div')
+      current.appendChild(child)
+      current = child
+    }
+
+    expect(() =>
+      getNodePrivacyLevel(current, NodePrivacyLevel.ALLOW)
+    ).not.toThrow()
+    expect(
+      getNodePrivacyLevel(current, NodePrivacyLevel.ALLOW)
+    ).toBe(NodePrivacyLevel.HIDDEN)
   })
 
   it('should reduce privacy levels with hidden/ignore precedence', () => {

@@ -40,7 +40,28 @@ module.exports = ({
   optimization: {
     minimizer: [
       new TerserPlugin({
-        extractComments: false
+        extractComments: false,
+        terserOptions: {
+          mangle: {
+            // This allowlist is deliberately limited to short-lived,
+            // module-private replay state. Mangling it cannot alter public
+            // configuration, replay payload, or debug result field names.
+            properties: {
+              // These names are part of the published RUM API and also occur
+              // on internal recorder objects.  Keep them stable even if a
+              // future private-property rule accidentally matches them.
+              reserved: [
+                'snapshotCanvas',
+                'takeSubsequentFullSnapshot'
+              ],
+              regex:
+                /^(?:\$r[A-Z].*|requiresBaselineOnDrop|publicationToken|serializerTask|serializedNode|serializedNodeIds|accountedApproxBytes|hasStructuralRemoval|findPendingRootTask|addPendingRootTask|refreshPendingRootTask|markPendingRootTaskPublishedDependency|handlePendingRootRemoval|provisionalShadowRoots|pendingOverflowAfterReset|provisionalOwner|unpublishedMutationOverflowReported|stopMutationObserver|stopInputObserver|mutationObserverDeactivated|deactivateMutationObserver|refreshAndFlushPendingRootForNode|commitProvisionalShadowRoots|rollbackProvisionalShadowRoots|retryQueued|nextEligibleAt|consecutiveRecordRejectedCount|shouldRecordCanvasCheckedAt|shouldRecordCanvasAllowed|animationFrameTarget|contextPrototypeEntries|mutationGroup|pendingTaskCount|mutationGroupDependencyReleased|approxBytesReleased|getOverflowCount|createMutationGroup|completeMutationGroup|cancelMutationGroup|dropMutationGroupTasks|addsApproxBytes|removesApproxBytes|textsApproxBytes|attributesApproxBytes|addApproxBytes|removeApproxBytesByKey|textApproxBytesById|attributeApproxBytesById|removesByKey|textsById|attributesById|mutationPayloads|mutationApproxBytes|hasOversizedEntry|isSerializationComplexityOverflow|isMaxNodeComplexityReached|isMaxApproxBytesReached|isMaxNodeCountReached|isMaxDepthReached|estimatedBytesCount|finishCallback|writeCallback|serializationContext|parentNodePrivacyLevel|mutationNodeSerializationCb|requestAnimationFrameImpl|cancelAnimationFrameImpl|setTimeoutImpl|clearTimeoutImpl|onFullSnapshotFailure|onReplayResetExhausted|queuedPayloads|encoderFallback|shouldSerializeChildren|shadowRootsController|getSerializedNodeId|getPendingRawBytesCount|fallbackSnapshotRequested|forceSnapshotFallback|markPersistentSnapshotFallback|createCanvasSnapshotBaselineToken|markCanvasSnapshotBaseline|childNodesOptions|processedNodeCount|lastProcessedChild|onSerializedNode|weakRefFactory|frameSignatureExtractor|encodeBridge|isNodeActive|onMutationDebug|startContinuousCanvasSnapshotLoop|startCanvasCommandCapture|startCanvasWebGLSnapshotObserver|createCanvasObserver|scheduleSubsequentFullSnapshot|flushScheduledFullSnapshot|prepareForViewChange|flushMutations|mutationPerfCb|mutationOverflowCb|mutationActivityCb|initObservers|initShadowRootsController|initializationFailureCallbacks|flushedShadowRootCount|startPaused|getVisibilityState|scheduleMicrotask|getCurrentTime|getCanvases|maxFallbackTimerCount|maxFallbackTimerDelay|commandRecorder|canvasPrototype|addEventListenerImpl|shouldTrackAutoBaseline|requestSnapshotFallback|flushCanvasImmediately|createWebGLReadbackState|getCanvasType|getCanvasId|onCommandOverflow|onContextMutation|onContextDiscovered|lastAutoSuccessfulSnapshotAtByCanvas|lastAutoFrameSignatureByCanvas|objectRefRegistry|pendingRawBytesLimit|onSegmentFlushed|onReplayResetNeeded|beforePageExitFlush)$/
+            }
+          },
+          compress: {
+            passes: 2
+          }
+        }
       })
     ]
   },
@@ -69,7 +90,8 @@ module.exports = ({
           // the CDN (yet).
           {
             filename: '[file].map',
-            append: false
+            append: false,
+            noSources: true
           }
     ),
     new webpack.DefinePlugin(

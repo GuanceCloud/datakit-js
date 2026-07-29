@@ -4,6 +4,7 @@ import {
   Observable,
   RumEventType
 } from '@cloudcare/browser-core'
+import { createDeflateEncoder } from '../domain/deflate/deflateEncoder'
 import { EncoderStreamId } from '../domain/encoderStreamId'
 import { startRumBatch } from './startRumBatch'
 
@@ -110,5 +111,182 @@ describe('startRumBatch', () => {
     expect(encoder.write.calls.argsFor(2)[0]).toContain('view')
     expect(encoder.finish).toHaveBeenCalled()
     expect(window.fetch).toHaveBeenCalled()
+  })
+
+  it('should upload the failed compressed batch and the next batch through the identity fallback', async () => {
+    const lifeCycle = new LifeCycle()
+    const telemetryEventObservable = new Observable()
+    const pageExitObservable = new Observable()
+    const sessionExpireObservable = new Observable()
+    const encoderError = new Error('compression worker failed')
+    const worker = {
+      listeners: {},
+      postMessage: jasmine.createSpy('postMessage'),
+      addEventListener(type, listener) {
+        this.listeners[type] = listener
+      },
+      removeEventListener: jasmine.createSpy('removeEventListener')
+    }
+    const failedEncoder = createDeflateEncoder(
+      worker,
+      EncoderStreamId.RUM
+    )
+    spyOn(failedEncoder, 'stop').and.callThrough()
+
+    startRumBatch(
+      {
+        rumEndpoint: 'https://example.com/v1/write/rum',
+        batchBytesLimit: 1024,
+        retryMaxSize: 3,
+        batchMessagesLimit: 20,
+        flushTimeout: 30000,
+        messageBytesLimit: 256,
+        sendContentTypeByJson: false
+      },
+      lifeCycle,
+      telemetryEventObservable,
+      jasmine.createSpy('reportError'),
+      pageExitObservable,
+      sessionExpireObservable,
+      jasmine.createSpy('createEncoder').and.returnValue(failedEncoder)
+    )
+
+    lifeCycle.notify(LifeCycleEventType.RUM_EVENT_COLLECTED, {
+      type: RumEventType.ERROR,
+      date: 1,
+      application: { id: 'app-1' },
+      session: { id: 'session-1', type: 'user', is_sampling: true },
+      service: 'web',
+      source: 'browser',
+      error: { message: 'compressed-before-failure' }
+    })
+    worker.listeners.message({
+      data: {
+        type: 'wrote',
+        id: 0,
+        streamId: EncoderStreamId.RUM,
+        additionalBytesCount: 10,
+        result: new Uint8Array([1, 2]),
+        trailer: new Uint8Array([3])
+      }
+    })
+    lifeCycle.notify(LifeCycleEventType.RUM_EVENT_COLLECTED, {
+      type: RumEventType.ERROR,
+      date: 2,
+      application: { id: 'app-1' },
+      session: { id: 'session-1', type: 'user', is_sampling: true },
+      service: 'web',
+      source: 'browser',
+      error: { message: 'pending-at-failure' }
+    })
+    sessionExpireObservable.notify()
+    worker.listeners.error(encoderError)
+    await Promise.resolve()
+
+    expect(window.fetch).toHaveBeenCalledTimes(1)
+    expect(window.fetch.calls.argsFor(0)[1].body).toContain(
+      'compressed-before-failure'
+    )
+    expect(window.fetch.calls.argsFor(0)[1].body).toContain(
+      'pending-at-failure'
+    )
+    expect(window.fetch.calls.argsFor(0)[1].body.length).toBeGreaterThan(0)
+    expect(failedEncoder.stop).toHaveBeenCalledTimes(1)
+
+    lifeCycle.notify(LifeCycleEventType.RUM_EVENT_COLLECTED, {
+      type: RumEventType.ERROR,
+      date: 3,
+      application: { id: 'app-1' },
+      session: { id: 'session-1', type: 'user', is_sampling: true },
+      service: 'web',
+      source: 'browser',
+      error: { message: 'identity-fallback-batch' }
+    })
+    sessionExpireObservable.notify()
+    await Promise.resolve()
+
+    expect(window.fetch).toHaveBeenCalledTimes(2)
+    expect(window.fetch.calls.argsFor(1)[1].body).toContain(
+      'identity-fallback-batch'
+    )
+    expect(window.fetch.calls.argsFor(1)[1].body.length).toBeGreaterThan(0)
+  })
+
+  it('should preserve messages when a recoverable stream error is followed by more writes', async () => {
+    const lifeCycle = new LifeCycle()
+    const telemetryEventObservable = new Observable()
+    const pageExitObservable = new Observable()
+    const sessionExpireObservable = new Observable()
+    const streamError = new Error('stream compression failed')
+    const worker = {
+      listeners: {},
+      postMessage: jasmine.createSpy('postMessage'),
+      addEventListener(type, listener) {
+        this.listeners[type] = listener
+      },
+      removeEventListener: jasmine.createSpy('removeEventListener')
+    }
+    const failedEncoder = createDeflateEncoder(
+      worker,
+      EncoderStreamId.RUM
+    )
+    spyOn(failedEncoder, 'stop').and.callThrough()
+
+    startRumBatch(
+      {
+        rumEndpoint: 'https://example.com/v1/write/rum',
+        batchBytesLimit: 1024,
+        retryMaxSize: 3,
+        batchMessagesLimit: 20,
+        flushTimeout: 30000,
+        messageBytesLimit: 256,
+        sendContentTypeByJson: false
+      },
+      lifeCycle,
+      telemetryEventObservable,
+      jasmine.createSpy('reportError'),
+      pageExitObservable,
+      sessionExpireObservable,
+      jasmine.createSpy('createEncoder').and.returnValue(failedEncoder)
+    )
+
+    lifeCycle.notify(LifeCycleEventType.RUM_EVENT_COLLECTED, {
+      type: RumEventType.ERROR,
+      date: 1,
+      application: { id: 'app-1' },
+      session: { id: 'session-1', type: 'user', is_sampling: true },
+      service: 'web',
+      source: 'browser',
+      error: { message: 'before-stream-error' }
+    })
+    worker.listeners.message({
+      data: {
+        type: 'errored',
+        error: streamError,
+        streamId: EncoderStreamId.RUM
+      }
+    })
+
+    expect(failedEncoder.stop).toHaveBeenCalledTimes(1)
+
+    lifeCycle.notify(LifeCycleEventType.RUM_EVENT_COLLECTED, {
+      type: RumEventType.ERROR,
+      date: 2,
+      application: { id: 'app-1' },
+      session: { id: 'session-1', type: 'user', is_sampling: true },
+      service: 'web',
+      source: 'browser',
+      error: { message: 'after-stream-error' }
+    })
+    sessionExpireObservable.notify()
+    await Promise.resolve()
+
+    expect(window.fetch).toHaveBeenCalledTimes(1)
+    expect(window.fetch.calls.argsFor(0)[1].body).toContain(
+      'before-stream-error'
+    )
+    expect(window.fetch.calls.argsFor(0)[1].body).toContain(
+      'after-stream-error'
+    )
   })
 })

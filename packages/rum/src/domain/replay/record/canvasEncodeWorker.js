@@ -31,11 +31,18 @@ export function createCanvasEncodeWorker(
     )
   }
 
-  return {
-    worker: new workerCtor(workerUrl),
-    workerUrl: workerUrl,
-    usesExternalUrl: usesExternalUrl,
-    urlObject: urlObject
+  try {
+    return {
+      worker: new workerCtor(workerUrl),
+      workerUrl: workerUrl,
+      usesExternalUrl: usesExternalUrl,
+      urlObject: urlObject
+    }
+  } catch (error) {
+    if (!usesExternalUrl && typeof urlObject.revokeObjectURL === 'function') {
+      urlObject.revokeObjectURL(workerUrl)
+    }
+    throw error
   }
 }
 
@@ -68,19 +75,14 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
   var onError = options.onError || function () {}
   var onMessage = options.onMessage || function () {}
 
-  function cleanup() {
-    stopListeners()
-    stopListeners = function () {}
-    if (initializationTimeoutId) {
+  function clearInitializationTimeout() {
+    if (initializationTimeoutId !== undefined) {
       clearTimeout(initializationTimeoutId)
       initializationTimeoutId = undefined
     }
-    if (worker) {
-      if (typeof worker.terminate === 'function') {
-        worker.terminate()
-      }
-      worker = undefined
-    }
+  }
+
+  function revokeWorkerUrl() {
     if (
       workerUrl &&
       shouldRevokeWorkerUrl &&
@@ -92,6 +94,19 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
     workerUrl = undefined
     workerUrlObject = undefined
     shouldRevokeWorkerUrl = false
+  }
+
+  function cleanup() {
+    stopListeners()
+    stopListeners = function () {}
+    clearInitializationTimeout()
+    if (worker) {
+      if (typeof worker.terminate === 'function') {
+        worker.terminate()
+      }
+      worker = undefined
+    }
+    revokeWorkerUrl()
   }
 
   function handleError(error, phase) {
@@ -163,6 +178,8 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
           if (data.action === 'initialized') {
             version = data.version
             status = CanvasEncodeWorkerStatus.Initialized
+            clearInitializationTimeout()
+            revokeWorkerUrl()
             onInitialized(data)
             return
           }
@@ -173,7 +190,6 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
           messageListener.stop()
         }
 
-        worker.postMessage({ action: 'init' })
         initializationTimeoutId = setTimeout(function () {
           if (
             status === CanvasEncodeWorkerStatus.Loading &&
@@ -188,6 +204,7 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
             )
           }
         }, timeoutDelay)
+        worker.postMessage({ action: 'init' })
       } catch (error) {
         handleError(error, 'initialization')
       }
