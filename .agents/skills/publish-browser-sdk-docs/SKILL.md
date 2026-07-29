@@ -73,7 +73,9 @@ Apply these rules to prose, headings, links, examples, and code comments:
 - Use `<<< custom_key.brand_name >>>` instead of a fixed brand name such as `观测云`.
 - Build brand domains with `<<< custom_key.brand_main_domain >>>`.
 - Write the browser SDK CDN host as `https://static.<<< custom_key.brand_main_domain >>>/...`; never write `static.guance.com`.
-- Use `custom_key.brand_key` condition blocks when package namespaces, imports, globals, or other literal values differ by brand.
+- Map every `@cloudcare/browser-<package>` reference to `@truewatchtech/browser-<package>` for TrueWatch, preserving the package suffix. The published namespace is `@truewatchtech`, not `@truewath` or `@truewatch`.
+- Wrap brand-specific package installation commands, imports, prose, and links in a complete `custom_key.brand_key` condition block. Put `@truewatchtech/browser-*` in the `truewatch` branch and `@cloudcare/browser-*` in the `else` branch.
+- Use `custom_key.brand_key` condition blocks when globals or other literal values also differ by brand.
 - Keep Guance-only and TrueWatch-only literals inside their matching condition branch.
 - Verify that both condition branches are complete and usable.
 
@@ -89,7 +91,7 @@ python3 "$SKILL_DIR/scripts/check_dataflux_doc.py" \
   --base origin/release
 ```
 
-The checker must pass. It verifies the branch base, allowed path, new navigation entries, template balance, code-fence balance, and newly added hard-coded brand/domain text.
+The checker must pass. It verifies the branch base, allowed path, new navigation entries, template balance, code-fence balance, newly added hard-coded brand/domain text, and paired `@cloudcare`/`@truewatchtech` browser package references.
 
 Then:
 

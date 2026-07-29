@@ -62,12 +62,42 @@ npm install @cloudcare/browser-rum
 
 Keep the opening `if`, optional `else`, and closing `endif` balanced. Put complete runnable examples in both branches when code differs.
 
+## Browser package namespace mapping
+
+Use the same `browser-*` package suffix for both brands:
+
+| Guance | TrueWatch |
+| --- | --- |
+| `@cloudcare/browser-rum` | `@truewatchtech/browser-rum` |
+| `@cloudcare/browser-logs` | `@truewatchtech/browser-logs` |
+| `@cloudcare/browser-core` | `@truewatchtech/browser-core` |
+| `@cloudcare/browser-worker` | `@truewatchtech/browser-worker` |
+| `@cloudcare/browser-<package>` | `@truewatchtech/browser-<package>` |
+
+Use `@truewatchtech` exactly. Do not write `@truewath` or `@truewatch`.
+
+Whenever an installation command, import, inline package name, or NPM link contains either namespace, wrap the complete example or paragraph in one paired block:
+
+````markdown
+<<<% if custom_key.brand_key == "truewatch" %>>>
+```javascript
+import { datafluxRum } from '@truewatchtech/browser-rum'
+```
+<<<% else %>>>
+```javascript
+import { datafluxRum } from '@cloudcare/browser-rum'
+```
+<<<% endif %>>>
+````
+
+Keep matching package suffixes inside the same condition block. Do not leave a shared `@cloudcare/browser-*` example outside the template, because it renders incorrectly for TrueWatch.
+
 ## Brand neutrality
 
 - Do not add fixed `观测云` prose.
 - Do not add hard-coded `*.guance.com` or `*.guance.one` hosts.
 - Do not assume that replacing the brand display name also replaces package names, globals, or stable filenames.
-- Put literal package namespaces such as `@cloudcare` and `@truewatchtech` in their appropriate brand branches.
+- Put literal package namespaces such as `@cloudcare` and `@truewatchtech` in their paired brand branches.
 - Use a template variable for shared domains and a conditional only when the brands truly need different values.
 - Keep stable published filenames such as `dataflux-rum.js` and `dataflux-logs.js` unless the SDK release changes the actual artifact contract.
 
@@ -89,6 +119,7 @@ Keep the opening `if`, optional `else`, and closing `endif` balanced. Put comple
 - New pages appear in `.pages`.
 - Examples match the current runtime API and published type declarations.
 - Both brands render meaningful prose and runnable code.
+- Every `@cloudcare/browser-*` reference has a same-suffix `@truewatchtech/browser-*` counterpart in the same template block.
 - No fixed brand name or Guance domain was added.
 - CDN URLs retain the `static.` subdomain and the actual published filename.
 - Version claims are supported by package metadata or release evidence.

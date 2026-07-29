@@ -27,11 +27,19 @@ HARDCODED_PATTERNS = (
     ),
 )
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-TEMPLATE_TAG_RE = re.compile(r"<<<%\s*(if|elif|else|endif)\b.*?%>>>")
+TEMPLATE_TAG_RE = re.compile(r"<<<%\s*(if|elif|else|endif)\b(.*?)%>>>")
 BRAND_NAME_TEMPLATE_RE = re.compile(r"<<<\s*custom_key\.brand_name\s*>>>")
 BRAND_DOMAIN_TEMPLATE_RE = re.compile(r"<<<\s*custom_key\.brand_main_domain\s*>>>")
 SDK_DOMAIN_WITHOUT_STATIC_RE = re.compile(
     r"https://<<<\s*custom_key\.brand_main_domain\s*>>>/browser-sdk/"
+)
+CLOUDCARE_PACKAGE_RE = re.compile(r"@cloudcare/(browser-[a-z0-9-]+)")
+TRUEWATCH_PACKAGE_RE = re.compile(r"@truewatchtech/(browser-[a-z0-9-]+)")
+MISSPELLED_TRUEWATCH_PACKAGE_RE = re.compile(
+    r"@(?:truewath|truewatch)/(browser-[a-z0-9-]+)"
+)
+TRUEWATCH_CONDITION_RE = re.compile(
+    r"""custom_key\.brand_key\s*==\s*(['"])truewatch\1"""
 )
 
 
@@ -205,6 +213,130 @@ def check_hardcoded_values(added_lines: Dict[Path, List[Tuple[int, str]]]) -> Li
     return errors
 
 
+def check_brand_package_templates(
+    repo: Path,
+    paths: Sequence[Path],
+    added_lines: Dict[Path, List[Tuple[int, str]]],
+) -> List[str]:
+    errors = []
+    for path in paths:
+        absolute = repo / path
+        if path.suffix.lower() != ".md" or not absolute.is_file():
+            continue
+
+        added_line_numbers = {
+            line_number for line_number, _line in added_lines.get(path, [])
+        }
+        if not added_line_numbers:
+            continue
+
+        stack = []
+        blocks = {}
+        added_occurrences = []
+        next_block_id = 1
+
+        for line_number, line in enumerate(
+            absolute.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            for match in TEMPLATE_TAG_RE.finditer(line):
+                tag = match.group(1)
+                expression = match.group(2)
+                if tag == "if":
+                    if TRUEWATCH_CONDITION_RE.search(expression):
+                        block_id = next_block_id
+                        next_block_id += 1
+                        blocks[block_id] = {
+                            "truewatch": set(),
+                            "cloudcare": set(),
+                        }
+                        stack.append(
+                            {
+                                "brand_id": block_id,
+                                "branch": "truewatch",
+                            }
+                        )
+                    else:
+                        stack.append({"brand_id": None, "branch": None})
+                elif tag == "elif":
+                    if stack and stack[-1]["brand_id"] is not None:
+                        stack[-1]["branch"] = None
+                elif tag == "else":
+                    if stack and stack[-1]["brand_id"] is not None:
+                        stack[-1]["branch"] = "cloudcare"
+                elif tag == "endif" and stack:
+                    stack.pop()
+
+            brand_context = next(
+                (frame for frame in reversed(stack) if frame["brand_id"] is not None),
+                None,
+            )
+            block_id = brand_context["brand_id"] if brand_context else None
+            branch = brand_context["branch"] if brand_context else None
+
+            if line_number in added_line_numbers:
+                for match in MISSPELLED_TRUEWATCH_PACKAGE_RE.finditer(line):
+                    errors.append(
+                        "{}:{}: use @truewatchtech/{} instead of {}".format(
+                            path,
+                            line_number,
+                            match.group(1),
+                            match.group(0),
+                        )
+                    )
+
+            for namespace, pattern in (
+                ("cloudcare", CLOUDCARE_PACKAGE_RE),
+                ("truewatch", TRUEWATCH_PACKAGE_RE),
+            ):
+                for match in pattern.finditer(line):
+                    package_suffix = match.group(1)
+                    if block_id is not None and branch == namespace:
+                        blocks[block_id][namespace].add(package_suffix)
+                    if line_number in added_line_numbers:
+                        added_occurrences.append(
+                            (
+                                line_number,
+                                namespace,
+                                package_suffix,
+                                block_id,
+                                branch,
+                            )
+                        )
+
+        for line_number, namespace, package_suffix, block_id, branch in added_occurrences:
+            expected_branch = namespace
+            if block_id is None or branch != expected_branch:
+                errors.append(
+                    "{}:{}: @{} browser package must be inside the {} branch of "
+                    "an if custom_key.brand_key == \"truewatch\" template".format(
+                        path,
+                        line_number,
+                        "cloudcare" if namespace == "cloudcare" else "truewatchtech",
+                        "else" if namespace == "cloudcare" else "truewatch",
+                    )
+                )
+                continue
+
+            counterpart_namespace = (
+                "truewatch" if namespace == "cloudcare" else "cloudcare"
+            )
+            if package_suffix not in blocks[block_id][counterpart_namespace]:
+                counterpart_prefix = (
+                    "@truewatchtech/"
+                    if namespace == "cloudcare"
+                    else "@cloudcare/"
+                )
+                errors.append(
+                    "{}:{}: missing {}{} counterpart in the same brand template block".format(
+                        path,
+                        line_number,
+                        counterpart_prefix,
+                        package_suffix,
+                    )
+                )
+    return errors
+
+
 def check_markdown_structure(repo: Path, paths: Sequence[Path]) -> List[str]:
     errors = []
     for path in paths:
@@ -313,6 +445,7 @@ def main() -> int:
 
         errors = []
         errors.extend(check_hardcoded_values(added_lines))
+        errors.extend(check_brand_package_templates(repo, paths, added_lines))
         errors.extend(check_markdown_structure(repo, paths))
         errors.extend(check_navigation(repo, added, deleted))
         if errors:
