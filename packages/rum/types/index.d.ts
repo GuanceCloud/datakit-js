@@ -28,6 +28,22 @@ export interface InternalContext {
   }
 }
 
+export interface StartSessionOptions {
+  /**
+   * Overrides the runtime RUM session sample rate for the new session and
+   * subsequent automatic session renewals.
+   */
+  sessionSampleRate?: number
+}
+
+export interface StartSessionReplayRecordingOptions {
+  /**
+   * Forces the current session to be tracked, assigns a session ID when
+   * necessary, and enables Session Replay recording.
+   */
+  force?: boolean
+}
+
 export interface CanvasSnapshotResult {
   ok: boolean
   reason?: string
@@ -241,8 +257,11 @@ export declare const datafluxRum: {
   removeUserProperty: (key: any) => void
   clearUser: () => void
   stopSession: () => void
+  startSession: (options?: StartSessionOptions) => void
   setForcedSession: () => void
-  startSessionReplayRecording: (options?: { force?: boolean }) => void
+  startSessionReplayRecording: (
+    options?: StartSessionReplayRecordingOptions
+  ) => void
   isRecording: () => boolean
   stopSessionReplayRecording: () => void
   takeSubsequentFullSnapshot: () => void

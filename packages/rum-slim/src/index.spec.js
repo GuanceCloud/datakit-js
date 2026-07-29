@@ -18,10 +18,10 @@ describe('rum-slim index', () => {
   it('should expose the slim rum api entry without session replay controls', () => {
     expect(rumSlimIndex.datafluxRum).toEqual(jasmine.any(Object))
     expect(typeof rumSlimIndex.datafluxRum.init).toBe('function')
+    expect(typeof rumSlimIndex.datafluxRum.startSession).toBe('function')
     expect(rumSlimIndex.datafluxRum.startSessionReplayRecording).toBeUndefined()
     expect(rumSlimIndex.datafluxRum.stopSessionReplayRecording).toBeUndefined()
     expect(rumSlimIndex.datafluxRum.snapshotCanvas).toBeUndefined()
     expect(globalThis.DATAFLUX_RUM).toBe(rumSlimIndex.datafluxRum)
   })
 })
-

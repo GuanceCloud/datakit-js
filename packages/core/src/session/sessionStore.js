@@ -175,7 +175,7 @@ export function startSessionStore(
     )
   }
 
-  function expandOrRenewSessionState(sessionState) {
+  function expandOrRenewSessionState(sessionState, options) {
     if (isSessionInNotStartedState(sessionState)) {
       return false
     }
@@ -185,9 +185,12 @@ export function startSessionStore(
     )
     sessionState[productKey] = trackingType
     delete sessionState.isExpired
-    if (isTracked && !sessionState.id) {
+    if ((isTracked || (options && options.force)) && !sessionState.id) {
       sessionState.id = UUID()
       sessionState.created = String(dateNow())
+    }
+    if (options && options.force) {
+      sessionState.forcedSession = '1'
     }
   }
 
@@ -224,6 +227,64 @@ export function startSessionStore(
     )
   }
 
+  function renewSession() {
+    cancelExpandOrRenewSession()
+    processSessionStoreOperations(
+      {
+        process: function () {
+          const sessionState = getExpiredSessionState()
+          expandOrRenewSessionState(sessionState)
+          return sessionState
+        },
+        after: function (sessionState) {
+          if (hasSessionInCache()) {
+            expireSessionInCache()
+          }
+          sessionCache = sessionState
+          renewObservable.notify()
+        }
+      },
+      sessionStoreStrategy
+    )
+  }
+
+  function forceSession() {
+    cancelExpandOrRenewSession()
+    let shouldRenew
+    processSessionStoreOperations(
+      {
+        process: function (sessionState) {
+          if (
+            isSessionInNotStartedState(sessionState) ||
+            isSessionInExpiredState(sessionState)
+          ) {
+            shouldRenew = true
+            sessionState = getExpiredSessionState()
+          }
+          expandOrRenewSessionState(sessionState, { force: true })
+          return sessionState
+        },
+        after: function (sessionState) {
+          if (!shouldRenew && hasSessionInCache()) {
+            const previousState = sessionCache
+            sessionCache = sessionState
+            sessionStateUpdateObservable.notify({
+              previousState,
+              newState: sessionState
+            })
+          } else {
+            if (hasSessionInCache()) {
+              expireSessionInCache()
+            }
+            sessionCache = sessionState
+            renewObservable.notify()
+          }
+        }
+      },
+      sessionStoreStrategy
+    )
+  }
+
   return {
     expandOrRenewSession: throttledExpandOrRenewSession,
     expandSession,
@@ -234,6 +295,8 @@ export function startSessionStore(
     expireObservable,
     sessionStateUpdateObservable,
     restartSession: startSession,
+    renewSession,
+    forceSession,
     expire: function () {
       cancelExpandOrRenewSession()
       expireSession()

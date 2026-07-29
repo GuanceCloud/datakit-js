@@ -317,6 +317,13 @@ export function makeRumPublicApi(startRumImpl, recorderApi, options) {
       strategy.stopSession()
       addTelemetryUsage({ feature: 'stop-session' })
     }),
+    startSession: monitor(function (options) {
+      strategy.startSession(options)
+      addTelemetryUsage({
+        feature: 'start-session',
+        sessionSampleRate: options && options.sessionSampleRate
+      })
+    }),
     setForcedSession: monitor(function () {
       strategy.setForcedSession()
       addTelemetryUsage({ feature: 'set-forced-session' })

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish Browser SDK Docs"
+  short_description: "Sync SDK changes into Guance and TrueWatch docs"
+  default_prompt: "Use $publish-browser-sdk-docs to update the matching RUM documentation and prepare a merge request to release."

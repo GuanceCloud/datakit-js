@@ -202,6 +202,9 @@ export function createPreStartStrategy(
     getInternalContext: noop,
 
     stopSession: noop,
+    startSession: function (options) {
+      bufferApiCalls.add((startRumResult) => startRumResult.startSession(options))
+    },
     setForcedSession: function () {
       bufferApiCalls.add((startRumResult) => startRumResult.setForcedSession())
     },

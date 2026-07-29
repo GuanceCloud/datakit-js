@@ -2,6 +2,7 @@ import {
   BridgeCapability,
   LifeCycle,
   LifeCycleEventType,
+  Observable,
   PageExitReason
 } from '@cloudcare/browser-core'
 import {
@@ -294,6 +295,91 @@ describe('recorderApi', () => {
     lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
 
     expect(startRecordingImpl.calls.count()).toBe(2)
+  })
+
+  it('should preserve force before rum starts and force the session before recording', () => {
+    const worker = new FakeWorker()
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.returnValue({
+        stop: jasmine.createSpy('stop'),
+        takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
+      })
+    const lifeCycle = new LifeCycle()
+    let forced = false
+    const sessionManager = {
+      setForcedSession: jasmine
+        .createSpy('setForcedSession')
+        .and.callFake(function () {
+          forced = true
+          lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
+        }),
+      findTrackedSession: function () {
+        return forced
+          ? {
+              id: 'forced-session-id',
+              sessionReplayAllowed: true
+            }
+          : undefined
+      }
+    }
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+
+    recorderApi.start({ force: true })
+    recorderApi.onRumStart(
+      lifeCycle,
+      { workerUrl: '/worker.js' },
+      sessionManager,
+      {},
+      undefined
+    )
+
+    expect(sessionManager.setForcedSession).toHaveBeenCalledTimes(1)
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
+
+    recorderApi.start({ force: true })
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('should start an intent-to-record when the current session becomes forced', () => {
+    const worker = new FakeWorker()
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.returnValue({
+        stop: jasmine.createSpy('stop'),
+        takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
+      })
+    const sessionStateUpdateObservable = new Observable()
+    let forced = false
+    const sessionManager = {
+      sessionStateUpdateObservable,
+      findTrackedSession: function () {
+        return forced
+          ? {
+              id: 'forced-session-id',
+              sessionReplayAllowed: true
+            }
+          : undefined
+      }
+    }
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      { workerUrl: '/worker.js' },
+      sessionManager,
+      {},
+      undefined
+    )
+
+    recorderApi.start()
+    forced = true
+    sessionStateUpdateObservable.notify({
+      previousState: { forcedSession: undefined },
+      newState: { forcedSession: '1' }
+    })
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
   })
 
   it('should keep snapshotCanvas as a no-op before the recorder starts', () => {

@@ -41,8 +41,8 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     status: RecorderStatus.Stopped
   }
 
-  var startStrategy = function () {
-    state = { status: RecorderStatus.IntentToStart }
+  var startStrategy = function (options) {
+    state = { status: RecorderStatus.IntentToStart, options: options }
   }
   var stopStrategy = function () {
     state = { status: RecorderStatus.Stopped }
@@ -105,8 +105,9 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
           state.status === RecorderStatus.Starting ||
           state.status === RecorderStatus.Started
         ) {
+          var options = state.options
           stopStrategy()
-          state = { status: RecorderStatus.IntentToStart }
+          state = { status: RecorderStatus.IntentToStart, options: options }
         }
       })
       lifeCycle.subscribe(
@@ -119,9 +120,23 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       )
       lifeCycle.subscribe(LifeCycleEventType.SESSION_RENEWED, function () {
         if (state.status === RecorderStatus.IntentToStart) {
-          startStrategy()
+          startStrategy(state.options)
         }
       })
+      if (sessionManager.sessionStateUpdateObservable) {
+        sessionManager.sessionStateUpdateObservable.subscribe(function ({
+          previousState,
+          newState
+        }) {
+          if (
+            state.status === RecorderStatus.IntentToStart &&
+            !previousState.forcedSession &&
+            newState.forcedSession
+          ) {
+            startStrategy(state.options)
+          }
+        })
+      }
       var cachedDeflateEncoder
       function getOrCreateDeflateEncoder() {
         if (!cachedDeflateEncoder) {
@@ -145,20 +160,29 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
         return cachedDeflateEncoder
       }
       startStrategy = function (options) {
-        var session = sessionManager.findTrackedSession()
-        if (!session || !session.sessionReplayAllowed) {
-          state = { status: RecorderStatus.IntentToStart }
-          return
-        }
-
         if (
           state.status === RecorderStatus.Starting ||
           state.status === RecorderStatus.Started
         ) {
+          if (options && options.force) {
+            sessionManager.setForcedSession()
+          }
           return
         }
 
-        state = { status: RecorderStatus.Starting }
+        if (options && options.force) {
+          // A forced session renewal emits SESSION_RENEWED synchronously. Leave
+          // the intent state temporarily to avoid starting the recorder twice.
+          state = { status: RecorderStatus.Stopped }
+          sessionManager.setForcedSession()
+        }
+        var session = sessionManager.findTrackedSession()
+        if (!session || !session.sessionReplayAllowed) {
+          state = { status: RecorderStatus.IntentToStart, options: options }
+          return
+        }
+
+        state = { status: RecorderStatus.Starting, options: options }
 
         runOnReadyState('interactive', function () {
           if (state.status !== RecorderStatus.Starting) {
@@ -300,7 +324,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
         }
       }
       if (state.status === RecorderStatus.IntentToStart) {
-        startStrategy()
+        startStrategy(state.options)
       }
     },
     takeSubsequentFullSnapshot() {

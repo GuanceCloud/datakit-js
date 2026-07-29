@@ -36,6 +36,7 @@ describe('rumPublicApi', () => {
       getViewContext: jasmine.createSpy('getViewContext'),
       lifeCycle: {},
       session: {},
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       setViewContext: jasmine.createSpy('setViewContext'),
       setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
@@ -331,6 +332,7 @@ describe('rumPublicApi', () => {
       }),
       lifeCycle: {},
       session: {},
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       setViewContext: jasmine.createSpy('setViewContext'),
       setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
@@ -372,6 +374,7 @@ describe('rumPublicApi', () => {
     rumPublicApi.addError(new Error('boom'), { extra: 'value' })
     rumPublicApi.addTiming('ready state', 123)
     rumPublicApi.stopSession()
+    rumPublicApi.startSession({ sessionSampleRate: 100 })
     rumPublicApi.setForcedSession()
 
     expect(startRumResult.setViewName).toHaveBeenCalledWith('Checkout')
@@ -419,6 +422,9 @@ describe('rumPublicApi', () => {
     )
     expect(startRumResult.addTiming).toHaveBeenCalledWith('ready state', 123)
     expect(startRumResult.stopSession).toHaveBeenCalled()
+    expect(startRumResult.startSession).toHaveBeenCalledWith({
+      sessionSampleRate: 100
+    })
     expect(startRumResult.setForcedSession).toHaveBeenCalled()
     expect(rumPublicApi.getViewContext()).toEqual({ plan: 'pro' })
     expect(rumPublicApi.getInternalContext()).toEqual({
@@ -475,6 +481,7 @@ describe('rumPublicApi', () => {
       getViewContext: jasmine.createSpy('getViewContext'),
       lifeCycle: {},
       session: {},
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       setViewContext: jasmine.createSpy('setViewContext'),
       setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
@@ -654,6 +661,7 @@ describe('rumPublicApi', () => {
       getViewContext: jasmine.createSpy('getViewContext'),
       lifeCycle: {},
       session: {},
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       setResourceContext: jasmine.createSpy('setResourceContext'),
       setViewContext: jasmine.createSpy('setViewContext'),

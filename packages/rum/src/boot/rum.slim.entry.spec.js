@@ -18,9 +18,9 @@ describe('rum.slim.entry', () => {
 
     expect(rumSlimEntry.datafluxRum).toEqual(jasmine.any(Object))
     expect(rumSlimEntry.datafluxRum.init).toEqual(jasmine.any(Function))
+    expect(rumSlimEntry.datafluxRum.startSession).toEqual(jasmine.any(Function))
     expect(rumSlimEntry.datafluxRum.startView).toEqual(jasmine.any(Function))
     expect(rumSlimEntry.datafluxRum.startSessionReplayRecording).toBeUndefined()
     expect(globalThis.DATAFLUX_RUM).toBe(rumSlimEntry.datafluxRum)
   })
 })
-
