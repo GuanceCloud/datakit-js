@@ -10,6 +10,9 @@ from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
 
 TARGET_ROOT = Path("docs/zh/real-user-monitoring/web")
+DEFAULT_DOCS_REPO = (
+    Path(__file__).resolve().parents[4].parent.parent / "dataflux-doc"
+)
 ALLOWED_SUFFIXES = {
     ".md",
     ".png",
@@ -416,7 +419,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--repo",
-        default="../dataflux-doc",
+        default=str(DEFAULT_DOCS_REPO),
         help="path to the dataflux-doc repository root",
     )
     parser.add_argument(

@@ -10,7 +10,7 @@ Publish each user-visible SDK update through the matching documentation change. 
 ## Resolve the repositories
 
 1. Resolve the current SDK repository with `git rev-parse --show-toplevel`.
-2. Resolve the documentation repository as the sibling `../dataflux-doc` directory by default.
+2. Resolve the documentation repository as `../../dataflux-doc` relative to the SDK repository by default.
 3. Confirm the documentation remote is the intended `zy-docs/dataflux-doc` repository.
 4. Stop and ask for the correct path if the repository is missing. Do not silently clone another copy.
 
