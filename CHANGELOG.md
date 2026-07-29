@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.3.6
+
+- fix: resolve browser SDK docs repository path
+- Merge branch 'dev' into codex/rum-framework-plugins
+- docs: align canvas fallback behavior
+- fix: validate all package refs in changed docs
+- fix: enforce brand-specific browser package docs
+- feat: add browser SDK docs publishing skill
+- fix(rum): support forced session renewal
+- feat: expand framework integrations and websocket tracking
+- feat: add WebSocket resource tracking
+- test: remove invalid canvas serialization case
+- feat: add RUM framework plugins
+- fix: preserve visible loading time candidates
+
 ## v3.3.5
 
 - fix: unlock error replay sessions

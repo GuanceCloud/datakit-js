@@ -1,6 +1,6 @@
 {
     "name": "@cloudcare/browser-rum-nextjs",
-    "version": "3.3.5",
+    "version": "3.3.6",
     "main": "cjs/index.js",
     "module": "esm/index.js",
     "types": "types/index.d.ts",
@@ -23,12 +23,12 @@
         "prepack": "npm run build"
     },
     "dependencies": {
-        "@cloudcare/browser-core": "3.3.4",
-        "@cloudcare/browser-rum-react": "3.3.5"
+        "@cloudcare/browser-core": "3.3.6",
+        "@cloudcare/browser-rum-react": "3.3.6"
     },
     "peerDependencies": {
-        "@cloudcare/browser-rum": ">=3.3.5",
-        "@cloudcare/browser-rum-slim": ">=3.3.5",
+        "@cloudcare/browser-rum": ">=3.3.6",
+        "@cloudcare/browser-rum-slim": ">=3.3.6",
         "next": ">=13",
         "react": ">=18"
     },

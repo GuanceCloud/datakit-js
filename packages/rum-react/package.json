@@ -1,6 +1,6 @@
 {
     "name": "@cloudcare/browser-rum-react",
-    "version": "3.3.5",
+    "version": "3.3.6",
     "main": "cjs/index.js",
     "module": "esm/index.js",
     "types": "types/index.d.ts",
@@ -57,15 +57,15 @@
         "prepack": "npm run build"
     },
     "dependencies": {
-        "@cloudcare/browser-core": "3.3.4"
+        "@cloudcare/browser-core": "3.3.6"
     },
     "peerDependencies": {
-        "@cloudcare/browser-rum": ">=3.3.5",
-        "@cloudcare/browser-rum-slim": ">=3.3.5",
+        "@cloudcare/browser-rum": ">=3.3.6",
+        "@cloudcare/browser-rum-slim": ">=3.3.6",
         "@tanstack/react-router": ">=1.64.0 <2",
+        "react": "18 || 19",
         "react-router": "6 || 7 || 8",
-        "react-router-dom": "6 || 7",
-        "react": "18 || 19"
+        "react-router-dom": "6 || 7"
     },
     "peerDependenciesMeta": {
         "@cloudcare/browser-rum": {
