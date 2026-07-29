@@ -237,7 +237,6 @@ snapshot 仍然存在，但语义是：
 - `DataView`
 - `ImageData`
 - `HTMLImageElement`
-- `HTMLCanvasElement`
 
 ### Opaque Object Strategy
 
@@ -265,7 +264,7 @@ snapshot 仍然存在，但语义是：
 - `CanvasGradient.addColorStop`
 - `drawImage(HTMLVideoElement, ...)`
 - `drawImage(cross-origin HTMLImageElement, ...)`
-- `drawImage(tainted HTMLCanvasElement, ...)`
+- `drawImage(HTMLCanvasElement, ...)`
 
 命中这些对象时，优先切 snapshot fallback，而不是继续发送可能无法被 rrweb 2D replay 正确复原的 command batch。
 
@@ -277,7 +276,7 @@ snapshot 仍然存在，但语义是：
 - `path2d_argument`
 - `draw_image_video`
 - `draw_image_cross_origin`
-- `draw_image_tainted_canvas`
+- `draw_image_canvas`
 
 ### Stable Fallback Boundary
 
