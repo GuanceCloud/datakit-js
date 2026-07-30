@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebSocket RUM Smoke Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        color: #182230;
+        background: #f4f6f8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 32px 20px;
+      }
+
+      main {
+        width: min(920px, 100%);
+        margin: 0 auto;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding-bottom: 18px;
+        border-bottom: 1px solid #cfd6df;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        line-height: 1.25;
+      }
+
+      button {
+        min-height: 40px;
+        padding: 0 16px;
+        border: 1px solid #8b99aa;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #182230;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: #385a7c;
+        background: #f8fafc;
+      }
+
+      .status {
+        display: grid;
+        grid-template-columns: 150px minmax(0, 1fr);
+        gap: 10px 16px;
+        padding: 22px 0;
+        border-bottom: 1px solid #cfd6df;
+      }
+
+      .status dt {
+        font-weight: 700;
+      }
+
+      .status dd {
+        margin: 0;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .pass {
+        color: #177245;
+      }
+
+      .fail {
+        color: #b42318;
+      }
+
+      pre {
+        min-height: 320px;
+        margin: 22px 0 0;
+        padding: 18px;
+        overflow: auto;
+        border: 1px solid #cfd6df;
+        border-radius: 6px;
+        background: #ffffff;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>WebSocket RUM Smoke Demo</h1>
+        <button id="run" type="button">Run again</button>
+      </header>
+      <dl class="status">
+        <dt>Result</dt>
+        <dd id="result-status">Running</dd>
+        <dt>Socket</dt>
+        <dd id="socket-status">Preparing</dd>
+        <dt>RUM event</dt>
+        <dd id="event-status">Waiting</dd>
+        <dt>Intake</dt>
+        <dd id="intake-status">Waiting</dd>
+      </dl>
+      <pre id="details"></pre>
+    </main>
+
+    <script src="./dataflux-rum.js"></script>
+    <script>
+      ;(function () {
+        var status = {
+          result: document.getElementById('result-status'),
+          socket: document.getElementById('socket-status'),
+          event: document.getElementById('event-status'),
+          intake: document.getElementById('intake-status'),
+          details: document.getElementById('details')
+        }
+        var runButton = document.getElementById('run')
+        var runStartedAt = Date.now()
+        var runId =
+          new URLSearchParams(location.search).get('run') ||
+          String(runStartedAt)
+        var expectedMessagesOutSize = 16
+        var expectedMessagesInSize = 27
+        var result = (window.__webSocketSmoke = {
+          runId: runId,
+          ready: false,
+          completed: false,
+          passed: false,
+          socketOpened: false,
+          socketClosed: false,
+          receivedMessages: 0,
+          beforeSendSeen: false,
+          intakeSeen: false,
+          nativeBehaviorPreserved: false,
+          event: null,
+          intakeFields: null,
+          errors: []
+        })
+
+        function render() {
+          result.passed =
+            result.socketOpened &&
+            result.socketClosed &&
+            result.receivedMessages === 3 &&
+            result.beforeSendSeen &&
+            result.intakeSeen &&
+            result.nativeBehaviorPreserved &&
+            result.errors.length === 0
+          status.result.textContent = result.completed
+            ? result.passed
+              ? 'Passed'
+              : 'Failed'
+            : 'Running'
+          status.result.className = result.completed
+            ? result.passed
+              ? 'pass'
+              : 'fail'
+            : ''
+          status.socket.textContent =
+            (result.socketOpened ? 'opened' : 'waiting') +
+            ' / messages=' +
+            result.receivedMessages +
+            ' / ' +
+            (result.socketClosed ? 'closed' : 'open')
+          status.event.textContent = result.beforeSendSeen
+            ? 'websocket resource observed'
+            : 'waiting'
+          status.intake.textContent = result.intakeSeen
+            ? 'serialized fields observed'
+            : 'waiting'
+          status.details.textContent = JSON.stringify(result, null, 2)
+        }
+
+        function fail(error) {
+          result.errors.push(
+            error && error.message ? error.message : String(error)
+          )
+          result.completed = true
+          render()
+        }
+
+        function validateEvent(event) {
+          var websocket = event.resource && event.resource.websocket
+          if (
+            event.type !== 'resource' ||
+            !event.resource ||
+            event.resource.type !== 'websocket' ||
+            !websocket
+          ) {
+            return false
+          }
+
+          result.event = {
+            type: event.resource.type,
+            url: event.resource.url,
+            connectionId: websocket.connection_id,
+            startViewId: websocket.start_view_id,
+            endViewId: websocket.end_view_id,
+            protocol: websocket.protocol,
+            closeCode: websocket.close_code,
+            messagesIn: websocket.messages_in,
+            messagesOut: websocket.messages_out
+          }
+          result.beforeSendSeen =
+            websocket.handshake_succeeded === true &&
+            websocket.close_code === 1000 &&
+            websocket.was_clean === true &&
+            websocket.protocol === 'rum-smoke-v1' &&
+            websocket.start_view_id !== websocket.end_view_id &&
+            websocket.messages_in.count === 3 &&
+            websocket.messages_in.size === expectedMessagesInSize &&
+            websocket.messages_out.count === 2 &&
+            websocket.messages_out.size === expectedMessagesOutSize
+          render()
+          return true
+        }
+
+        function forceTransportFlush() {
+          window.dispatchEvent(new Event('beforeunload'))
+        }
+
+        function readIntake(attempt) {
+          fetch(
+            '/__demo/intake?since=' +
+              encodeURIComponent(runStartedAt)
+          )
+            .then(function (response) {
+              return response.json()
+            })
+            .then(function (payload) {
+              var matchingFields
+              payload.events.some(function (event) {
+                if (event.fields.resource_type === 'websocket') {
+                  matchingFields = event.fields
+                  return true
+                }
+                return false
+              })
+
+              if (matchingFields) {
+                result.intakeFields = {
+                  resourceType: matchingFields.resource_type,
+                  connectionId:
+                    matchingFields.resource_websocket_connection_id,
+                  messagesInCount:
+                    matchingFields.resource_websocket_messages_in_count,
+                  messagesOutCount:
+                    matchingFields.resource_websocket_messages_out_count,
+                  closeCode: matchingFields.resource_websocket_close_code
+                }
+                result.intakeSeen =
+                  matchingFields.resource_websocket_handshake_succeeded ===
+                    true &&
+                  matchingFields.resource_websocket_messages_in_count === 3 &&
+                  matchingFields.resource_websocket_messages_out_count === 2 &&
+                  matchingFields.resource_websocket_close_code === 1000
+                result.completed = true
+                render()
+                return
+              }
+
+              if (attempt < 20) {
+                window.setTimeout(function () {
+                  readIntake(attempt + 1)
+                }, 300)
+              } else {
+                fail(new Error('WebSocket resource was not found in intake'))
+              }
+            })
+            .catch(fail)
+        }
+
+        function startSocket() {
+          var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+          var webSocket = new WebSocket(
+            protocol +
+              '//' +
+              location.host +
+              '/ws-echo?run=' +
+              encodeURIComponent(runId),
+            'rum-smoke-v1'
+          )
+          webSocket.binaryType = 'arraybuffer'
+          result.nativeBehaviorPreserved =
+            webSocket instanceof WebSocket &&
+            webSocket.constructor === WebSocket &&
+            WebSocket.OPEN === 1
+
+          webSocket.addEventListener('open', function () {
+            result.socketOpened = true
+            render()
+            webSocket.send('hello-你好')
+          })
+
+          webSocket.addEventListener('message', function () {
+            result.receivedMessages += 1
+            if (result.receivedMessages === 1) {
+              window.DATAFLUX_RUM.startView({
+                name: 'websocket-smoke-end'
+              })
+              webSocket.send(new Uint8Array([1, 2, 3, 4]))
+            } else if (result.receivedMessages === 3) {
+              webSocket.close(1000, 'smoke-complete')
+            }
+            render()
+          })
+
+          webSocket.addEventListener('close', function () {
+            result.socketClosed = true
+            render()
+            window.setTimeout(function () {
+              forceTransportFlush()
+              window.setTimeout(function () {
+                readIntake(0)
+              }, 200)
+            }, 0)
+          })
+
+          webSocket.addEventListener('error', function () {
+            fail(new Error('WebSocket connection failed'))
+          })
+        }
+
+        runButton.addEventListener('click', function () {
+          location.href =
+            location.pathname + '?run=' + encodeURIComponent(Date.now())
+        })
+
+        try {
+          if (!window.DATAFLUX_RUM) {
+            throw new Error('RUM bundle was not loaded')
+          }
+          window.DATAFLUX_RUM.init({
+            applicationId: 'websocket-smoke',
+            datakitOrigin: location.origin,
+            service: 'websocket-smoke',
+            env: 'demo',
+            version: 'smoke',
+            sessionSampleRate: 100,
+            sessionReplaySampleRate: 0,
+            sendContentTypeByJson: true,
+            enableExperimentalFeatures: ['track_websockets'],
+            beforeSend: function (event) {
+              validateEvent(event)
+              return true
+            }
+          })
+          window.DATAFLUX_RUM.startView({
+            name: 'websocket-smoke-start'
+          })
+          result.ready = true
+          render()
+          startSocket()
+          window.setTimeout(function () {
+            if (!result.completed) {
+              fail(new Error('Smoke test timed out'))
+            }
+          }, 10000)
+        } catch (error) {
+          fail(error)
+        }
+      })()
+    </script>
+  </body>
+</html>

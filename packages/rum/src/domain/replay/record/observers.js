@@ -387,9 +387,11 @@ function initScrollObserver(
   isNodeIgnored = isNodeIgnored || neverIgnoreNode
   var _updatePosition = throttle(function (event) {
     var target = getEventTarget(event)
+    if (!target) {
+      return
+    }
+    var ignored = isNodeIgnored(target)
     if (
-      !target ||
-      isNodeIgnored(target) ||
       getNodePrivacyLevel(target, configuration.defaultPrivacyLevel) ===
         NodePrivacyLevel.HIDDEN ||
       !hasSerializedNode(target)
@@ -408,6 +410,11 @@ function initScrollObserver(
             scrollLeft: Math.round(target.scrollLeft)
           }
     elementsScrollPositions.set(target, scrollPositions)
+    if (ignored) {
+      // Keep the live scroll baseline current while a time-sliced full
+      // snapshot temporarily gates incremental records.
+      return
+    }
     cb({
       id: id,
       x: scrollPositions.scrollLeft,

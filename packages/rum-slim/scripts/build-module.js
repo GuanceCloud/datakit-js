@@ -19,6 +19,7 @@ runBabel(path.join(packageRoot, 'src'))
 rewriteSlimImports()
 removeFullRumOnlyOutput()
 replaceBuildEnv()
+stripSourceMapSourcesContent()
 
 function runBabel(input) {
   execFileSync(
@@ -70,6 +71,23 @@ function replaceBuildEnv() {
   execFileSync(
     process.execPath,
     [path.join(repositoryRoot, 'scripts/replace-build-env.js'), outDir],
+    {
+      cwd: packageRoot,
+      stdio: 'inherit'
+    }
+  )
+}
+
+function stripSourceMapSourcesContent() {
+  execFileSync(
+    process.execPath,
+    [
+      path.join(
+        repositoryRoot,
+        'scripts/strip-source-map-sources-content.js'
+      ),
+      outDir
+    ],
     {
       cwd: packageRoot,
       stdio: 'inherit'

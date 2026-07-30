@@ -100,7 +100,32 @@ export interface InitConfiguration {
    * @default "cookie"
    */
   sessionPersistence?: SessionPersistence | undefined
+  /**
+   * Enables opt-in experimental SDK capabilities.
+   * Use `track_websockets` to collect connection-level WebSocket resource metrics.
+   */
+  enableExperimentalFeatures?: string[] | undefined
 }
+export declare const ExperimentalFeature: {
+  readonly TRACK_WEBSOCKETS: 'track_websockets'
+}
+export type ExperimentalFeature =
+  (typeof ExperimentalFeature)[keyof typeof ExperimentalFeature]
+export declare const ResourceType: {
+  readonly DOCUMENT: 'document'
+  readonly XHR: 'xhr'
+  readonly BEACON: 'beacon'
+  readonly FETCH: 'fetch'
+  readonly CSS: 'css'
+  readonly JS: 'js'
+  readonly IMAGE: 'image'
+  readonly FONT: 'font'
+  readonly MEDIA: 'media'
+  readonly WEBSOCKET: 'websocket'
+  readonly OTHER: 'other'
+  readonly CUSTOM: 'custom'
+}
+export type ResourceType = (typeof ResourceType)[keyof typeof ResourceType]
 export enum TraceType {
   DDTRACE = 'ddtrace',
   ZIPKIN_MULTI_HEADER = 'zipkin',

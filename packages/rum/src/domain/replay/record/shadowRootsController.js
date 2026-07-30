@@ -184,6 +184,27 @@ export var initShadowRootsController = function (configuration, data) {
       stopControllerEntry(entry, true)
     },
 
+    cleanupDisconnectedShadowRoots: function () {
+      if (stopped || controllerByShadowRoot.size === 0) {
+        return
+      }
+      var disconnectedShadowRoots = []
+      controllerByShadowRoot.forEach(function (_, shadowRoot) {
+        if (!shadowRootBelongsToObservedDocument(shadowRoot)) {
+          disconnectedShadowRoots.push(shadowRoot)
+        }
+      })
+      disconnectedShadowRoots.forEach(function (shadowRoot) {
+        try {
+          shadowRootsController.removeShadowRoot(shadowRoot)
+        } catch (_) {
+          // removeShadowRoot retires the registry entry before cleanup runs.
+          // Continue through the bounded registry so one faulty observer does
+          // not keep unrelated detached roots alive.
+        }
+      })
+    },
+
     refreshAndFlushPendingRootForNode: function (node) {
       if (stopped || !node) {
         return
@@ -431,7 +452,7 @@ export var initShadowRootsController = function (configuration, data) {
       retireActiveGeneration()
       shadowRoots.forEach(function (shadowRoot) {
         try {
-          if (shadowRoot.host && shadowRoot.host.isConnected) {
+          if (shadowRootBelongsToObservedDocument(shadowRoot)) {
             shadowRootsController.addShadowRoot(shadowRoot)
           }
         } catch (error) {
@@ -455,6 +476,18 @@ export var initShadowRootsController = function (configuration, data) {
       generation.active &&
       generation === activeGeneration
     )
+  }
+
+  function shadowRootBelongsToObservedDocument(shadowRoot) {
+    try {
+      return Boolean(
+        shadowRoot.host &&
+          shadowRoot.host.isConnected &&
+          shadowRoot.host.ownerDocument === document
+      )
+    } catch (_) {
+      return false
+    }
   }
 
   function isEntryActive(entry) {
@@ -589,6 +622,11 @@ export var initShadowRootsController = function (configuration, data) {
       removeShadowRoot: function (shadowRoot) {
         if (isEntryActive(entry)) {
           shadowRootsController.removeShadowRoot(shadowRoot)
+        }
+      },
+      cleanupDisconnectedShadowRoots: function () {
+        if (isEntryActive(entry)) {
+          shadowRootsController.cleanupDisconnectedShadowRoots()
         }
       },
       reset: function () {

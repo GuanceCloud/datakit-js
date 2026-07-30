@@ -21,31 +21,31 @@ export function makeSessionReplayPublicApi(recorderApi) {
       return recorderApi.getSerializedNodeIdForDebug(node)
     }),
     getLastAutoCanvasSnapshotResultForDebug: monitor(function () {
-      return recorderApi.getLastAutoCanvasSnapshotResultForDebug()
+      return recorderApi.$rGetDebug(0)
     }),
     getAutoCanvasSnapshotDebugHistoryForDebug: monitor(function () {
-      return recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug()
+      return recorderApi.$rGetDebug(1)
     }),
     getLastCanvasMutationForDebug: monitor(function () {
-      return recorderApi.getLastCanvasMutationForDebug()
+      return recorderApi.$rGetDebug(2)
     }),
     getCanvasMutationHistoryForDebug: monitor(function () {
-      return recorderApi.getCanvasMutationHistoryForDebug()
+      return recorderApi.$rGetDebug(3)
     }),
     getLastDomMutationForDebug: monitor(function () {
-      return recorderApi.getLastDomMutationForDebug()
+      return recorderApi.$rGetDebug(4)
     }),
     getDomMutationHistoryForDebug: monitor(function () {
-      return recorderApi.getDomMutationHistoryForDebug()
+      return recorderApi.$rGetDebug(5)
     }),
     getLastReplaySegmentFlushForDebug: monitor(function () {
-      return recorderApi.getLastReplaySegmentFlushForDebug()
+      return recorderApi.$rGetDebug(6)
     }),
     getReplaySegmentFlushHistoryForDebug: monitor(function () {
-      return recorderApi.getReplaySegmentFlushHistoryForDebug()
+      return recorderApi.$rGetDebug(7)
     }),
     getReplayPerformanceForDebug: monitor(function () {
-      return recorderApi.getReplayPerformanceForDebug()
+      return recorderApi.$rGetDebug(8)
     }),
     flushReplayMutationsForDebug: monitor(function () {
       if (recorderApi.flushReplayMutationsForDebug) {
@@ -54,4 +54,3 @@ export function makeSessionReplayPublicApi(recorderApi) {
     })
   }
 }
-

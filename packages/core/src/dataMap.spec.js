@@ -35,9 +35,50 @@ describe('dataMap', () => {
     expect(dataMap.resource.fields.resource_url_path_group).toBe(
       'resource.url_path_group'
     )
+    expect(
+      dataMap.resource.fields.resource_websocket_messages_in_count
+    ).toBe('resource.websocket.messages_in.count')
+    expect(
+      dataMap.resource.fields.resource_websocket_setup_duration
+    ).toBe('resource.websocket.setup_duration')
     expect(dataMap.view.fields.first_contentful_paint).toBe(
       'view.first_contentful_paint'
     )
     expect(dataMap.view.fields.custom_timings).toBe('view.custom_timings')
+  })
+
+  it('should expose the complete WebSocket resource schema', () => {
+    const paths = [
+      'connection_id',
+      'handshake_succeeded',
+      'start_time',
+      'end_time',
+      'start_view_id',
+      'end_view_id',
+      'tracking_end_reason',
+      'close_code',
+      'close_reason',
+      'was_clean',
+      'messages_in.count',
+      'messages_in.size',
+      'messages_out.count',
+      'messages_out.size',
+      'time_to_first_message_in',
+      'time_to_first_message_out',
+      'last_message_in_at',
+      'longest_inbound_silence',
+      'inbound_idle_duration_before_close',
+      'buffered_amount_max',
+      'protocol',
+      'setup_duration'
+    ]
+
+    paths.forEach((path) => {
+      expect(
+        dataMap.resource.fields[
+          `resource_websocket_${path.replace('.', '_')}`
+        ]
+      ).toBe(`resource.websocket.${path}`)
+    })
   })
 })

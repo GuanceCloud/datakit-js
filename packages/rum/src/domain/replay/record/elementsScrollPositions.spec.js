@@ -12,6 +12,16 @@ describe('replay/record/elementsScrollPositions', () => {
     expect(positions.get(element)).toEqual(value)
   })
 
+  it('should discard positions from a superseded snapshot attempt', () => {
+    const positions = createElementsScrollPositions()
+    const element = document.createElement('div')
+
+    positions.set(element, { scrollLeft: 12, scrollTop: 34 })
+    positions.reset()
+
+    expect(positions.has(element)).toBeFalse()
+  })
+
   it('should map document to scrollingElement when available', () => {
     const positions = createElementsScrollPositions()
     const originalScrollingElement = document.scrollingElement

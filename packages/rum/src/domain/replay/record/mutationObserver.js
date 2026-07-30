@@ -29,6 +29,11 @@ var MUTATION_SERIALIZATION_SLICE_MS = 4
 var MUTATION_SERIALIZATION_FLUSH_BUDGET_MS = 4
 export var MUTATION_NORMALIZATION_MAX_DURATION_MS = 4
 var MUTATION_NORMALIZATION_TIME_CHECK_INTERVAL = 32
+// performance.now() can jump across a short GC pause or an interrupted
+// observer callback. Let a small, raw-batch-bounded amount of normalization
+// finish before treating the wall-clock deadline as structural loss.
+var MUTATION_NORMALIZATION_SMALL_BATCH_MAX_RECORDS = 32
+var MUTATION_NORMALIZATION_MIN_OPERATIONS_BEFORE_TIMEOUT = 192
 var MUTATION_NORMALIZATION_ABORT = {}
 // A serialized add cannot be split below its root.  Stop before building one
 // that would exceed record.js' single mutation emit watermark.
@@ -169,7 +174,9 @@ export function startMutationObserver(
     if (!active) {
       return
     }
-    var processStart = getCurrentTime()
+    var processStart = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? getCurrentTime()
+      : 0
     processMutations(
       mutations,
       mutationCallback,
@@ -179,7 +186,7 @@ export function startMutationObserver(
       isNodeIgnored,
       isNodePublished
     )
-    if (mutationPerfCb) {
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && mutationPerfCb) {
       mutationPerfCb({
         processMutationsCount: 1,
         processMutationsDuration: getCurrentTime() - processStart
@@ -327,6 +334,7 @@ export function processMutations(
   var childListMutations = []
   var characterDataMutations = []
   var attributeMutations = []
+  var disconnectedShadowRootsCleaned = false
   var removedSubtreeTraversalState = {
     deadline: undefined,
     nodeCount: 0
@@ -357,34 +365,47 @@ export function processMutations(
       return
     }
     var mutation = mutations_1[_i]
-    if (mutation.type === 'childList') {
-      mutation.removedNodes.forEach(function (removedNode) {
-        if (
-          !removedSubtreeTraversalState.overflowed &&
-          !traverseRemovedShadowDom(
-            removedNode,
-            shadowRootsController.removeShadowRoot,
-            removedSubtreeTraversalState
-          )
-        ) {
-          removedSubtreeTraversalState.overflowed = true
-        }
-      })
-      if (removedSubtreeTraversalState.overflowed) {
-        // The traversal cannot safely discover every nested host after the
-        // watermark. The real shadow-roots controller already owns the full
-        // registry, so let it synchronously detach every disconnected entry
-        // before requesting a new replay baseline.
-        if (shadowRootsController.reset) {
-          try {
-            shadowRootsController.reset()
-          } catch (_) {}
-        }
-        mutationTasksController.handleOverflow({
-          reason: 'removed_subtree_watermark',
-          mutationNodeCount: removedSubtreeTraversalState.nodeCount
+    if (
+      mutation.type === 'childList' &&
+      mutation.removedNodes.length
+    ) {
+      if (
+        !disconnectedShadowRootsCleaned &&
+        shadowRootsController.cleanupDisconnectedShadowRoots
+      ) {
+        // The real controller registry is bounded to 64 entries. Scanning that
+        // registry is both cheaper and more reliable than walking every node
+        // in a potentially huge removed subtree merely to discover its shadow
+        // hosts. The root removal itself remains a complete replay mutation.
+        shadowRootsController.cleanupDisconnectedShadowRoots()
+        disconnectedShadowRootsCleaned = true
+      } else if (!shadowRootsController.cleanupDisconnectedShadowRoots) {
+        // Preserve compatibility with lightweight/custom controllers that do
+        // not own a registry by falling back to the bounded subtree walk.
+        mutation.removedNodes.forEach(function (removedNode) {
+          if (
+            !removedSubtreeTraversalState.overflowed &&
+            !traverseRemovedShadowDom(
+              removedNode,
+              shadowRootsController.removeShadowRoot,
+              removedSubtreeTraversalState
+            )
+          ) {
+            removedSubtreeTraversalState.overflowed = true
+          }
         })
-        return
+        if (removedSubtreeTraversalState.overflowed) {
+          if (shadowRootsController.reset) {
+            try {
+              shadowRootsController.reset()
+            } catch (_) {}
+          }
+          mutationTasksController.handleOverflow({
+            reason: 'removed_subtree_watermark',
+            mutationNodeCount: removedSubtreeTraversalState.nodeCount
+          })
+          return
+        }
       }
     }
 
@@ -1367,6 +1388,14 @@ function consumeMutationNormalizationBudget(
   ) {
     return false
   }
+  if (
+    normalizationState.mutationRecordCount <=
+      MUTATION_NORMALIZATION_SMALL_BATCH_MAX_RECORDS &&
+    normalizationState.timeCheckCount <
+      MUTATION_NORMALIZATION_MIN_OPERATIONS_BEFORE_TIMEOUT
+  ) {
+    return false
+  }
   if (getCurrentTime() < normalizationState.deadline) {
     return false
   }
@@ -2216,7 +2245,9 @@ export function createMutationTasksController(
       return true
     }
 
-    var serializationStart = getCurrentTime()
+    var serializationStart = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? getCurrentTime()
+      : 0
 
     while (pendingRootTaskCount) {
       var task = dequeuePendingRootTask()
@@ -2309,7 +2340,7 @@ export function createMutationTasksController(
     if (pendingRootTaskCount) {
       schedulePendingRootTasks()
     }
-    if (mutationPerfCb) {
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && mutationPerfCb) {
       mutationPerfCb({
         mutationSerializationCount: 1,
         mutationSerializationDuration: getCurrentTime() - serializationStart

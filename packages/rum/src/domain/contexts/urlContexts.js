@@ -5,8 +5,10 @@ import {
   createValueHistory,
   replaceNumberCharByPath,
   getQueryParamsFromUrl,
+  getURLSearchParams,
   isHashAnAnchor,
-  getPathFromHash
+  getPathFromHash,
+  buildUrl
 } from '@cloudcare/browser-core'
 
 /**
@@ -30,10 +32,19 @@ export function startUrlContexts(
 
   lifeCycle.subscribe(LifeCycleEventType.BEFORE_VIEW_CREATED, function (data) {
     var viewUrl = location.href
+    var viewLocation = location
+    if (data.url) {
+      try {
+        viewLocation = buildUrl(data.url, location.href)
+        viewUrl = viewLocation.href
+      } catch (error) {
+        // Fall back to the browser location for invalid framework URLs.
+      }
+    }
     urlContextHistory.add(
       buildUrlContext({
         url: viewUrl,
-        location: location,
+        location: viewLocation,
         referrer: !previousViewUrl ? document.referrer : previousViewUrl
       }),
       data.startClocks.relative
@@ -77,7 +88,10 @@ export function startUrlContexts(
       host: data.location.host,
       path: path,
       pathGroup: replaceNumberCharByPath(path),
-      urlQuery: getQueryParamsFromUrl(data.location.href),
+      urlQuery:
+        typeof data.location.search === 'string'
+          ? getURLSearchParams(data.location.search)
+          : getQueryParamsFromUrl(data.location.href),
       pathname: pathname
     }
   }

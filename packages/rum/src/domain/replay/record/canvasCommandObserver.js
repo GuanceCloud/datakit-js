@@ -1,7 +1,6 @@
 import { createCanvas2DCommandRecorder } from './canvasCommandCapture'
 import {
   getReplayCanvasRecordingDecision,
-  getReplayCanvasContextType,
   isReplayInternalCanvas,
   ReplayCanvasContextType,
   setReplayCanvasContextType
@@ -55,7 +54,9 @@ export function startCanvasCommandCapture(options) {
   var emit = options.emit
   var now = options.now || Date.now
   var onDebug = options.onDebug || function () {}
-  var onMutationDebug = options.onMutationDebug || function () {}
+  var onMutationDebug = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.onMutationDebug || function () {}
+    : undefined
   var snapshotCanvas = options.snapshotCanvas || function () {}
   var defaultCanvasScanOffset = 0
   var getCanvases =
@@ -746,8 +747,20 @@ export function startCanvasCommandCapture(options) {
     }
     var canvas = context.canvas
     var state = getFallbackState(canvas)
-    state.consecutiveRecordRejectedCount = 0
-    state.$rLastRetryableFailureReason = undefined
+    var hasActiveFallbackCycle =
+      state.$rDirty ||
+      state.$rInFlight ||
+      state.$rQueued ||
+      state.retryQueued ||
+      state.$rTimeoutId !== undefined
+    if (!hasActiveFallbackCycle) {
+      // A draw after a settled/exhausted cycle starts a fresh bounded retry
+      // budget. Draws arriving while a snapshot or retry is already pending
+      // merely mark that cycle dirty; resetting here would let a busy canvas
+      // evade the retry cap forever under persistent segment backpressure.
+      state.consecutiveRecordRejectedCount = 0
+      state.$rLastRetryableFailureReason = undefined
+    }
     state.$rDirty = true
     if (!state.$rReason) {
       state.$rReason = reason || 'unsupported_canvas_object'
@@ -770,6 +783,10 @@ export function startCanvasCommandCapture(options) {
   function retryPublishedCanvas(canvas) {
     if (stopped || !canvas) {
       return
+    }
+    var context = known2dContextsByCanvas.get(canvas)
+    if (context && recorder.retryPublishedContext) {
+      recorder.retryPublishedContext(context)
     }
     var state = fallbackStateByCanvas.get(canvas)
     if (
@@ -844,20 +861,22 @@ export function startCanvasCommandCapture(options) {
       requestAnimationFrameImpl: options.requestAnimationFrameImpl,
       cancelAnimationFrameImpl: options.cancelAnimationFrameImpl,
       requestSnapshotFallback: requestFallbackSnapshot,
-      onCommandOverflow: function (overflow) {
-        onMutationDebug({
-          timestamp: now(),
-          canvasId:
-            overflow.context && overflow.context.canvas
-              ? getSerializedNodeId(overflow.context.canvas)
-              : undefined,
-          trigger: 'auto',
-          reason: overflow.reason,
-          approxBytesCount: overflow.pendingApproxBytes,
-          commandCount: 0,
-          pendingContextCount: overflow.pendingContextCount
-        })
-      },
+      onCommandOverflow: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+        ? function (overflow) {
+            onMutationDebug({
+              timestamp: now(),
+              canvasId:
+                overflow.context && overflow.context.canvas
+                  ? getSerializedNodeId(overflow.context.canvas)
+                  : undefined,
+              trigger: 'auto',
+              reason: overflow.reason,
+              approxBytesCount: overflow.pendingApproxBytes,
+              commandCount: 0,
+              pendingContextCount: overflow.pendingContextCount
+            })
+          }
+        : undefined,
       emit: function (event, metadata) {
         var completedAt =
           typeof event.completedAt === 'number'
@@ -867,28 +886,30 @@ export function startCanvasCommandCapture(options) {
               : now()
         var startedAt =
           typeof event.startedAt === 'number' ? event.startedAt : completedAt
-        var commands =
-          event.data && event.data.commands ? event.data.commands : []
-        var approxBytes =
-          metadata && typeof metadata.approxBytesCount === 'number'
-            ? metadata.approxBytesCount
-            : JSON.stringify(commands).length
-        var commandCount =
-          metadata && typeof metadata.commandCount === 'number'
-            ? metadata.commandCount
-            : commands.length
         var recordAccepted = emit(event)
-        var mutationDebug = {
-          timestamp: completedAt,
-          canvasId: event.data && event.data.id,
-          trigger: 'auto',
-          approxBytesCount: approxBytes,
-          commandCount: commandCount
+        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          var commands =
+            event.data && event.data.commands ? event.data.commands : []
+          var approxBytes =
+            metadata && typeof metadata.approxBytesCount === 'number'
+              ? metadata.approxBytesCount
+              : JSON.stringify(commands).length
+          var commandCount =
+            metadata && typeof metadata.commandCount === 'number'
+              ? metadata.commandCount
+              : commands.length
+          var mutationDebug = {
+            timestamp: completedAt,
+            canvasId: event.data && event.data.id,
+            trigger: 'auto',
+            approxBytesCount: approxBytes,
+            commandCount: commandCount
+          }
+          if (recordAccepted === false) {
+            mutationDebug.reason = 'command_record_rejected'
+          }
+          onMutationDebug(mutationDebug)
         }
-        if (recordAccepted === false) {
-          mutationDebug.reason = 'command_record_rejected'
-        }
-        onMutationDebug(mutationDebug)
         onDebug({
           scheduler: 'command_capture',
           status: 'completed',
@@ -938,27 +959,95 @@ export function startCanvasCommandCapture(options) {
     if (
       !descriptor ||
       descriptor.configurable === false ||
+      typeof descriptor.get !== 'function' ||
       typeof descriptor.set !== 'function'
     ) {
       return
     }
     var originalSetter = descriptor.set
     var wrappedSetter = function () {
-      var shouldTrackMutation =
+      var shouldInvalidateSnapshot =
         !stopped && !isReplayInternalCanvas(this)
-      if (
-        shouldTrackMutation &&
-        (known2dContextsByCanvas.has(this) ||
-          getReplayCanvasContextType(this) ===
-            ReplayCanvasContextType.Canvas2D)
-      ) {
+      var context = shouldInvalidateSnapshot
+        ? known2dContextsByCanvas.get(this)
+        : undefined
+      var shouldTrackCommandBarrier =
+        shouldInvalidateSnapshot &&
+        !waitingForSnapshotBaseline &&
+        !!context
+      if (shouldTrackCommandBarrier) {
         try {
-          recorder.flush()
+          var canvasId = getSerializedNodeId(this)
+          shouldTrackCommandBarrier =
+            canvasId !== undefined &&
+            canvasId !== null &&
+            canvasId !== -1
+        } catch (_) {
+          shouldTrackCommandBarrier = false
+        }
+      }
+      if (shouldTrackCommandBarrier) {
+        try {
+          if (recorder.flushContext) {
+            recorder.flushContext(context)
+          } else {
+            recorder.flush()
+          }
+        } catch (_) {}
+      }
+      var previousDimension
+      var hasPreviousDimension = false
+      if (shouldInvalidateSnapshot) {
+        try {
+          previousDimension = descriptor.get.call(this)
+          hasPreviousDimension = true
         } catch (_) {}
       }
       var result = originalSetter.apply(this, arguments)
-      if (shouldTrackMutation) {
+      if (shouldInvalidateSnapshot) {
         markCanvasMutation(this)
+      }
+      if (context && !waitingForSnapshotBaseline) {
+        var hasSameDimension = false
+        if (hasPreviousDimension) {
+          try {
+            hasSameDimension =
+              descriptor.get.call(this) === previousDimension
+          } catch (_) {}
+        }
+        if (
+          (!shouldTrackCommandBarrier || hasSameDimension) &&
+          recorder.forceSnapshotFallback
+        ) {
+          try {
+            recorder.forceSnapshotFallback(
+              context,
+              'canvas_dimension_reset'
+            )
+          } catch (_) {}
+        } else if (
+          shouldTrackCommandBarrier &&
+          options.flushMutations
+        ) {
+          var mutationFlushSucceeded = true
+          try {
+            mutationFlushSucceeded =
+              options.flushMutations(this) !== false
+          } catch (_) {
+            mutationFlushSucceeded = false
+          }
+          if (
+            !mutationFlushSucceeded &&
+            recorder.forceSnapshotFallback
+          ) {
+            try {
+              recorder.forceSnapshotFallback(
+                context,
+                'canvas_dimension_mutation_flush_failed'
+              )
+            } catch (_) {}
+          }
+        }
       }
       return result
     }
@@ -1010,6 +1099,18 @@ export function startCanvasCommandCapture(options) {
       mutationGeneration:
         canvasMutationGenerationByCanvas.get(canvas) || 0
     }
+  }
+
+  function isCanvasSnapshotBaselineTokenCurrent(canvas, token) {
+    return (
+      !stopped &&
+      !!canvas &&
+      !!token &&
+      token.canvas === canvas &&
+      token.generation === generation &&
+      token.mutationGeneration ===
+        (canvasMutationGenerationByCanvas.get(canvas) || 0)
+    )
   }
 
   function markCanvasSnapshotBaseline(canvas, token, reason) {
@@ -1472,6 +1573,8 @@ export function startCanvasCommandCapture(options) {
     },
     $rRetryPublishedCanvas: retryPublishedCanvas,
     createCanvasSnapshotBaselineToken: createCanvasSnapshotBaselineToken,
+    $rIsSnapshotBaselineCurrent:
+      isCanvasSnapshotBaselineTokenCurrent,
     markCanvasSnapshotBaseline: markCanvasSnapshotBaseline
   }
 }

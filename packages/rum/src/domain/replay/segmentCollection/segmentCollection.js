@@ -131,8 +131,10 @@ export function doStartSegmentCollection(
   var unloadingTransportLatched = false
   var unloadingDeliveryBytesRemaining
   var unloadingDeliveryBudgetExhausted = false
+  var unloadingRetryPayloadsDrained = false
   var mandatoryRecoveryPending = false
   var bufferCheckoutPending = false
+  var activeBaselineTransaction
   var state = {
     $rStatus: SegmentCollectionStatus.WaitingForInitialRecord,
     $rNextReason: 'init',
@@ -169,7 +171,7 @@ export function doStartSegmentCollection(
         return
       }
       prepareRecordsBeforePageExit(pageExitEvent)
-      upgradeInFlightSegmentTransportsForPageExit(pageExitEvent.reason)
+      upgradeSegmentTransportsForPageExit(pageExitEvent.reason)
       if (
         state.$rLocked &&
         pageExitEvent.reason === PageExitReason.UNLOADING
@@ -367,7 +369,7 @@ export function doStartSegmentCollection(
     }
   }
 
-  function upgradeInFlightSegmentTransportsForPageExit(flushReason) {
+  function upgradeSegmentTransportsForPageExit(flushReason) {
     if (!isPageExitReason(flushReason)) {
       return
     }
@@ -376,9 +378,24 @@ export function doStartSegmentCollection(
       if (unloadingDeliveryBytesRemaining === undefined) {
         unloadingDeliveryBytesRemaining = SEGMENT_BYTES_LIMIT
       }
+      drainRetryPayloadsForUnload()
     }
     inFlightSegmentFlushes.forEach(function (transport) {
       transport.$rExit = true
+    })
+    // A dependent segment can finish encoding before its Full Snapshot and is
+    // then removed from inFlightSegmentFlushes while waiting for the baseline
+    // generation to be confirmed. Preserve the page-exit transport intent on
+    // those completed results as well. UNLOADING still uses the shared latch
+    // and aggregate delivery budget in sendSegment().
+    Object.keys(pendingSegmentResultsByGeneration).forEach(function (
+      baselineGeneration
+    ) {
+      pendingSegmentResultsByGeneration[baselineGeneration].forEach(function (
+        segmentResult
+      ) {
+        segmentResult.$rExit = true
+      })
     })
   }
 
@@ -388,6 +405,36 @@ export function doStartSegmentCollection(
       return true
     }
     return false
+  }
+
+  function drainRetryPayloadsForUnload() {
+    if (unloadingRetryPayloadsDrained) {
+      return
+    }
+    unloadingRetryPayloadsDrained = true
+    if (typeof httpRequest.$rDrainOnExit !== 'function') {
+      return
+    }
+
+    var deliveryResult = httpRequest.$rDrainOnExit(
+      unloadingDeliveryBytesRemaining
+    )
+    if (
+      deliveryResult &&
+      typeof deliveryResult.$rBytesCount === 'number' &&
+      isFinite(deliveryResult.$rBytesCount) &&
+      deliveryResult.$rBytesCount >= 0
+    ) {
+      unloadingDeliveryBytesRemaining = Math.max(
+        unloadingDeliveryBytesRemaining - deliveryResult.$rBytesCount,
+        0
+      )
+      if (deliveryResult.$rAllPayloadsSent === false) {
+        // Replay segments are ordered. If an older queued payload does not fit,
+        // no current tail may overtake it.
+        unloadingDeliveryBudgetExhausted = true
+      }
+    }
   }
 
   function flushPendingSegmentEncodingsForUnload(flushReason) {
@@ -421,10 +468,10 @@ export function doStartSegmentCollection(
       (segmentResult.$rExit ||
         isPageExitReason(segmentResult.$rReason) ||
         unloadingTransportLatched)
+    var estimatedDeliveryBytesCount =
+      encoderResult.outputBytesCount +
+      SEGMENT_FORM_DATA_ESTIMATED_OVERHEAD
     if (shouldUseExitTransport && unloadingTransportLatched) {
-      var estimatedDeliveryBytesCount =
-        encoderResult.outputBytesCount +
-        SEGMENT_FORM_DATA_ESTIMATED_OVERHEAD
       if (
         unloadingDeliveryBudgetExhausted ||
         estimatedDeliveryBytesCount > unloadingDeliveryBytesRemaining
@@ -436,7 +483,6 @@ export function doStartSegmentCollection(
         )
         return
       }
-      unloadingDeliveryBytesRemaining -= estimatedDeliveryBytesCount
     }
 
     var payload = buildReplayPayload(
@@ -444,9 +490,40 @@ export function doStartSegmentCollection(
       metadata,
       encoderResult.rawBytesCount
     )
+    payload.$rExitBytesCount = estimatedDeliveryBytesCount
 
     if (shouldUseExitTransport) {
-      httpRequest.sendOnExit(payload)
+      var exitDeliveryResult = httpRequest.sendOnExit(
+        payload,
+        unloadingTransportLatched
+          ? unloadingDeliveryBytesRemaining
+          : undefined
+      )
+      if (unloadingTransportLatched) {
+        if (
+          exitDeliveryResult &&
+          typeof exitDeliveryResult.$rBytesCount === 'number' &&
+          isFinite(exitDeliveryResult.$rBytesCount) &&
+          exitDeliveryResult.$rBytesCount >= 0
+        ) {
+          unloadingDeliveryBytesRemaining = Math.max(
+            unloadingDeliveryBytesRemaining -
+              exitDeliveryResult.$rBytesCount,
+            0
+          )
+          if (!exitDeliveryResult.$rCurrentPayloadSent) {
+            unloadingDeliveryBudgetExhausted = true
+            reportDroppedRecord(
+              'page_exit_delivery_budget',
+              estimatedDeliveryBytesCount
+            )
+          }
+        } else {
+          // Preserve compatibility with injected transports that predate the
+          // aggregate-budget result contract.
+          unloadingDeliveryBytesRemaining -= estimatedDeliveryBytesCount
+        }
+      }
     } else {
       httpRequest.send(payload)
     }
@@ -635,22 +712,12 @@ export function doStartSegmentCollection(
       scheduleReplayResetNotification()
       return
     }
-    if (encoderResult.outputBytesCount > SEGMENT_BYTES_LIMIT) {
-      reportDroppedRecord(
-        'encoded_segment_too_large',
-        encoderResult.outputBytesCount
-      )
-      failBaselineGeneration(
-        baselineGeneration,
-        metadata.has_full_snapshot
-          ? 'full_snapshot_segment_too_large'
-          : 'encoded_segment_too_large',
-        metadata.has_full_snapshot
-      )
-      scheduleReplayResetNotification()
-      return
-    }
-
+    // SEGMENT_BYTES_LIMIT is a rolling target and a beacon budget, not a hard
+    // limit for regular fetch requests. The asynchronous deflate result can
+    // legitimately overshoot its estimate. Discarding that finalized segment
+    // would invalidate the replay chain and can force an impossible
+    // replacement snapshot on large pages. sendSegment() applies the bounded
+    // page-exit delivery budget separately.
     const segmentResult = {
       $rMetadata: metadata,
       $rEncoder: encoderResult,
@@ -807,7 +874,8 @@ export function doStartSegmentCollection(
   ) {
     const segmentState = state
     const segment = segmentState.$rSegment
-    return segment.addRecord(
+    var synchronousEncoderError
+    var addResult = segment.addRecord(
       record,
       function (encodedBytesCount, error) {
         if (
@@ -818,19 +886,35 @@ export function doStartSegmentCollection(
           return
         }
         if (error) {
+          synchronousEncoderError = error
+          var isBaselineTransactionFailure =
+            activeBaselineTransaction &&
+            activeBaselineTransaction.$rSegment === segment
           clearTimeout(state.$rExpiration)
           reportDroppedRecord('encoder_error', 0)
           resetState('encoder_error')
           failBaselineGeneration(
             segmentState.$rGeneration,
             'encoder_error',
-            segmentState.$rHasSnapshot
+            segmentState.$rHasSnapshot ||
+              Boolean(isBaselineTransactionFailure)
           )
         } else if (
           encodedBytesCount > SEGMENT_BYTES_LIMIT &&
           !segmentState.$rMandatoryRecoveryHold
         ) {
-          flushSegment('segment_bytes_limit')
+          if (
+            activeBaselineTransaction &&
+            activeBaselineTransaction.$rSegment === segment
+          ) {
+            // Meta + Focus + FullSnapshot is one replay baseline. An encoder
+            // callback may run synchronously while those records are being
+            // added; flushing after Meta would expose an incomplete baseline
+            // and leave the following records without a current segment.
+            activeBaselineTransaction.$rExceededSegmentBytesLimit = true
+          } else {
+            flushSegment('segment_bytes_limit')
+          }
         }
         scheduleReplayResetNotification()
       },
@@ -838,6 +922,13 @@ export function doStartSegmentCollection(
       pendingRawBytesLimit,
       serializedRecordData
     )
+    if (synchronousEncoderError) {
+      return {
+        status: 'encoder_error',
+        error: synchronousEncoderError
+      }
+    }
+    return addResult
   }
 
   function flushCanvasWithRateLimit() {
@@ -922,24 +1013,40 @@ export function doStartSegmentCollection(
   }
 
   function tryAddBaselineTransaction(records, ignoreSegmentBytesLimit) {
-    for (var index = 0; index < records.length; index += 1) {
-      var record = records[index]
-      var addResult = addRecordWithBaselineGeneration(
-        record,
-        backpressuredSerializedRecordData.get(record),
-        ignoreSegmentBytesLimit
-      )
-      if (addResult.$rResult.status !== 'added') {
-        return {
-          $rAddResult: addResult,
-          $rRecord: record
+    var transaction = {
+      $rSegment: state.$rSegment,
+      $rExceededSegmentBytesLimit: false
+    }
+    activeBaselineTransaction = transaction
+    var attempt
+    try {
+      for (var index = 0; index < records.length; index += 1) {
+        var record = records[index]
+        var addResult = addRecordWithBaselineGeneration(
+          record,
+          backpressuredSerializedRecordData.get(record),
+          ignoreSegmentBytesLimit
+        )
+        if (addResult.$rResult.status !== 'added') {
+          attempt = {
+            $rAddResult: addResult,
+            $rRecord: record
+          }
+          break
         }
       }
+      if (!attempt) {
+        attempt = {
+          $rAddResult: addResult,
+          $rRecord: records[records.length - 1]
+        }
+      }
+    } finally {
+      activeBaselineTransaction = undefined
     }
-    return {
-      $rAddResult: addResult,
-      $rRecord: records[records.length - 1]
-    }
+    attempt.$rExceededSegmentBytesLimit =
+      transaction.$rExceededSegmentBytesLimit
+    return attempt
   }
 
   function rejectBaselineTransaction(records, attempt) {
@@ -948,6 +1055,12 @@ export function doStartSegmentCollection(
     records.forEach(function (baselineRecord) {
       backpressuredSerializedRecordData.delete(baselineRecord)
     })
+    if (result.status === 'encoder_error') {
+      mandatoryRecoveryPending = false
+      bufferCheckoutPending = false
+      discardCurrentSegment('baseline_transaction_encoder_error')
+      return rejectRecordAdmission()
+    }
     if (result.status === 'record_too_large') {
       reportDroppedRecord(
         record.type === RecordType.FullSnapshot
@@ -1028,6 +1141,8 @@ export function doStartSegmentCollection(
       bufferCheckoutPending = false
       state.$rMandatoryRecoveryHold = false
       flushSegment('mandatory_full_snapshot')
+    } else if (attempt.$rExceededSegmentBytesLimit) {
+      flushSegment('segment_bytes_limit')
     }
     return true
   }
@@ -1153,6 +1268,17 @@ export function doStartSegmentCollection(
       }
 
       backpressuredSerializedRecordData.delete(record)
+      if (result.status === 'encoder_error') {
+        if (
+          record.type === RecordType.FullSnapshot &&
+          mandatoryRecoveryPending
+        ) {
+          mandatoryRecoveryPending = false
+          bufferCheckoutPending = false
+          discardCurrentSegment('mandatory_recovery_failed')
+        }
+        return rejectRecordAdmission()
+      }
       if (
         record.type === RecordType.FullSnapshot &&
         mandatoryRecoveryPending
@@ -1232,7 +1358,7 @@ export function doStartSegmentCollection(
       bufferCheckoutPending = false
       clearCanvasFlushTimeout()
       clearReplayResetNotificationTimeout()
-      upgradeInFlightSegmentTransportsForPageExit(flushReason)
+      upgradeSegmentTransportsForPageExit(flushReason)
       var stopEvent = isPageExitReason(flushReason)
         ? { reason: flushReason }
         : undefined

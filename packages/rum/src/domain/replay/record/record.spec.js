@@ -6,25 +6,28 @@ import {
   MAX_DEFERRED_RECORD_APPROX_BYTES,
   record
 } from './record'
-import { MUTATION_PROCESS_MIN_DELAY } from './mutationBatch'
 import {
   createMutationAddPublicationToken,
   createMutationTasksController,
+  processMutations,
   registerMutationAddPublicationToken
 } from './mutationObserver'
-import { SerializationContextStatus } from './serialize'
+import {
+  SERIALIZATION_MAX_NODE_COUNT,
+  SerializationContextStatus
+} from './serialize'
 import { setReplayCanvasContextType } from './canvasContext'
 import { SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT } from './shadowRootsController'
 import { createCanvas2DCommandRecorder } from './canvasCommandCapture'
 import { startCanvasCommandCapture as startRealCanvasCommandCapture } from './canvasCommandObserver'
+import { createCanvasObserver as createRealCanvasObserver } from './canvasObserver'
 
 describe('replay/record/record', () => {
   let container
-  const ASYNC_MUTATION_TICK = MUTATION_PROCESS_MIN_DELAY + 20
 
   beforeEach(() => {
-    // Full snapshots intentionally stop at the production 1 MiB watermark.
-    // Keep this suite independent from DOM fixtures leaked by unrelated specs.
+    // Full snapshots keep a 1 MiB per-slice watermark and a bounded total
+    // budget. Keep this suite independent from fixtures leaked by other specs.
     document.body.textContent = ''
     container = document.createElement('div')
     document.body.appendChild(container)
@@ -52,10 +55,13 @@ describe('replay/record/record', () => {
     })
   }
 
-  function waitForAsyncMutationFlush() {
-    return new Promise((resolve) => {
-      setTimeout(resolve, ASYNC_MUTATION_TICK)
-    })
+  async function flushAsyncObservedMutations(recorder) {
+    // Let the native MutationObserver callback enqueue its throttled batch,
+    // then drain that batch explicitly. A fixed delay is inherently flaky:
+    // mutationBatch may wait up to its idle-callback timeout under full-suite
+    // load.
+    await Promise.resolve()
+    recorder.flushMutations()
   }
 
   function expectReplayCompatibleCanvasMutation(event, canvasId, width, height) {
@@ -182,6 +188,346 @@ describe('replay/record/record', () => {
           event.type === RecordType.FullSnapshot
       )
     ).toBeFalse()
+  })
+
+  it('should continue an initial full snapshot past one 50k-node slice', () => {
+    jasmine.clock().install()
+    const emittedRecords = []
+    const maxNodeCounts = []
+    let serializerTaskCount = 0
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => emittedRecords.push(event),
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          const task = {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 128,
+            advance: function (_deadline, maxNodeCount) {
+              maxNodeCounts.push(maxNodeCount)
+              if (
+                maxNodeCount <=
+                SERIALIZATION_MAX_NODE_COUNT + 1
+              ) {
+                task.processedNodeCount = maxNodeCount
+                task.isMaxNodeCountReached = true
+                return false
+              }
+              task.isMaxNodeCountReached = false
+              task.processedNodeCount =
+                SERIALIZATION_MAX_NODE_COUNT + 2
+              task.isComplete = true
+              return true
+            }
+          }
+          return task
+        }
+      })
+
+      expect(
+        emittedRecords.some(
+          (event) => event.type === RecordType.FullSnapshot
+        )
+      ).toBeFalse()
+
+      jasmine.clock().tick(1)
+
+      expect(serializerTaskCount).toBe(2)
+      expect(Math.max.apply(Math, maxNodeCounts)).toBeGreaterThan(
+        SERIALIZATION_MAX_NODE_COUNT + 1
+      )
+      expect(
+        emittedRecords
+          .filter(
+            (event) =>
+              event.type === RecordType.Meta ||
+              event.type === RecordType.Focus ||
+              event.type === RecordType.FullSnapshot
+          )
+          .map((event) => event.type)
+      ).toEqual([RecordType.Meta, RecordType.Focus, RecordType.FullSnapshot])
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should cancel a pending initial full snapshot when stopped', () => {
+    jasmine.clock().install()
+    const emittedRecords = []
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    let advanceCount = 0
+
+    try {
+      const recorder = record({
+        emit: (event) => emittedRecords.push(event),
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        onFullSnapshotFailure,
+        $rCreateFullSnapshotSerializerTask: function () {
+          return {
+            serializedNode: {
+              type: 0,
+              id: 1,
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 128,
+            advance: function () {
+              advanceCount += 1
+              return false
+            }
+          }
+        }
+      })
+
+      expect(advanceCount).toBe(1)
+      recorder.stop()
+      jasmine.clock().tick(1)
+
+      expect(advanceCount).toBe(1)
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+      expect(
+        emittedRecords.some(
+          (event) => event.type === RecordType.FullSnapshot
+        )
+      ).toBeFalse()
+    } finally {
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should use chunked watermarks for a subsequent full snapshot', () => {
+    jasmine.clock().install()
+    const emittedRecords = []
+    const maxNodeCounts = []
+    let serializerTaskCount = 0
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => emittedRecords.push(event),
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          const task = {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 128,
+            advance: function (_deadline, maxNodeCount) {
+              maxNodeCounts.push(maxNodeCount)
+              if (serializerTaskCount === 1) {
+                return true
+              }
+              if (
+                maxNodeCount <=
+                SERIALIZATION_MAX_NODE_COUNT + 1
+              ) {
+                task.processedNodeCount = maxNodeCount
+                task.isMaxNodeCountReached = true
+                return false
+              }
+              task.isMaxNodeCountReached = false
+              return true
+            }
+          }
+          return task
+        }
+      })
+      emittedRecords.length = 0
+
+      recorder.takeSubsequentFullSnapshot(1236)
+      jasmine.clock().tick(1)
+
+      expect(Math.max.apply(Math, maxNodeCounts)).toBeGreaterThan(
+        SERIALIZATION_MAX_NODE_COUNT + 1
+      )
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.FullSnapshot &&
+            event.timestamp === 1236
+        )
+      ).toBeTrue()
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should reserve segment space above the full snapshot serializer cap', () => {
+    jasmine.clock().install()
+    const maxApproxBytes = []
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    let serializerTaskCount = 0
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        onFullSnapshotFailure,
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          const task = {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 1,
+            advance: function (_deadline, _maxNodeCount, maxBytes) {
+              if (serializerTaskCount === 1) {
+                return true
+              }
+              maxApproxBytes.push(maxBytes)
+              task.approxBytes = maxBytes
+              task.isMaxApproxBytesReached = true
+              return false
+            }
+          }
+          return task
+        }
+      })
+
+      recorder.takeSubsequentFullSnapshot(1237)
+      jasmine.clock().tick(1)
+
+      expect(Math.max.apply(Math, maxApproxBytes)).toBeLessThanOrEqual(
+        4 * 1024 * 1024 - 64 * 1024
+      )
+      expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+        'full_snapshot_serialization_watermark'
+      )
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should restart an initial snapshot after ignored input state changes', () => {
+    jasmine.clock().install()
+    const checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    const scroller = document.createElement('div')
+    container.appendChild(checkbox)
+    container.appendChild(scroller)
+    const emittedRecords = []
+    let observerOptions
+    let serializerTaskCount = 0
+    let staleScrollPositionRetained
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => emittedRecords.push(event),
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        initObservers: function (options) {
+          observerOptions = options
+          return {
+            stop: function () {},
+            flush: function () {},
+            reset: function () {}
+          }
+        },
+        $rCreateFullSnapshotSerializerTask: function (
+          _document,
+          serializerOptions
+        ) {
+          serializerTaskCount += 1
+          serializerOptions.onSerializedNode(checkbox, container)
+          const scrollPositions =
+            serializerOptions.serializationContext.elementsScrollPositions
+          if (serializerTaskCount < 3) {
+            scrollPositions.set(scroller, {
+              scrollLeft: 0,
+              scrollTop: 40
+            })
+          } else {
+            staleScrollPositionRetained = scrollPositions.has(scroller)
+          }
+          return {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              childNodes: [
+                {
+                  type: 2,
+                  id: 10,
+                  tagName: 'input',
+                  attributes: {
+                    checked: checkbox.checked
+                  },
+                  childNodes: []
+                }
+              ]
+            },
+            processedNodeCount: 1,
+            approxBytes: 128,
+            advance: function () {
+              return serializerTaskCount >= 3
+            }
+          }
+        }
+      })
+
+      checkbox.checked = true
+      expect(observerOptions.isNodeIgnored(checkbox)).toBeTrue()
+      jasmine.clock().tick(1)
+
+      expect(serializerTaskCount).toBe(3)
+      expect(staleScrollPositionRetained).toBeFalse()
+      const fullSnapshot = emittedRecords.find(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(
+        fullSnapshot.data.node.childNodes[0].attributes.checked
+      ).toBeTrue()
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should not publish a subsequent full snapshot rejected by the segment layer', () => {
@@ -2170,6 +2516,157 @@ describe('replay/record/record', () => {
     }
   })
 
+  it('should synchronously publish a bounded baseline when mutation churn never becomes quiet', () => {
+    const emittedRecords = []
+    const onFullSnapshotFailure = jasmine.createSpy('onFullSnapshotFailure')
+    let observerOptions
+    let serializerTaskCount = 0
+    let completeNextTask = false
+    let pendingAdvanceCount = 0
+    let consumeAdvanceDeadline = false
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      onFullSnapshotFailure,
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          stop: function () {},
+          flush: function () {},
+          reset: function () {}
+        }
+      },
+      $rCreateFullSnapshotSerializerTask: function () {
+        serializerTaskCount += 1
+        return {
+          serializedNode: {
+            type: 0,
+            id: serializerTaskCount,
+            childNodes: []
+          },
+          processedNodeCount: 1,
+          approxBytes: 128,
+          advance: function (deadline) {
+            if (consumeAdvanceDeadline) {
+              performanceTime = deadline
+            }
+            if (serializerTaskCount === 1 || completeNextTask) {
+              return true
+            }
+            pendingAdvanceCount += 1
+            return false
+          }
+        }
+      }
+    })
+    emittedRecords.length = 0
+
+    let nextTimerId = 0
+    const scheduledTimers = []
+    spyOn(window, 'setTimeout').and.callFake((callback, delay) => {
+      const timer = {
+        callback,
+        cancelled: false,
+        delay,
+        id: ++nextTimerId
+      }
+      scheduledTimers.push(timer)
+      return timer.id
+    })
+    spyOn(window, 'clearTimeout').and.callFake((timerId) => {
+      const timer = scheduledTimers.find((entry) => entry.id === timerId)
+      if (timer) {
+        timer.cancelled = true
+      }
+    })
+    let performanceTime = 0
+    spyOn(performance, 'now').and.callFake(() => performanceTime)
+
+    function runNextTimerWithDelay(delay) {
+      const timer = scheduledTimers.find(
+        (entry) => !entry.cancelled && entry.delay === delay
+      )
+      expect(timer).toBeDefined()
+      timer.cancelled = true
+      timer.callback()
+    }
+
+    try {
+      recorder.scheduleSubsequentFullSnapshot(5050, false, true)
+      for (let requestIndex = 0; requestIndex < 4; requestIndex += 1) {
+        recorder.scheduleSubsequentFullSnapshot(
+          5051 + requestIndex,
+          false,
+          true
+        )
+        runNextTimerWithDelay(0)
+      }
+
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+      expect(
+        scheduledTimers.some(
+          (timer) => !timer.cancelled && timer.delay === 250
+        )
+      ).toBeTrue()
+
+      for (let churnIndex = 0; churnIndex < 4; churnIndex += 1) {
+        observerOptions.mutationActivityCb(container)
+        performanceTime += 251
+        if (churnIndex === 3) {
+          completeNextTask = true
+        }
+        runNextTimerWithDelay(250)
+      }
+
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+      expect(serializerTaskCount).toBe(6)
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.FullSnapshot &&
+            event.timestamp === 5054
+        )
+      ).toBeTrue()
+
+      completeNextTask = false
+      pendingAdvanceCount = 0
+      recorder.scheduleSubsequentFullSnapshot(5060, false, true)
+      for (let requestIndex = 0; requestIndex < 4; requestIndex += 1) {
+        recorder.scheduleSubsequentFullSnapshot(
+          5061 + requestIndex,
+          false,
+          true
+        )
+        runNextTimerWithDelay(0)
+      }
+      for (let churnIndex = 0; churnIndex < 4; churnIndex += 1) {
+        observerOptions.mutationActivityCb(container)
+        performanceTime += 251
+        let synchronousStartedAt
+        if (churnIndex === 3) {
+          consumeAdvanceDeadline = true
+          synchronousStartedAt = performanceTime
+        }
+        runNextTimerWithDelay(250)
+        if (churnIndex === 3) {
+          // The non-yielding fallback gets three 4 ms slices and may not
+          // consume more than the single-frame 12 ms budget.
+          expect(performanceTime - synchronousStartedAt).toBe(12)
+        }
+      }
+
+      expect(pendingAdvanceCount).toBe(3)
+      expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+        'full_snapshot_serialization_timeout'
+      )
+    } finally {
+      recorder.stop()
+    }
+  })
+
   it('should still restart a pending full snapshot after ordinary DOM mutation activity', () => {
     jasmine.clock().install()
     const emittedRecords = []
@@ -3682,6 +4179,174 @@ describe('replay/record/record', () => {
     recorder.stop()
   })
 
+  it('should keep a later remove separate from an already paired cross-callback move', () => {
+    const host = document.createElement('div')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const child = document.createElement('span')
+    shadowRoot.appendChild(child)
+    container.appendChild(host)
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    emittedRecords.length = 0
+
+    child.remove()
+    expect(recorder.shadowRootsController.flush()).toBeTrue()
+    shadowRoot.appendChild(child)
+    expect(recorder.shadowRootsController.flush()).toBeTrue()
+    child.remove()
+    expect(recorder.shadowRootsController.flush()).toBeTrue()
+    recorder.flushMutations()
+
+    const mutationSnapshots = emittedRecords.filter(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation
+    )
+    expect(mutationSnapshots.length).toBe(2)
+    expect(mutationSnapshots[0].data.removes.length).toBe(1)
+    expect(mutationSnapshots[0].data.adds).toEqual([
+      jasmine.objectContaining({
+        node: jasmine.objectContaining({
+          id: mutationSnapshots[0].data.removes[0].id
+        })
+      })
+    ])
+    expect(mutationSnapshots[1].data.adds).toEqual([])
+    expect(mutationSnapshots[1].data.removes).toEqual([
+      jasmine.objectContaining({
+        id: mutationSnapshots[0].data.removes[0].id
+      })
+    ])
+    expect(recorder.getSerializedNodeIdForDebug(child)).toBeUndefined()
+
+    recorder.stop()
+  })
+
+  it('should atomically merge sibling moves sharing one add token across callbacks', () => {
+    const sourceParentA = document.createElement('section')
+    const sourceParentB = document.createElement('section')
+    const destination = document.createElement('section')
+    const movedA = document.createElement('span')
+    const movedB = document.createElement('span')
+    movedA.textContent = 'a'
+    movedB.textContent = 'b'
+    sourceParentA.appendChild(movedA)
+    sourceParentB.appendChild(movedB)
+    container.appendChild(sourceParentA)
+    container.appendChild(sourceParentB)
+    container.appendChild(destination)
+
+    const configuration = {
+      defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+    }
+    const emittedRecords = []
+    let observerOptions
+    let mutationTasksController
+    const recorder = record({
+      emit: (event) => {
+        emittedRecords.push(event)
+        return true
+      },
+      configuration,
+      lifeCycle: createLifeCycle(),
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          flush: function () {},
+          reset: function () {
+            if (mutationTasksController) {
+              mutationTasksController.reset()
+            }
+          },
+          stop: function () {}
+        }
+      }
+    })
+    emittedRecords.length = 0
+    mutationTasksController = createMutationTasksController(
+      observerOptions.mutationCb,
+      configuration,
+      observerOptions.shadowRootsController,
+      observerOptions.mutationPerfCb,
+      observerOptions.mutationOverflowCb,
+      observerOptions.mutationNodeSerializationCb,
+      observerOptions.isNodeIgnored
+    )
+
+    const wrapper = document.createElement('div')
+    wrapper.appendChild(movedA)
+    wrapper.appendChild(movedB)
+    destination.appendChild(wrapper)
+    const processChildListMutation = function (
+      target,
+      addedNodes,
+      removedNodes
+    ) {
+      processMutations(
+        [
+          {
+            type: 'childList',
+            target,
+            addedNodes,
+            removedNodes
+          }
+        ],
+        observerOptions.mutationCb,
+        configuration,
+        observerOptions.shadowRootsController,
+        mutationTasksController,
+        function () {
+          return false
+        },
+        function () {
+          return true
+        }
+      )
+      expect(mutationTasksController.flush()).toBeTrue()
+    }
+
+    try {
+      // One serialized add root gives both moved descendants the same
+      // publication token. Its two source observers report removals later and
+      // in separate callbacks.
+      processChildListMutation(destination, [wrapper], [])
+      processChildListMutation(sourceParentA, [], [movedA])
+      processChildListMutation(sourceParentB, [], [movedB])
+      recorder.flushMutations()
+
+      const mutationSnapshots = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation
+      )
+      expect(mutationSnapshots.length).toBe(1)
+      expect(mutationSnapshots[0].data.adds.length).toBe(1)
+      expect(mutationSnapshots[0].data.removes).toEqual([
+        jasmine.objectContaining({
+          parentId: recorder.getSerializedNodeIdForDebug(sourceParentA)
+        }),
+        jasmine.objectContaining({
+          parentId: recorder.getSerializedNodeIdForDebug(sourceParentB)
+        })
+      ])
+      expect(
+        mutationSnapshots[0].data.removes.map((remove) => remove.id)
+      ).toEqual([
+        recorder.getSerializedNodeIdForDebug(movedA),
+        recorder.getSerializedNodeIdForDebug(movedB)
+      ])
+    } finally {
+      mutationTasksController.stop()
+      recorder.stop()
+    }
+  })
+
   it('should emit a cross-shadow-root move atomically within the merge window', () => {
     const sourceHost = document.createElement('div')
     const sourceRoot = sourceHost.attachShadow({ mode: 'open' })
@@ -3875,7 +4540,7 @@ describe('replay/record/record', () => {
     emittedRecords.length = 0
 
     destinationRoot.appendChild(child)
-    await waitForAsyncMutationFlush()
+    await flushAsyncObservedMutations(recorder)
 
     const moveSnapshots = emittedRecords.filter(
       (event) =>
@@ -3886,7 +4551,7 @@ describe('replay/record/record', () => {
       recorder.getSerializedNodeIdForDebug(child)
     emittedRecords.length = 0
     child.setAttribute('data-after-async-light-dom-move', 'captured')
-    await waitForAsyncMutationFlush()
+    await flushAsyncObservedMutations(recorder)
     const capturedFollowUpAttribute = emittedRecords.some(
       (event) =>
         event.type === RecordType.IncrementalSnapshot &&
@@ -4268,6 +4933,84 @@ describe('replay/record/record', () => {
       expect(recorder.getSerializedNodeIdForDebug(laterChild)).toEqual(
         jasmine.any(Number)
       )
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should coalesce an unattempted pure-add tail beyond the admission count limit', () => {
+    spyOn(performance, 'now').and.returnValue(0)
+    const attemptedMutations = []
+    const admittedMutations = []
+    const addedChildren = []
+    let admissionBlocked = true
+    let subsequentFullSnapshotCount = 0
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (!captureEmits) {
+          return true
+        }
+        if (
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation
+        ) {
+          attemptedMutations.push(event)
+          if (admissionBlocked) {
+            return false
+          }
+          admittedMutations.push(event)
+        } else if (event.type === RecordType.FullSnapshot) {
+          subsequentFullSnapshotCount += 1
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    try {
+      for (let index = 0; index < 600; index += 1) {
+        const child = document.createElement('div')
+        child.setAttribute('data-admission-index', String(index))
+        container.appendChild(child)
+        addedChildren.push(child)
+        recorder.flushMutations()
+      }
+
+      expect(attemptedMutations.length).toBe(1)
+      expect(subsequentFullSnapshotCount).toBe(0)
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+      expect(
+        recorder.getSerializedNodeIdForDebug(addedChildren[0])
+      ).toBeUndefined()
+      expect(
+        recorder.getSerializedNodeIdForDebug(
+          addedChildren[addedChildren.length - 1]
+        )
+      ).toBeUndefined()
+
+      admissionBlocked = false
+      recorder.flushMutations()
+
+      expect(admittedMutations.length).toBe(2)
+      expect(
+        admittedMutations.reduce(
+          (count, event) => count + event.data.adds.length,
+          0
+        )
+      ).toBe(addedChildren.length)
+      addedChildren.forEach((child) => {
+        expect(recorder.getSerializedNodeIdForDebug(child)).toEqual(
+          jasmine.any(Number)
+        )
+      })
+      expect(subsequentFullSnapshotCount).toBe(0)
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
     } finally {
       recorder.stop()
     }
@@ -4806,7 +5549,127 @@ describe('replay/record/record', () => {
     expectReplayCompatibleCanvasMutation(canvasMutation, jasmine.any(Number), 20, 10)
   })
 
-  it('should publish a queued canvas add before retrying its static bitmap', async () => {
+  it('should not let a bitmap overtake a backpressured dimension mutation', async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 20
+    canvas.height = 10
+    container.appendChild(canvas)
+    const emittedRecords = []
+    let captureEmits = false
+    let admissionBlocked = true
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          admissionBlocked &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation
+        ) {
+          return false
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasQuality: 0.4,
+        replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxEncodedBytes: 40000,
+        replayCanvasMaxConcurrentEncodes: 1
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+    canvas.width = 40
+
+    try {
+      expect(await recorder.snapshotCanvas(canvas)).toEqual({
+        ok: false,
+        reason: 'dimension_mutation_flush_failed'
+      })
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.CanvasMutation
+        )
+      ).toBeFalse()
+
+      admissionBlocked = false
+      recorder.flushMutations()
+      expect(await recorder.snapshotCanvas(canvas)).toEqual({ ok: true })
+
+      const dimensionMutationIndex = emittedRecords.findIndex(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          event.data.attributes.some(
+            (attribute) => attribute.attributes.width === '40'
+          )
+      )
+      const bitmapIndex = emittedRecords.findIndex(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.CanvasMutation
+      )
+      expect(dimensionMutationIndex).toBeGreaterThanOrEqual(0)
+      expect(bitmapIndex).toBeGreaterThan(dimensionMutationIndex)
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should use an atomic command-capture bitmap for a public manual snapshot', async () => {
+    const canvas = document.createElement('canvas')
+    container.appendChild(canvas)
+    const snapshot = jasmine
+      .createSpy('snapshot')
+      .and.returnValue(Promise.resolve({ ok: true }))
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function () {
+        return {
+          snapshot: snapshot,
+          reset: jasmine.createSpy('resetCanvasObserver'),
+          stop: jasmine.createSpy('stopCanvasObserver')
+        }
+      },
+      startCanvasCommandCapture: function () {
+        return {
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy('scanExistingCanvases'),
+          stop: jasmine.createSpy('stopCanvasCommandCapture')
+        }
+      }
+    })
+    await flushPromises()
+    snapshot.calls.reset()
+
+    expect(await recorder.snapshotCanvas(canvas)).toEqual({ ok: true })
+    expect(snapshot).toHaveBeenCalledOnceWith(
+      canvas,
+      jasmine.objectContaining({
+        trigger: 'manual',
+        scheduler: 'command_capture'
+      })
+    )
+    recorder.stop()
+  })
+
+  it('should publish a queued canvas add before emitting its retained commands', () => {
     const emittedRecords = []
     const scheduledMicrotasks = []
     const scheduledTimers = []
@@ -4891,18 +5754,21 @@ describe('replay/record/record', () => {
     context.fillRect(0, 0, 5, 5)
 
     scheduledFrameCallback()
-    scheduledMicrotasks.shift()()
-    await flushPromises()
 
     expect(canvasSnapshot).not.toHaveBeenCalled()
-    expect(scheduledTimers.length).toBe(1)
-    expect(scheduledTimers[0].delay).toBe(120)
+    expect(scheduledMicrotasks).toEqual([])
+    expect(scheduledTimers).toEqual([])
+    expect(
+      emittedRecords.some(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.CanvasMutation
+      )
+    ).toBe(false)
 
     recorder.flushMutations()
-    scheduledMicrotasks.shift()()
-    await flushPromises()
 
-    expect(canvasSnapshot).toHaveBeenCalledTimes(1)
+    expect(canvasSnapshot).not.toHaveBeenCalled()
     const addIndex = emittedRecords.findIndex(
       (event) =>
         event.type === RecordType.IncrementalSnapshot &&
@@ -4918,6 +5784,374 @@ describe('replay/record/record', () => {
     )
     expect(addIndex).toBeGreaterThanOrEqual(0)
     expect(canvasMutationIndex).toBeGreaterThan(addIndex)
+    expect(emittedRecords[canvasMutationIndex].data.encodedBytesCount).toBeUndefined()
+    expect(emittedRecords[canvasMutationIndex].data.commands).toEqual([
+      jasmine.objectContaining({
+        property: 'fillRect',
+        args: [0, 0, 5, 5]
+      })
+    ])
+    recorder.stop()
+  })
+
+  it('should emit a reflected canvas resize mutation before later commands', () => {
+    const emittedRecords = []
+    const scheduledFrameCallbacks = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      startCanvasCommandCapture: function (options) {
+        return startRealCanvasCommandCapture(
+          Object.assign({}, options, {
+            requestAnimationFrameImpl: function (callback) {
+              scheduledFrameCallbacks.push(callback)
+              return scheduledFrameCallbacks.length
+            },
+            cancelAnimationFrameImpl: function () {}
+          })
+        )
+      }
+    })
+    const canvas = document.createElement('canvas')
+    container.appendChild(canvas)
+    recorder.flushMutations()
+    const context = canvas.getContext('2d')
+    const fullShadowRootFlush = spyOn(
+      recorder.shadowRootsController,
+      'flush'
+    ).and.callThrough()
+    emittedRecords.length = 0
+
+    context.fillRect(0, 0, 5, 5)
+    canvas.width = 640
+    context.fillRect(0, 0, 10, 10)
+    expect(scheduledFrameCallbacks.length).toBe(1)
+    scheduledFrameCallbacks.shift()()
+
+    const resizeMutationIndex = emittedRecords.findIndex(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation &&
+        event.data.attributes.some(
+          (attributeMutation) =>
+            attributeMutation.attributes.width === '640'
+        )
+    )
+    const preResizeCommandIndex = emittedRecords.findIndex(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation &&
+        event.data.commands.some(
+          (command) =>
+            command.property === 'fillRect' &&
+            command.args[2] === 5
+        )
+    )
+    const postResizeCommandIndex = emittedRecords.findIndex(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation &&
+        event.data.commands.some(
+          (command) =>
+            command.property === 'fillRect' &&
+            command.args[2] === 10
+        )
+    )
+
+    expect(preResizeCommandIndex).toBeGreaterThanOrEqual(0)
+    expect(resizeMutationIndex).toBeGreaterThanOrEqual(0)
+    expect(resizeMutationIndex).toBeGreaterThan(preResizeCommandIndex)
+    expect(postResizeCommandIndex).toBeGreaterThan(resizeMutationIndex)
+    expect(fullShadowRootFlush).not.toHaveBeenCalled()
+    recorder.stop()
+  })
+
+  it('should preserve an active 2d same-dimension reset with an authoritative bitmap', async () => {
+    const emittedRecords = []
+    const scheduledFrameCallbacks = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        return createRealCanvasObserver(
+          Object.assign({}, options, {
+            encodeBridge: {
+              encode: function (targetCanvas) {
+                return Promise.resolve({
+                  dataUrl: 'data:image/webp;base64,QUJD',
+                  width: targetCanvas.width,
+                  height: targetCanvas.height
+                })
+              },
+              reset: function () {},
+              stop: function () {}
+            }
+          })
+        )
+      },
+      startCanvasCommandCapture: function (options) {
+        return startRealCanvasCommandCapture(
+          Object.assign({}, options, {
+            requestAnimationFrameImpl: function (callback) {
+              scheduledFrameCallbacks.push(callback)
+              return scheduledFrameCallbacks.length
+            },
+            cancelAnimationFrameImpl: function () {}
+          })
+        )
+      }
+    })
+    const canvas = document.createElement('canvas')
+    canvas.width = 320
+    container.appendChild(canvas)
+    recorder.flushMutations()
+    const context = canvas.getContext('2d')
+    emittedRecords.length = 0
+
+    context.fillRect(0, 0, 4, 4)
+    canvas.width = canvas.width
+    context.fillRect(0, 0, 9, 9)
+    expect(scheduledFrameCallbacks.length).toBe(1)
+    scheduledFrameCallbacks.shift()()
+    await flushPromises()
+    await flushPromises()
+
+    const preResetCommandIndex = emittedRecords.findIndex(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation &&
+        event.data.commands.some(
+          (command) =>
+            command.property === 'fillRect' &&
+            command.args[2] === 4
+        )
+    )
+    const resetBitmapIndex = emittedRecords.findIndex(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation &&
+        typeof event.data.encodedBytesCount === 'number'
+    )
+    const postResetCommandIndex = emittedRecords.findIndex(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation &&
+        event.data.commands.some(
+          (command) =>
+            command.property === 'fillRect' &&
+            command.args[2] === 9
+        )
+    )
+
+    expect(preResetCommandIndex).toBeGreaterThanOrEqual(0)
+    expect(resetBitmapIndex).toBeGreaterThan(preResetCommandIndex)
+    expect(postResetCommandIndex).toBe(-1)
+    expect(emittedRecords[resetBitmapIndex].data.commands).toEqual(
+      jasmine.arrayContaining([
+        jasmine.objectContaining({ property: 'reset' }),
+        jasmine.objectContaining({
+          property: 'clearRect',
+          args: [0, 0, canvas.width, canvas.height]
+        }),
+        jasmine.objectContaining({
+          property: 'drawImage'
+        })
+      ])
+    )
+    recorder.stop()
+  })
+
+  it('should not globally flush dimension mutations for unpublished 2d or active WebGL canvases', () => {
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle()
+    })
+    const unpublishedCanvas = document.createElement('canvas')
+    container.appendChild(unpublishedCanvas)
+    unpublishedCanvas.getContext('2d')
+    emittedRecords.length = 0
+
+    unpublishedCanvas.width = 640
+
+    expect(
+      emittedRecords.some(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          event.data.adds.some(
+            (add) =>
+              add.node &&
+              add.node.tagName === 'canvas'
+          )
+      )
+    ).toBe(false)
+
+    recorder.flushMutations()
+    expect(
+      emittedRecords.some(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          event.data.adds.some(
+            (add) =>
+              add.node &&
+              add.node.tagName === 'canvas'
+          )
+      )
+    ).toBe(true)
+
+    const webglCanvas = document.createElement('canvas')
+    setReplayCanvasContextType(
+      webglCanvas,
+      'webgl'
+    )
+    container.appendChild(webglCanvas)
+    recorder.flushMutations()
+    const pendingNode = document.createElement('div')
+    pendingNode.setAttribute('data-pending-after-webgl-resize', 'true')
+    container.appendChild(pendingNode)
+    emittedRecords.length = 0
+
+    webglCanvas.width = 640
+
+    expect(
+      emittedRecords.some(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          event.data.adds.some(
+            (add) =>
+              add.node &&
+              add.node.attributes &&
+              add.node.attributes[
+                'data-pending-after-webgl-resize'
+              ] === 'true'
+          )
+      )
+    ).toBe(false)
+
+    recorder.flushMutations()
+    expect(
+      emittedRecords.some(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          event.data.adds.some(
+            (add) =>
+              add.node &&
+              add.node.attributes &&
+              add.node.attributes[
+                'data-pending-after-webgl-resize'
+              ] === 'true'
+          )
+      )
+    ).toBe(true)
+    recorder.stop()
+  })
+
+  it('should cancel a deferred bitmap when the canvas is drawn before encode completes', async () => {
+    const emittedRecords = []
+    let releaseEncode
+    const encodePromise = new Promise((resolve) => {
+      releaseEncode = resolve
+    })
+    let scheduledFrameCallback
+    const originalIsCancelled = jasmine
+      .createSpy('originalIsCancelled')
+      .and.returnValue(false)
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all',
+        replayCanvasMaxEncodedBytes: 40000
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        return createRealCanvasObserver(
+          Object.assign({}, options, {
+            encodeBridge: {
+              encode: function () {
+                return encodePromise
+              },
+              reset: function () {},
+              stop: function () {}
+            }
+          })
+        )
+      },
+      startCanvasCommandCapture: function (options) {
+        const commandCapture = startRealCanvasCommandCapture(
+          Object.assign({}, options, {
+            requestAnimationFrameImpl: function (callback) {
+              scheduledFrameCallback = callback
+              return 1
+            },
+            cancelAnimationFrameImpl: function () {}
+          })
+        )
+        const isSnapshotBaselineCurrent =
+          commandCapture.$rIsSnapshotBaselineCurrent
+        commandCapture.$rIsSnapshotBaselineCurrent = function (canvas, token) {
+          if (!isSnapshotBaselineCurrent(canvas, token)) {
+            throw new Error('stale canvas baseline')
+          }
+          return true
+        }
+        return commandCapture
+      }
+    })
+    const canvas = document.createElement('canvas')
+    container.appendChild(canvas)
+    recorder.flushMutations()
+    const context = canvas.getContext('2d')
+    emittedRecords.length = 0
+
+    const snapshotPromise = recorder.snapshotCanvas(canvas, {
+      $rIsCancelled: originalIsCancelled
+    })
+    context.fillRect(0, 0, 10, 10)
+    expect(scheduledFrameCallback).toEqual(jasmine.any(Function))
+    releaseEncode({
+      dataUrl: 'data:image/webp;base64,AAAA',
+      width: canvas.width,
+      height: canvas.height
+    })
+
+    expect(await snapshotPromise).toEqual({
+      ok: false,
+      reason: 'baseline_timeout'
+    })
+    expect(originalIsCancelled).toHaveBeenCalled()
+    expect(
+      emittedRecords.some(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.CanvasMutation &&
+          typeof event.data.encodedBytesCount === 'number'
+      )
+    ).toBeFalse()
     recorder.stop()
   })
 
@@ -4973,10 +6207,14 @@ describe('replay/record/record', () => {
       }
     })
 
-    expect(snapshot).toHaveBeenCalledOnceWith(canvas, {
-      trigger: 'auto',
-      scheduler: 'full_snapshot_baseline'
-    })
+    expect(snapshot).toHaveBeenCalledOnceWith(
+      canvas,
+      jasmine.objectContaining({
+        trigger: 'auto',
+        scheduler: 'full_snapshot_baseline',
+        $rIsCancelled: jasmine.any(Function)
+      })
+    )
     expect(getContext).not.toHaveBeenCalled()
     await flushPromises()
     expect(createCanvasSnapshotBaselineToken).toHaveBeenCalledWith(canvas)
@@ -5025,10 +6263,14 @@ describe('replay/record/record', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(snapshot).toHaveBeenCalledOnceWith(canvas, {
-      trigger: 'auto',
-      scheduler: 'full_snapshot_baseline'
-    })
+    expect(snapshot).toHaveBeenCalledOnceWith(
+      canvas,
+      jasmine.objectContaining({
+        trigger: 'auto',
+        scheduler: 'full_snapshot_baseline',
+        $rIsCancelled: jasmine.any(Function)
+      })
+    )
     recorder.stop()
   })
 
@@ -5092,6 +6334,80 @@ describe('replay/record/record', () => {
     expect(webglGetContext).not.toHaveBeenCalled()
     expect(unknownGetContext).not.toHaveBeenCalled()
     recorder.stop()
+  })
+
+  it('should continue the canvas baseline queue after a hung canvas times out', async () => {
+    jasmine.clock().install()
+    try {
+      const firstCanvas = document.createElement('canvas')
+      const secondCanvas = document.createElement('canvas')
+      container.appendChild(firstCanvas)
+      container.appendChild(secondCanvas)
+      let firstSnapshotOptions
+      const snapshot = jasmine
+        .createSpy('snapshot')
+        .and.callFake(function (canvas, snapshotOptions) {
+          if (canvas === firstCanvas) {
+            firstSnapshotOptions = snapshotOptions
+            return new Promise(function () {})
+          }
+          return Promise.resolve({ ok: true })
+        })
+      let resolveCanvasScan
+      const canvasScanCompleted = new Promise(function (resolve) {
+        resolveCanvasScan = resolve
+      })
+      const scanExistingCanvases = jasmine
+        .createSpy('scanExistingCanvases')
+        .and.callFake(resolveCanvasScan)
+
+      const recorder = record({
+        emit: jasmine.createSpy('emit'),
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+          replayCanvasEnabled: true,
+          replayCanvasMode: 'auto',
+          replayCanvasSampling: 'all'
+        },
+        lifeCycle: createLifeCycle(),
+        createCanvasObserver: function () {
+          return {
+            snapshot: snapshot,
+            stop: jasmine.createSpy('stopCanvasObserver'),
+            reset: jasmine.createSpy('resetCanvasObserver')
+          }
+        },
+        startCanvasCommandCapture: function () {
+          return {
+            stop: jasmine.createSpy('stopCanvasCommandCapture'),
+            reset: jasmine.createSpy('resetCanvasCommandCapture'),
+            scanExistingCanvases: scanExistingCanvases
+          }
+        },
+        startCanvasWebGLSnapshotObserver: function () {
+          return {
+            stop: jasmine.createSpy('stopCanvasWebGLSnapshotObserver'),
+            reset: jasmine.createSpy('resetCanvasWebGLSnapshotObserver')
+          }
+        }
+      })
+
+      expect(snapshot).toHaveBeenCalledTimes(1)
+      expect(snapshot.calls.argsFor(0)[0]).toBe(firstCanvas)
+
+      jasmine.clock().tick(1000)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(firstSnapshotOptions.$rIsCancelled()).toBeTrue()
+      expect(snapshot).toHaveBeenCalledTimes(2)
+      expect(snapshot.calls.argsFor(1)[0]).toBe(secondCanvas)
+
+      await canvasScanCompleted
+      expect(scanExistingCanvases).toHaveBeenCalledTimes(1)
+      recorder.stop()
+    } finally {
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should cancel an old serial baseline queue and start one clean baseline after a subsequent full snapshot reset', async () => {
@@ -5271,6 +6587,28 @@ describe('replay/record/record', () => {
     )
     expect(canvasMutation).toBeDefined()
     expectReplayCompatibleCanvasMutation(canvasMutation, jasmine.any(Number), 20, 10)
+
+    emittedRecords.length = 0
+    canvas.width = 40
+    canvas.getContext('2d').fillRect(0, 0, 40, canvas.height)
+    expect(await loopOptions.snapshotCanvas(canvas)).toEqual({ ok: true })
+    const resizeMutationIndex = emittedRecords.findIndex(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation &&
+        event.data.attributes.some(
+          (attributeMutation) =>
+            attributeMutation.attributes.width === '40'
+        )
+    )
+    const resizedBitmapIndex = emittedRecords.findIndex(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation &&
+        typeof event.data.encodedBytesCount === 'number'
+    )
+    expect(resizeMutationIndex).toBeGreaterThanOrEqual(0)
+    expect(resizedBitmapIndex).toBeGreaterThan(resizeMutationIndex)
 
     recorder.stop()
     expect(loopOptions.getCanvases()).not.toContain(canvas)
@@ -5574,6 +6912,7 @@ describe('replay/record/record', () => {
     const startCanvasCommandCapture = jasmine
       .createSpy('startCanvasCommandCapture')
       .and.callFake(function (options) {
+        expect(() => options.flushMutations()).not.toThrow()
         onCommandDebug = options.onDebug
         onCommandMutationDebug = options.onMutationDebug
         return {
@@ -5609,7 +6948,8 @@ describe('replay/record/record', () => {
           replayCanvasMode: 'auto'
         }),
         emit: jasmine.any(Function),
-        getCanvases: jasmine.any(Function)
+        getCanvases: jasmine.any(Function),
+        flushMutations: jasmine.any(Function)
       })
     )
     expect(scanExistingCanvases).toHaveBeenCalledTimes(1)

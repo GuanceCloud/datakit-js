@@ -1,0 +1,7 @@
+{
+  "name": "@cloudcare/browser-rum-react/react-router-v8",
+  "private": true,
+  "main": "../cjs/entries/reactRouterV8.js",
+  "module": "../esm/entries/reactRouterV8.js",
+  "types": "../types/reactRouterV8.d.ts"
+}

@@ -6,6 +6,7 @@ import {
   MAX_CANVAS_COMMANDS_PER_BATCH,
   MAX_PENDING_CANVAS_COMMAND_BYTES,
   MAX_PENDING_CANVAS_COMMAND_CONTEXTS,
+  MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS,
   MAX_STRONG_CANVAS_CONTEXT_RESTORE_RECORDS
 } from './canvasCommandCapture'
 
@@ -103,6 +104,49 @@ describe('replay/record/canvasCommandCapture', () => {
     expect(events[0].data.commands.map(function (command) {
       return command.setter === true
     })).toEqual([false, false, false, false])
+  })
+
+  it('should flush only the requested context before the shared animation frame', () => {
+    var events = []
+    var firstContext = createFakeContext()
+    var secondContext = createFakeContext()
+    secondContext.canvas.__sn = { id: 43 }
+    var recordedFrameCallback
+    var recorder = createCanvas2DCommandRecorder({
+      requestAnimationFrameImpl: function (callback) {
+        recordedFrameCallback = callback
+        return 1
+      },
+      emit: function (event) {
+        events.push(event)
+      }
+    })
+
+    recorder.patchContext(firstContext)
+    recorder.patchContext(secondContext)
+    firstContext.fillRect(0, 0, 1, 1)
+    secondContext.fillRect(0, 0, 2, 2)
+
+    recorder.flushContext(firstContext)
+
+    expect(events.length).toBe(1)
+    expect(events[0].data.id).toBe(42)
+    expect(events[0].data.commands).toEqual([
+      jasmine.objectContaining({
+        property: 'fillRect',
+        args: [0, 0, 1, 1]
+      })
+    ])
+
+    recordedFrameCallback()
+    expect(events.length).toBe(2)
+    expect(events[1].data.id).toBe(43)
+    expect(events[1].data.commands).toEqual([
+      jasmine.objectContaining({
+        property: 'fillRect',
+        args: [0, 0, 2, 2]
+      })
+    ])
   })
 
   it('should capture property updates', () => {
@@ -1892,6 +1936,7 @@ describe('replay/record/canvasCommandCapture', () => {
     var fallbackRequests = []
     var recordedFrameCallback
     var context = createFakeContext()
+    delete context.canvas.__sn
     var originalSave = context.save
     var recorder = createCanvas2DCommandRecorder({
       requestAnimationFrameImpl: function (callback) {
@@ -2076,13 +2121,23 @@ describe('replay/record/canvasCommandCapture', () => {
     expect(caughtError).toBe(expectedError)
   })
 
-  it('should skip emitting pending commands when no valid canvas id is available', () => {
+  it('should retain unpublished canvas commands and emit them once after publication', () => {
     var events = []
     var fallbackRequests = []
+    var timers = []
+    var currentTime = 0
     var context = createFakeContext()
     delete context.canvas.__sn
     var recorder = createCanvas2DCommandRecorder({
+      now: function () {
+        return currentTime
+      },
       requestAnimationFrameImpl: jasmine.createSpy('requestAnimationFrame').and.returnValue(1),
+      setTimeoutImpl: function (callback, delay) {
+        timers.push({ callback: callback, delay: delay })
+        return timers.length
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout'),
       requestSnapshotFallback: function (fallbackContext, reason) {
         fallbackRequests.push({ context: fallbackContext, reason: reason })
       },
@@ -2094,14 +2149,169 @@ describe('replay/record/canvasCommandCapture', () => {
     recorder.patchContext(context)
     context.fillRect(1, 2, 3, 4)
     recorder.flush()
+    context.fillText('published later', 5, 6)
+    recorder.flush()
 
     expect(events).toEqual([])
+    expect(fallbackRequests).toEqual([])
+    expect(timers.length).toBe(1)
+    expect(timers[0].delay).toBe(
+      MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS
+    )
+
+    currentTime =
+      MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS - 1
+    context.canvas.__sn = { id: 42 }
+    expect(recorder.retryPublishedContext(context)).toBe(true)
+    expect(events.length).toBe(1)
+    expect(events[0].data.id).toBe(42)
+    expect(events[0].data.commands).toEqual([
+      jasmine.objectContaining({
+        property: 'fillRect',
+        args: [1, 2, 3, 4]
+      }),
+      jasmine.objectContaining({
+        property: 'fillText',
+        args: ['published later', 5, 6]
+      })
+    ])
+    expect(recorder.retryPublishedContext(context)).toBe(false)
+    expect(events.length).toBe(1)
+
+    context.fillRect(7, 8, 9, 10)
+    recorder.flush()
+    expect(events.length).toBe(2)
+    expect(events[1].data.commands).toEqual([
+      jasmine.objectContaining({
+        property: 'fillRect',
+        args: [7, 8, 9, 10]
+      })
+    ])
+    recorder.stop()
+  })
+
+  it('should expire detached command batches without blocking a later published canvas', () => {
+    var events = []
+    var fallbackRequests = []
+    var timers = []
+    var currentTime = 0
+    var firstDetachedContext
+    var sharedPrototype = {
+      fillRect: jasmine.createSpy('fillRect')
+    }
+    var recorder = createCanvas2DCommandRecorder({
+      now: function () {
+        return currentTime
+      },
+      requestAnimationFrameImpl: jasmine
+        .createSpy('requestAnimationFrame')
+        .and.returnValue(1),
+      setTimeoutImpl: function (callback, delay) {
+        timers.push({ callback: callback, delay: delay })
+        return timers.length
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout'),
+      requestSnapshotFallback: function (context, reason) {
+        fallbackRequests.push({ context: context, reason: reason })
+      },
+      emit: function (event) {
+        events.push(event)
+      }
+    })
+
+    for (
+      var index = 0;
+      index < MAX_PENDING_CANVAS_COMMAND_CONTEXTS;
+      index += 1
+    ) {
+      var detachedContext = Object.create(sharedPrototype)
+      detachedContext.canvas = document.createElement('canvas')
+      if (!firstDetachedContext) {
+        firstDetachedContext = detachedContext
+      }
+      recorder.patchContext(detachedContext)
+      detachedContext.fillRect(0, 0, 1, 1)
+    }
+    recorder.flush()
+
+    expect(events).toEqual([])
+    expect(timers.length).toBe(1)
+    expect(timers[0].delay).toBe(
+      MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS
+    )
+
+    currentTime = MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS
+    timers.shift().callback()
+
+    firstDetachedContext.fillRect(4, 5, 6, 7)
+    recorder.flush()
+    expect(fallbackRequests).toEqual([])
+
+    firstDetachedContext.canvas.__sn = { id: 98 }
+    expect(
+      recorder.retryPublishedContext(firstDetachedContext)
+    ).toBe(true)
     expect(fallbackRequests).toEqual([
       {
-        context: context,
-        reason: 'canvas_not_serialized'
+        context: firstDetachedContext,
+        reason: 'canvas_publication_timeout'
       }
     ])
+    expect(
+      recorder.retryPublishedContext(firstDetachedContext)
+    ).toBe(false)
+    expect(events).toEqual([])
+
+    var publishedContext = Object.create(sharedPrototype)
+    publishedContext.canvas = document.createElement('canvas')
+    publishedContext.canvas.__sn = { id: 99 }
+    recorder.patchContext(publishedContext)
+    publishedContext.fillRect(2, 3, 4, 5)
+    recorder.flush()
+
+    expect(events.length).toBe(1)
+    expect(events[0].data.id).toBe(99)
+    expect(events[0].data.commands).toEqual([
+      jasmine.objectContaining({
+        property: 'fillRect',
+        args: [2, 3, 4, 5]
+      })
+    ])
+    recorder.stop()
+  })
+
+  ;['pause', 'reset', 'stop'].forEach(function (lifecycleAction) {
+    it(
+      'should release unpublished canvas commands on ' + lifecycleAction,
+      function () {
+        var events = []
+        var context = createFakeContext()
+        delete context.canvas.__sn
+        var recorder = createCanvas2DCommandRecorder({
+          requestAnimationFrameImpl: jasmine
+            .createSpy('requestAnimationFrame')
+            .and.returnValue(1),
+          emit: function (event) {
+            events.push(event)
+          }
+        })
+
+        recorder.patchContext(context)
+        context.fillRect(1, 2, 3, 4)
+        recorder.flush()
+        recorder[lifecycleAction]()
+        if (lifecycleAction === 'pause') {
+          recorder.resume()
+        }
+        context.canvas.__sn = { id: 43 }
+
+        expect(recorder.retryPublishedContext(context)).toBe(false)
+        expect(events).toEqual([])
+        if (lifecycleAction !== 'stop') {
+          recorder.stop()
+        }
+      }
+    )
   })
 
   it('should drop pending commands and stop capturing while paused', () => {

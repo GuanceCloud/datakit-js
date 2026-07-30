@@ -12,7 +12,7 @@ describe('recorderApiStub', () => {
       ok: false,
       reason: 'not_recording'
     })
-    expect(recorderApi.getReplayPerformanceForDebug()).toBeUndefined()
+    expect(recorderApi.$rGetDebug(8)).toBeUndefined()
   })
 
   it('should expose the minimal rum recorder stub', () => {

@@ -97,6 +97,7 @@ export var MAX_CANVAS_COMMANDS_PER_BATCH = 1000
 export var MAX_CANVAS_COMMAND_BATCH_BYTES = 128 * 1024
 export var MAX_PENDING_CANVAS_COMMAND_CONTEXTS = 64
 export var MAX_PENDING_CANVAS_COMMAND_BYTES = 512 * 1024
+export var MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS = 1000
 export var MAX_STRONG_CANVAS_CONTEXT_RESTORE_RECORDS = 64
 export var MAX_CANVAS_OPAQUE_OBJECT_RESTORE_RECORDS = 256
 var MAX_PATCHED_CANVAS_PROTOTYPE_RECORDS = 16
@@ -491,6 +492,16 @@ export function createCanvas2DCommandRecorder(options) {
     function (rafId) {
       return window.cancelAnimationFrame(rafId)
     }
+  var setTimeoutImpl =
+    options.setTimeoutImpl ||
+    function (callback, delay) {
+      return setTimeout(callback, delay)
+    }
+  var clearTimeoutImpl =
+    options.clearTimeoutImpl ||
+    function (timeoutId) {
+      return clearTimeout(timeoutId)
+    }
 
   var trackedContexts = []
   var trackedContextSet = new WeakSet()
@@ -505,6 +516,7 @@ export function createCanvas2DCommandRecorder(options) {
   var persistentFallbackModeContexts = new WeakSet()
   var fallbackReasonByContext = new WeakMap()
   var persistentFallbackReasonByContext = new WeakMap()
+  var expiredUnpublishedContexts = new WeakSet()
   var patchedOpaqueObjects = new WeakSet()
   var patchedOpaqueObjectRefs = []
   var patchedOpaqueObjectRefAddCount = 0
@@ -523,11 +535,15 @@ export function createCanvas2DCommandRecorder(options) {
       }
       : undefined
   var scheduledFlushId
+  var unpublishedCleanupTimeoutId
+  var unpublishedCleanupDeadline
   var stopped = false
   var paused = false
   var objectRefRegistry =
     options.objectRefRegistry || createCanvasCommandObjectRefRegistry()
-  var onCommandOverflow = options.onCommandOverflow || function () {}
+  var onCommandOverflow = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.onCommandOverflow || function () {}
+    : undefined
   var getCanvasId =
     options.getCanvasId ||
     function (context) {
@@ -569,14 +585,26 @@ export function createCanvas2DCommandRecorder(options) {
       ) {
         return
       }
+      var startedAt = now()
+      var canvasId = getCanvasId(context)
       batch = {
         commands: [],
         approxBytesCount: 0,
-        startedAt: now(),
+        startedAt: startedAt,
         fallbackDirty: false,
-        fallbackSnapshotRequested: false
+        fallbackSnapshotRequested: false,
+        unpublishedDeadline:
+          canvasId === undefined ||
+          canvasId === null ||
+          canvasId === -1
+            ? startedAt +
+              MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS
+            : undefined
       }
       pendingCommandsByContext.set(context, batch)
+      if (batch.unpublishedDeadline !== undefined) {
+        refreshUnpublishedCleanupTimer()
+      }
     }
     return batch
   }
@@ -607,18 +635,92 @@ export function createCanvas2DCommandRecorder(options) {
     pendingCommandsByContext.delete(context)
   }
 
+  function clearUnpublishedCleanupTimer() {
+    if (unpublishedCleanupTimeoutId !== undefined) {
+      clearTimeoutImpl(unpublishedCleanupTimeoutId)
+      unpublishedCleanupTimeoutId = undefined
+    }
+    unpublishedCleanupDeadline = undefined
+  }
+
   function clearPendingBatches() {
     pendingCommandsByContext.clear()
     pendingCommandApproxBytes = 0
+    clearUnpublishedCleanupTimer()
+  }
+
+  function expireUnpublishedBatch(context) {
+    deletePendingBatch(context)
+    persistentFallbackModeContexts.add(context)
+    expiredUnpublishedContexts.add(context)
+    if (!persistentFallbackReasonByContext.has(context)) {
+      persistentFallbackReasonByContext.set(
+        context,
+        'canvas_publication_timeout'
+      )
+    }
+  }
+
+  function expireOverdueUnpublishedBatches() {
+    if (unpublishedCleanupDeadline === undefined) {
+      return
+    }
+    var currentTime = now()
+    if (currentTime < unpublishedCleanupDeadline) {
+      return
+    }
+    pendingCommandsByContext.forEach(function (batch, context) {
+      if (
+        batch.unpublishedDeadline !== undefined &&
+        currentTime >= batch.unpublishedDeadline
+      ) {
+        expireUnpublishedBatch(context)
+      }
+    })
+    refreshUnpublishedCleanupTimer()
+  }
+
+  function refreshUnpublishedCleanupTimer() {
+    var earliestDeadline
+    pendingCommandsByContext.forEach(function (batch) {
+      if (
+        batch.unpublishedDeadline !== undefined &&
+        (earliestDeadline === undefined ||
+          batch.unpublishedDeadline < earliestDeadline)
+      ) {
+        earliestDeadline = batch.unpublishedDeadline
+      }
+    })
+
+    if (earliestDeadline === undefined) {
+      clearUnpublishedCleanupTimer()
+      return
+    }
+    if (
+      unpublishedCleanupTimeoutId !== undefined &&
+      unpublishedCleanupDeadline === earliestDeadline
+    ) {
+      return
+    }
+
+    clearUnpublishedCleanupTimer()
+    unpublishedCleanupDeadline = earliestDeadline
+    unpublishedCleanupTimeoutId = setTimeoutImpl(function () {
+      unpublishedCleanupTimeoutId = undefined
+      unpublishedCleanupDeadline = undefined
+      flush()
+    }, Math.max(earliestDeadline - now(), 0))
   }
 
   function reportCommandOverflow(reason, context) {
-    onCommandOverflow({
-      reason: reason,
-      context: context,
-      pendingContextCount: pendingCommandsByContext.size,
-      pendingApproxBytes: pendingCommandApproxBytes
-    })
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      onCommandOverflow({
+        reason: reason,
+        context: context,
+        pendingContextCount: pendingCommandsByContext.size,
+        pendingApproxBytes: pendingCommandApproxBytes
+      })
+    }
   }
 
   function enqueueCommand(context, command, approxBytesCount) {
@@ -668,7 +770,12 @@ export function createCanvas2DCommandRecorder(options) {
   }
 
   function captureCommand(context, property, args, setter) {
-    if (paused || isSnapshotFallbackContext(context)) {
+    if (paused) {
+      return
+    }
+    expireOverdueUnpublishedBatches()
+    if (isSnapshotFallbackContext(context)) {
+      markSnapshotFallbackDirty(context)
       return
     }
     var batch = getOrCreatePendingBatch(context)
@@ -750,7 +857,7 @@ export function createCanvas2DCommandRecorder(options) {
   }
 
   function markSnapshotFallbackDirty(context, requestImmediately) {
-    if (paused) {
+    if (paused || expiredUnpublishedContexts.has(context)) {
       return
     }
     var batch = pendingCommandsByContext.get(context)
@@ -766,14 +873,26 @@ export function createCanvas2DCommandRecorder(options) {
         )
         return
       }
+      var startedAt = now()
+      var canvasId = getCanvasId(context)
       batch = {
         commands: [],
         approxBytesCount: 0,
-        startedAt: now(),
+        startedAt: startedAt,
         fallbackDirty: true,
-        fallbackSnapshotRequested: false
+        fallbackSnapshotRequested: false,
+        unpublishedDeadline:
+          canvasId === undefined ||
+          canvasId === null ||
+          canvasId === -1
+            ? startedAt +
+              MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS
+            : undefined
       }
       pendingCommandsByContext.set(context, batch)
+      if (batch.unpublishedDeadline !== undefined) {
+        refreshUnpublishedCleanupTimer()
+      }
     } else {
       pendingCommandApproxBytes = Math.max(
         0,
@@ -793,64 +912,114 @@ export function createCanvas2DCommandRecorder(options) {
     scheduleFlush()
   }
 
+  function flushPendingContext(context, flushedAt) {
+    var batch = pendingCommandsByContext.get(context)
+    if (!batch) {
+      return
+    }
+    if (isSnapshotFallbackContext(context)) {
+      if (batch.fallbackDirty && !batch.fallbackSnapshotRequested) {
+        requestSnapshotFallback(
+          context,
+          getSnapshotFallbackReason(context) || 'unsupported_canvas_object'
+        )
+      }
+      deletePendingBatch(context)
+      return
+    }
+    if (!batch.commands.length) {
+      deletePendingBatch(context)
+      return
+    }
+    var id = getCanvasId(context)
+    if (id === undefined || id === null || id === -1) {
+      // A freshly inserted canvas can be drawn before its delayed DOM add is
+      // admitted. Retain it for a bounded publication grace period, then
+      // release the strong Map key and require an authoritative bitmap if
+      // the canvas is ever published later.
+      if (batch.unpublishedDeadline === undefined) {
+        batch.unpublishedDeadline =
+          flushedAt + MAX_UNPUBLISHED_CANVAS_COMMAND_RETENTION_MS
+      }
+      if (flushedAt >= batch.unpublishedDeadline) {
+        expireUnpublishedBatch(context)
+      }
+      return
+    }
+    var completedAt = flushedAt
+    var commands = batch.commands
+    var recordAccepted = emit(
+      createCanvasMutationRecord({
+        id: id,
+        contextType: getCanvasType(context),
+        commands: commands,
+        timestamp: completedAt,
+        startedAt: batch.startedAt,
+        completedAt: completedAt
+      }),
+      {
+        approxBytesCount: batch.approxBytesCount,
+        commandCount: commands.length
+      }
+    )
+    if (recordAccepted === false) {
+      // The command batch never entered the replay segment. Its following
+      // commands can depend on state from this batch, so switch this context
+      // to bitmap snapshots and request an immediate visual rebaseline.
+      enableSnapshotFallbackForContext(
+        context,
+        'command_record_rejected'
+      )
+    }
+    deletePendingBatch(context)
+  }
+
+  function flushContext(context) {
+    if (stopped || paused || !context) {
+      return
+    }
+    flushPendingContext(context, now())
+    refreshUnpublishedCleanupTimer()
+  }
+
   function flush() {
     if (stopped || paused) {
       return
     }
 
-    pendingCommandsByContext.forEach(function (batch, context) {
-      if (isSnapshotFallbackContext(context)) {
-        if (batch.fallbackDirty && !batch.fallbackSnapshotRequested) {
-          requestSnapshotFallback(
-            context,
-            getSnapshotFallbackReason(context) || 'unsupported_canvas_object'
-          )
-        }
-        return
-      }
-      if (!batch.commands.length) {
-        return
-      }
-      var id = getCanvasId(context)
-      if (id === undefined || id === null || id === -1) {
-        // Commands dropped before a canvas joins the serialized DOM can carry
-        // transform/style/clip state needed by every later draw. Once that
-        // state is unknown, keep the context on authoritative bitmap replay.
-        enableSnapshotFallbackForContext(
-          context,
-          'canvas_not_serialized',
-          false,
-          true
-        )
-        return
-      }
-      var completedAt = now()
-      var commands = batch.commands
-      var recordAccepted = emit(
-        createCanvasMutationRecord({
-          id: id,
-          contextType: getCanvasType(context),
-          commands: commands,
-          timestamp: completedAt,
-          startedAt: batch.startedAt,
-          completedAt: completedAt
-        }),
-        {
-          approxBytesCount: batch.approxBytesCount,
-          commandCount: commands.length
-        }
-      )
-      if (recordAccepted === false) {
-        // The command batch never entered the replay segment. Its following
-        // commands can depend on state from this batch, so switch this context
-        // to bitmap snapshots and request an immediate visual rebaseline.
-        enableSnapshotFallbackForContext(
-          context,
-          'command_record_rejected'
-        )
-      }
+    var flushedAt = now()
+    pendingCommandsByContext.forEach(function (_, context) {
+      flushPendingContext(context, flushedAt)
     })
-    clearPendingBatches()
+    refreshUnpublishedCleanupTimer()
+  }
+
+  function retryPublishedContext(context) {
+    if (
+      stopped ||
+      paused ||
+      !context ||
+      !trackedContextSet.has(context)
+    ) {
+      return false
+    }
+    expireOverdueUnpublishedBatches()
+    var id = getCanvasId(context)
+    if (id === undefined || id === null || id === -1) {
+      return false
+    }
+    if (!pendingCommandsByContext.has(context)) {
+      if (!expiredUnpublishedContexts.has(context)) {
+        return false
+      }
+      expiredUnpublishedContexts.delete(context)
+      // A canvas published after its command grace period no longer has a
+      // complete command history. Rebaseline it once instead of retaining the
+      // detached context strongly or replaying an incomplete command stream.
+      markSnapshotFallbackDirty(context, true)
+    }
+    flush()
+    return true
   }
 
   function shouldCaptureContext(context) {
@@ -892,6 +1061,7 @@ export function createCanvas2DCommandRecorder(options) {
         restore: function () {
           trackedContextSet.delete(context)
           deletePendingBatch(context)
+          expiredUnpublishedContexts.delete(context)
           fallbackModeContexts.delete(context)
           persistentFallbackModeContexts.delete(context)
           fallbackReasonByContext.delete(context)
@@ -963,6 +1133,7 @@ export function createCanvas2DCommandRecorder(options) {
     rejectedContextSet.add(context)
     trackedContextSet.delete(context)
     deletePendingBatch(context)
+    expiredUnpublishedContexts.delete(context)
     fallbackModeContexts.delete(context)
     persistentFallbackModeContexts.delete(context)
     fallbackReasonByContext.delete(context)
@@ -1516,6 +1687,7 @@ export function createCanvas2DCommandRecorder(options) {
     return function () {
       trackedContextSet.delete(context)
       deletePendingBatch(context)
+      expiredUnpublishedContexts.delete(context)
       fallbackModeContexts.delete(context)
       persistentFallbackModeContexts.delete(context)
       fallbackReasonByContext.delete(context)
@@ -1540,6 +1712,7 @@ export function createCanvas2DCommandRecorder(options) {
     persistentFallbackModeContexts = new WeakSet()
     fallbackReasonByContext = new WeakMap()
     persistentFallbackReasonByContext = new WeakMap()
+    expiredUnpublishedContexts = new WeakSet()
     rejectedContextSet = new WeakSet()
     opaqueObjectContextMap = new WeakMap()
     restorePatchedOpaqueObjects()
@@ -1591,6 +1764,7 @@ export function createCanvas2DCommandRecorder(options) {
     // An explicit authoritative rebaseline supersedes the implicit
     // canvas_state_reset transition for this generation.
     captureGenerationByContext.set(context, captureGeneration)
+    expiredUnpublishedContexts.delete(context)
     enableSnapshotFallbackForContext(
       context,
       reason || 'forced_snapshot_rebaseline',
@@ -1603,6 +1777,7 @@ export function createCanvas2DCommandRecorder(options) {
     if (stopped || !trackedContextSet.has(context)) {
       return
     }
+    expiredUnpublishedContexts.delete(context)
     persistentFallbackModeContexts.add(context)
     if (!persistentFallbackReasonByContext.has(context)) {
       persistentFallbackReasonByContext.set(
@@ -1623,6 +1798,8 @@ export function createCanvas2DCommandRecorder(options) {
     forceSnapshotFallback: forceSnapshotFallback,
     markPersistentSnapshotFallback: markPersistentSnapshotFallback,
     flush: flush,
+    flushContext: flushContext,
+    retryPublishedContext: retryPublishedContext,
     pause: pause,
     resume: resume,
     reset: reset,

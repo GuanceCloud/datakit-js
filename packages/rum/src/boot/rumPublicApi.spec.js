@@ -1,4 +1,4 @@
-import { ActionType, ResourceType } from '@cloudcare/browser-core'
+import { ActionType, ResourceType, display } from '@cloudcare/browser-core'
 
 describe('rumPublicApi', () => {
   let makeRumPublicApi
@@ -36,6 +36,7 @@ describe('rumPublicApi', () => {
       getViewContext: jasmine.createSpy('getViewContext'),
       lifeCycle: {},
       session: {},
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       setViewContext: jasmine.createSpy('setViewContext'),
       setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
@@ -106,6 +107,217 @@ describe('rumPublicApi', () => {
     )
   })
 
+  it('should let plugins configure manual views before RUM starts', () => {
+    const startRumResult = {
+      addAction: jasmine.createSpy('addAction'),
+      addError: jasmine.createSpy('addError'),
+      addResource: jasmine.createSpy('addResource'),
+      addTiming: jasmine.createSpy('addTiming'),
+      getInternalContext: jasmine.createSpy('getInternalContext'),
+      getViewContext: jasmine.createSpy('getViewContext'),
+      lifeCycle: {},
+      session: {},
+      setForcedSession: jasmine.createSpy('setForcedSession'),
+      setViewContext: jasmine.createSpy('setViewContext'),
+      setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
+      setViewName: jasmine.createSpy('setViewName'),
+      startView: jasmine.createSpy('startView'),
+      stopSession: jasmine.createSpy('stopSession'),
+      viewContexts: {}
+    }
+    const startRumImpl = jasmine
+      .createSpy('startRumImpl')
+      .and.returnValue(startRumResult)
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
+      getSerializedNodeIdForDebug: jasmine
+        .createSpy('getSerializedNodeIdForDebug')
+        .and.returnValue(undefined),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(undefined),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      snapshotCanvas: jasmine.createSpy('snapshotCanvas'),
+      start: jasmine.createSpy('start'),
+      stop: jasmine.createSpy('stop'),
+      takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
+    }
+    const plugin = {
+      name: 'test-plugin',
+      onInit: jasmine.createSpy('onInit').and.callFake(function (context) {
+        context.initConfiguration.trackViewsManually = true
+        context.publicApi.startView('Plugin initial view')
+      }),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      getConfigurationTelemetry: function () {
+        return { router: true }
+      }
+    }
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi, {
+      makeRecorderPublicApi: makeSessionReplayPublicApi
+    })
+    const initConfiguration = createValidInitConfiguration({
+      plugins: [plugin]
+    })
+
+    rumPublicApi.init(initConfiguration)
+
+    expect(plugin.onInit).toHaveBeenCalledWith({
+      addError: jasmine.any(Function),
+      publicApi: rumPublicApi,
+      rum: rumPublicApi,
+      initConfiguration: initConfiguration
+    })
+    expect(initConfiguration.trackViewsManually).toBeTrue()
+    expect(startRumImpl).toHaveBeenCalledTimes(1)
+    expect(startRumImpl.calls.mostRecent().args[4]).toEqual({
+      name: 'Plugin initial view'
+    })
+    const pluginAddError = plugin.onInit.calls.mostRecent().args[0].addError
+    expect(plugin.onRumStart).toHaveBeenCalledWith({
+      addError: pluginAddError,
+      publicApi: rumPublicApi,
+      rum: rumPublicApi
+    })
+    expect(plugin.onInit).toHaveBeenCalledBefore(plugin.onRumStart)
+  })
+
+  it('should protect plugin errors and preserve their common context', () => {
+    const startRumResult = {
+      addAction: jasmine.createSpy('addAction'),
+      addError: jasmine.createSpy('addError'),
+      addResource: jasmine.createSpy('addResource'),
+      addTiming: jasmine.createSpy('addTiming'),
+      getInternalContext: jasmine.createSpy('getInternalContext'),
+      getViewContext: jasmine.createSpy('getViewContext'),
+      lifeCycle: {},
+      session: {},
+      setForcedSession: jasmine.createSpy('setForcedSession'),
+      setViewContext: jasmine.createSpy('setViewContext'),
+      setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
+      setViewName: jasmine.createSpy('setViewName'),
+      startView: jasmine.createSpy('startView'),
+      stopSession: jasmine.createSpy('stopSession'),
+      viewContexts: {}
+    }
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(undefined),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      start: jasmine.createSpy('start'),
+      stop: jasmine.createSpy('stop')
+    }
+    let pluginAddError
+    const pluginError = new Error('framework render failed')
+    const plugin = {
+      name: 'framework-plugin',
+      onInit: function (context) {
+        pluginAddError = context.addError
+        context.initConfiguration.trackViewsManually = true
+        context.addError({
+          error: pluginError,
+          handlingStack: 'framework stack',
+          context: { feature: 'checkout', ignored: function () {} },
+          startClocks: { relative: 10, timeStamp: 20 }
+        })
+        context.publicApi.setGlobalContextProperty('phase', 'after-error')
+        context.publicApi.startView('Framework initial view')
+      }
+    }
+    const rumPublicApi = makeRumPublicApi(
+      jasmine.createSpy('startRumImpl').and.returnValue(startRumResult),
+      recorderApi
+    )
+    rumPublicApi.setGlobalContextProperty('phase', 'before-error')
+
+    rumPublicApi.init(
+      createValidInitConfiguration({
+        plugins: [plugin]
+      })
+    )
+
+    expect(startRumResult.addError).toHaveBeenCalledWith(
+      {
+        error: pluginError,
+        handlingStack: 'framework stack',
+        context: { feature: 'checkout', ignored: '[Function] ignored' },
+        startClocks: { relative: 10, timeStamp: 20 }
+      },
+      jasmine.objectContaining({
+        context: { phase: 'before-error' }
+      })
+    )
+    expect(pluginAddError).not.toBe(startRumResult.addError)
+
+    startRumResult.addError.and.throwError('collector failed')
+    expect(function () {
+      pluginAddError({
+        error: new Error('second framework error'),
+        startClocks: { relative: 30, timeStamp: 40 }
+      })
+    }).not.toThrow()
+  })
+
+  it('should keep starting RUM when a plugin throws during initialization', () => {
+    const displayErrorSpy = spyOn(display, 'error')
+    const startRumResult = {
+      addAction: jasmine.createSpy('addAction'),
+      addError: jasmine.createSpy('addError'),
+      addResource: jasmine.createSpy('addResource'),
+      addTiming: jasmine.createSpy('addTiming'),
+      getInternalContext: jasmine.createSpy('getInternalContext'),
+      getViewContext: jasmine.createSpy('getViewContext'),
+      lifeCycle: {},
+      session: {},
+      setForcedSession: jasmine.createSpy('setForcedSession'),
+      setViewContext: jasmine.createSpy('setViewContext'),
+      setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
+      setViewName: jasmine.createSpy('setViewName'),
+      startView: jasmine.createSpy('startView'),
+      stopSession: jasmine.createSpy('stopSession'),
+      viewContexts: {}
+    }
+    const startRumImpl = jasmine
+      .createSpy('startRumImpl')
+      .and.returnValue(startRumResult)
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
+      getSerializedNodeIdForDebug: jasmine
+        .createSpy('getSerializedNodeIdForDebug')
+        .and.returnValue(undefined),
+      getReplayPerformanceForDebug: jasmine
+        .createSpy('getReplayPerformanceForDebug')
+        .and.returnValue(undefined),
+      onRumStart: jasmine.createSpy('onRumStart'),
+      snapshotCanvas: jasmine.createSpy('snapshotCanvas'),
+      start: jasmine.createSpy('start'),
+      stop: jasmine.createSpy('stop'),
+      takeSubsequentFullSnapshot: jasmine.createSpy('takeSubsequentFullSnapshot')
+    }
+    const pluginError = new Error('plugin failed')
+    const plugin = {
+      name: 'broken-plugin',
+      onInit: jasmine.createSpy('onInit').and.throwError(pluginError)
+    }
+    const rumPublicApi = makeRumPublicApi(startRumImpl, recorderApi, {
+      makeRecorderPublicApi: makeSessionReplayPublicApi
+    })
+
+    rumPublicApi.init(
+      createValidInitConfiguration({
+        plugins: [plugin]
+      })
+    )
+
+    expect(displayErrorSpy).toHaveBeenCalledWith(
+      'broken-plugin plugin onInit threw an error:',
+      pluginError
+    )
+    expect(startRumImpl).toHaveBeenCalledTimes(1)
+  })
+
   it('should delegate public APIs to the started strategy with sanitized payloads', () => {
     const startRumResult = {
       addAction: jasmine.createSpy('addAction'),
@@ -120,6 +332,7 @@ describe('rumPublicApi', () => {
       }),
       lifeCycle: {},
       session: {},
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       setViewContext: jasmine.createSpy('setViewContext'),
       setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
@@ -161,6 +374,7 @@ describe('rumPublicApi', () => {
     rumPublicApi.addError(new Error('boom'), { extra: 'value' })
     rumPublicApi.addTiming('ready state', 123)
     rumPublicApi.stopSession()
+    rumPublicApi.startSession({ sessionSampleRate: 100 })
     rumPublicApi.setForcedSession()
 
     expect(startRumResult.setViewName).toHaveBeenCalledWith('Checkout')
@@ -208,6 +422,9 @@ describe('rumPublicApi', () => {
     )
     expect(startRumResult.addTiming).toHaveBeenCalledWith('ready state', 123)
     expect(startRumResult.stopSession).toHaveBeenCalled()
+    expect(startRumResult.startSession).toHaveBeenCalledWith({
+      sessionSampleRate: 100
+    })
     expect(startRumResult.setForcedSession).toHaveBeenCalled()
     expect(rumPublicApi.getViewContext()).toEqual({ plan: 'pro' })
     expect(rumPublicApi.getInternalContext()).toEqual({
@@ -255,6 +472,24 @@ describe('rumPublicApi', () => {
       mutationCallbackCount: 2,
       replaySegmentFlushCount: 1
     }
+    const domMutationDebugResult = {
+      addsCount: 1,
+      removesCount: 0,
+      textsCount: 0,
+      attributesCount: 0
+    }
+    const domMutationHistoryResult = [domMutationDebugResult]
+    const replayDebugResults = [
+      autoSnapshotResult,
+      autoSnapshotHistoryResult,
+      canvasMutationDebugResult,
+      canvasMutationHistoryResult,
+      domMutationDebugResult,
+      domMutationHistoryResult,
+      replaySegmentFlushResult,
+      replaySegmentFlushHistoryResult,
+      replayPerformanceResult
+    ]
     const startRumImpl = jasmine.createSpy('startRumImpl').and.returnValue({
       addAction: jasmine.createSpy('addAction'),
       addError: jasmine.createSpy('addError'),
@@ -264,6 +499,7 @@ describe('rumPublicApi', () => {
       getViewContext: jasmine.createSpy('getViewContext'),
       lifeCycle: {},
       session: {},
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       setViewContext: jasmine.createSpy('setViewContext'),
       setViewContextProperty: jasmine.createSpy('setViewContextProperty'),
@@ -274,45 +510,11 @@ describe('rumPublicApi', () => {
     })
     const recorderApi = {
       isRecording: jasmine.createSpy('isRecording').and.returnValue(false),
-      getLastAutoCanvasSnapshotResultForDebug: jasmine
-        .createSpy('getLastAutoCanvasSnapshotResultForDebug')
-        .and.returnValue(autoSnapshotResult),
-      getAutoCanvasSnapshotDebugHistoryForDebug: jasmine
-        .createSpy('getAutoCanvasSnapshotDebugHistoryForDebug')
-        .and.returnValue(autoSnapshotHistoryResult),
-      getLastCanvasMutationForDebug: jasmine
-        .createSpy('getLastCanvasMutationForDebug')
-        .and.returnValue(canvasMutationDebugResult),
-      getCanvasMutationHistoryForDebug: jasmine
-        .createSpy('getCanvasMutationHistoryForDebug')
-        .and.returnValue(canvasMutationHistoryResult),
-      getLastDomMutationForDebug: jasmine
-        .createSpy('getLastDomMutationForDebug')
-        .and.returnValue({
-          addsCount: 1,
-          removesCount: 0,
-          textsCount: 0,
-          attributesCount: 0
+      $rGetDebug: jasmine
+        .createSpy('$rGetDebug')
+        .and.callFake(function (debugIndex) {
+          return replayDebugResults[debugIndex]
         }),
-      getDomMutationHistoryForDebug: jasmine
-        .createSpy('getDomMutationHistoryForDebug')
-        .and.returnValue([
-          {
-            addsCount: 1,
-            removesCount: 0,
-            textsCount: 0,
-            attributesCount: 0
-          }
-        ]),
-      getLastReplaySegmentFlushForDebug: jasmine
-        .createSpy('getLastReplaySegmentFlushForDebug')
-        .and.returnValue(replaySegmentFlushResult),
-      getReplaySegmentFlushHistoryForDebug: jasmine
-        .createSpy('getReplaySegmentFlushHistoryForDebug')
-        .and.returnValue(replaySegmentFlushHistoryResult),
-      getReplayPerformanceForDebug: jasmine
-        .createSpy('getReplayPerformanceForDebug')
-        .and.returnValue(replayPerformanceResult),
       flushReplayMutationsForDebug: jasmine.createSpy(
         'flushReplayMutationsForDebug'
       ),
@@ -364,20 +566,12 @@ describe('rumPublicApi', () => {
     expect(rumPublicApi.getCanvasMutationHistoryForDebug()).toEqual(
       canvasMutationHistoryResult
     )
-    expect(rumPublicApi.getLastDomMutationForDebug()).toEqual({
-      addsCount: 1,
-      removesCount: 0,
-      textsCount: 0,
-      attributesCount: 0
-    })
-    expect(rumPublicApi.getDomMutationHistoryForDebug()).toEqual([
-      {
-        addsCount: 1,
-        removesCount: 0,
-        textsCount: 0,
-        attributesCount: 0
-      }
-    ])
+    expect(rumPublicApi.getLastDomMutationForDebug()).toEqual(
+      domMutationDebugResult
+    )
+    expect(rumPublicApi.getDomMutationHistoryForDebug()).toEqual(
+      domMutationHistoryResult
+    )
     expect(rumPublicApi.getLastReplaySegmentFlushForDebug()).toEqual(
       replaySegmentFlushResult
     )
@@ -397,14 +591,17 @@ describe('rumPublicApi', () => {
     expect(recorderApi.stop).toHaveBeenCalled()
     expect(recorderApi.takeSubsequentFullSnapshot).toHaveBeenCalled()
     expect(recorderApi.getSerializedNodeIdForDebug).toHaveBeenCalled()
-    expect(recorderApi.getLastAutoCanvasSnapshotResultForDebug).toHaveBeenCalled()
-    expect(
-      recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug
-    ).toHaveBeenCalled()
-    expect(recorderApi.getCanvasMutationHistoryForDebug).toHaveBeenCalled()
-    expect(recorderApi.getLastDomMutationForDebug).toHaveBeenCalled()
-    expect(recorderApi.getDomMutationHistoryForDebug).toHaveBeenCalled()
-    expect(recorderApi.getLastReplaySegmentFlushForDebug).toHaveBeenCalled()
+    expect(recorderApi.$rGetDebug.calls.allArgs()).toEqual([
+      [0],
+      [1],
+      [2],
+      [3],
+      [4],
+      [5],
+      [6],
+      [7],
+      [8]
+    ])
     expect(recorderApi.flushReplayMutationsForDebug).toHaveBeenCalled()
     expect(recorderApi.snapshotCanvas).toHaveBeenCalled()
   })
@@ -443,6 +640,7 @@ describe('rumPublicApi', () => {
       getViewContext: jasmine.createSpy('getViewContext'),
       lifeCycle: {},
       session: {},
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       setResourceContext: jasmine.createSpy('setResourceContext'),
       setViewContext: jasmine.createSpy('setViewContext'),

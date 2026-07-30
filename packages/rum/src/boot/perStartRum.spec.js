@@ -39,6 +39,7 @@ describe('preStartRum', () => {
       addError: jasmine.createSpy('addError'),
       addResource: jasmine.createSpy('addResource'),
       addTiming: jasmine.createSpy('addTiming'),
+      startSession: jasmine.createSpy('startSession'),
       setForcedSession: jasmine.createSpy('setForcedSession'),
       startView: jasmine.createSpy('startView'),
       setViewName: jasmine.createSpy('setViewName'),
@@ -55,6 +56,7 @@ describe('preStartRum', () => {
     strategy.addResource({ url: '/resource' })
     strategy.addError({ message: 'boom' })
     strategy.addTiming('ready', 123)
+    strategy.startSession({ sessionSampleRate: 100 })
     strategy.setForcedSession()
     strategy.setViewName('Ignored until post-start strategy swap')
 
@@ -82,6 +84,9 @@ describe('preStartRum', () => {
       { view: { id: 'view-1' } }
     )
     expect(startRumResult.addTiming).toHaveBeenCalledWith('ready', 123)
+    expect(startRumResult.startSession).toHaveBeenCalledWith({
+      sessionSampleRate: 100
+    })
     expect(startRumResult.setForcedSession).toHaveBeenCalled()
     expect(startRumResult.setViewName).toHaveBeenCalledWith(
       'Ignored until post-start strategy swap'
@@ -177,6 +182,124 @@ describe('preStartRum', () => {
     )
   })
 
+  it('should initialize plugins before remote configuration and preserve manual views', () => {
+    const OriginalXMLHttpRequest = window.XMLHttpRequest
+    class FakeXMLHttpRequest extends EventTarget {
+      constructor() {
+        super()
+        this.status = 0
+        this.responseText = ''
+        this.open = jasmine.createSpy('open')
+        this.send = jasmine.createSpy('send')
+        FakeXMLHttpRequest.instances.push(this)
+      }
+    }
+    FakeXMLHttpRequest.instances = []
+    window.XMLHttpRequest = FakeXMLHttpRequest
+
+    try {
+      let strategy
+      const onInit = jasmine.createSpy('onInit').and.callFake(function (
+        initConfiguration
+      ) {
+        initConfiguration.trackViewsManually = true
+        strategy.startView({ name: 'Framework initial view' })
+      })
+      const doStartRum = jasmine
+        .createSpy('doStartRum')
+        .and.returnValue({})
+      strategy = createPreStartStrategy(
+        { onInit },
+        jasmine.createSpy('getCommonContext'),
+        doStartRum
+      )
+      const plugin = { name: 'router-plugin' }
+      const displayErrorSpy = spyOn(display, 'error')
+      const initConfiguration = createValidInitConfiguration({
+        plugins: [plugin],
+        remoteConfiguration: true
+      })
+      const ignoredInitConfiguration = createValidInitConfiguration({
+        applicationId: 'ignored-app',
+        plugins: [plugin],
+        remoteConfiguration: true
+      })
+
+      strategy.init(initConfiguration, {})
+      strategy.init(ignoredInitConfiguration, {})
+
+      expect(onInit).toHaveBeenCalledTimes(1)
+      expect(doStartRum).not.toHaveBeenCalled()
+      expect(FakeXMLHttpRequest.instances.length).toBe(1)
+      expect(strategy.getInitConfiguration()).toBe(initConfiguration)
+      expect(displayErrorSpy).toHaveBeenCalledWith(
+        'DATAFLUX_RUM is already initialized.'
+      )
+
+      const xhr = FakeXMLHttpRequest.instances[0]
+      xhr.status = 200
+      xhr.responseText = JSON.stringify({
+        content: {
+          'R.app-1.trackViewsManually': false
+        }
+      })
+      xhr.dispatchEvent(new Event('load'))
+
+      expect(doStartRum).toHaveBeenCalledTimes(1)
+      expect(doStartRum.calls.mostRecent().args[0].trackViewsManually).toBeTrue()
+      expect(doStartRum.calls.mostRecent().args[2]).toEqual({
+        name: 'Framework initial view'
+      })
+    } finally {
+      window.XMLHttpRequest = OriginalXMLHttpRequest
+    }
+  })
+
+  it('should allow retrying init after invalid configuration', () => {
+    const doStartRum = jasmine
+      .createSpy('doStartRum')
+      .and.returnValue({})
+    const strategy = createPreStartStrategy(
+      {},
+      jasmine.createSpy('getCommonContext'),
+      doStartRum
+    )
+
+    strategy.init({ datakitUrl: 'https://datakit.example.com' })
+    strategy.init(createValidInitConfiguration())
+
+    expect(doStartRum).toHaveBeenCalledTimes(1)
+  })
+
+  it('should reject reentrant init calls from a plugin', () => {
+    let strategy
+    const nestedInitConfiguration = createValidInitConfiguration({
+      applicationId: 'nested-app'
+    })
+    const onInit = jasmine.createSpy('onInit').and.callFake(function () {
+      strategy.init(nestedInitConfiguration, {})
+    })
+    const doStartRum = jasmine
+      .createSpy('doStartRum')
+      .and.returnValue({})
+    const displayErrorSpy = spyOn(display, 'error')
+    strategy = createPreStartStrategy(
+      { onInit },
+      jasmine.createSpy('getCommonContext'),
+      doStartRum
+    )
+    const initConfiguration = createValidInitConfiguration()
+
+    strategy.init(initConfiguration, {})
+
+    expect(onInit).toHaveBeenCalledTimes(1)
+    expect(doStartRum).toHaveBeenCalledTimes(1)
+    expect(strategy.getInitConfiguration()).toBe(initConfiguration)
+    expect(displayErrorSpy).toHaveBeenCalledWith(
+      'DATAFLUX_RUM is already initialized.'
+    )
+  })
+
   it('should report an already initialized error on repeated init calls', () => {
     const doStartRum = jasmine
       .createSpy('doStartRum')
@@ -195,5 +318,37 @@ describe('preStartRum', () => {
     expect(displayErrorSpy).toHaveBeenCalledWith(
       'DATAFLUX_RUM is already initialized.'
     )
+  })
+
+  it('should not initialize plugins twice while waiting for a manual view', () => {
+    const onInit = jasmine.createSpy('onInit').and.callFake(function (
+      initConfiguration
+    ) {
+      initConfiguration.trackViewsManually = true
+    })
+    const doStartRum = jasmine
+      .createSpy('doStartRum')
+      .and.returnValue({})
+    const strategy = createPreStartStrategy(
+      { onInit },
+      jasmine.createSpy('getCommonContext'),
+      doStartRum
+    )
+    const initConfiguration = createValidInitConfiguration({
+      plugins: [{ name: 'router-plugin' }]
+    })
+
+    strategy.init(initConfiguration, {})
+    strategy.init(initConfiguration, {})
+
+    expect(onInit).toHaveBeenCalledTimes(1)
+    expect(doStartRum).not.toHaveBeenCalled()
+
+    strategy.startView({ name: 'Initial route' })
+
+    expect(doStartRum).toHaveBeenCalledTimes(1)
+    expect(doStartRum.calls.mostRecent().args[2]).toEqual({
+      name: 'Initial route'
+    })
   })
 })

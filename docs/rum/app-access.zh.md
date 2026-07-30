@@ -24,7 +24,12 @@
   - 支持通过控制台上传 SourceMap
 - **本地或私有化部署**
   - 通过 DataKit 接收 RUM 数据
+  - 配置 `datakitOrigin`
   - 需要满足上面的前置条件
+
+下方主示例使用 Public DataWay。`site` 和 `clientToken` 必须成对配置。使用 DataKit
+直连时，请删除这两个字段，改为配置
+`datakitOrigin: '<DataKit 域名或 IP>'`。两种接收方式不要同时配置。
 
 Web 应用接入支持三种方式：
 
@@ -41,9 +46,8 @@ Web 应用接入支持三种方式：
 
     datafluxRum.init({
       applicationId: 'guance',
-      datakitOrigin: '<DataKit 域名或 IP>', // DataKit 接入必填
-      clientToken: 'clientToken', // Public DataWay 接入必填
-      site: 'Public DataWay 地址', // Public DataWay 接入必填
+      clientToken: '<CLIENT_TOKEN>',
+      site: '<PUBLIC_DATAWAY_URL>',
       env: 'production',
       version: '1.0.0',
       sessionSampleRate: 100,
@@ -81,9 +85,8 @@ Web 应用接入支持三种方式：
       DATAFLUX_RUM.onReady(function () {
         DATAFLUX_RUM.init({
           applicationId: 'guance',
-          datakitOrigin: '<DataKit 域名或 IP>',
-          clientToken: 'clientToken',
-          site: 'Public DataWay 地址',
+          clientToken: '<CLIENT_TOKEN>',
+          site: '<PUBLIC_DATAWAY_URL>',
           env: 'production',
           version: '1.0.0',
           sessionSampleRate: 100,
@@ -104,9 +107,8 @@ Web 应用接入支持三种方式：
       window.DATAFLUX_RUM &&
         window.DATAFLUX_RUM.init({
           applicationId: 'guance',
-          datakitOrigin: '<DataKit 域名或 IP>',
-          clientToken: 'clientToken',
-          site: 'Public DataWay 地址',
+          clientToken: '<CLIENT_TOKEN>',
+          site: '<PUBLIC_DATAWAY_URL>',
           env: 'production',
           version: '1.0.0',
           sessionSampleRate: 100,
@@ -125,9 +127,9 @@ Web 应用接入支持三种方式：
 | 参数 | 类型 | 是否必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | `applicationId` | `string` | 是 |  | 观测云中创建应用后生成的应用 ID。 |
-| `datakitOrigin` | `string` | DataKit 接入必填 |  | DataKit 上报地址，格式为 `协议 + 域名/IP + 可选端口`。 |
 | `clientToken` | `string` | Public DataWay 接入必填 |  | 公网接入 token。 |
 | `site` | `string` | Public DataWay 接入必填 |  | 公网接入地址。 |
+| `datakitOrigin` | `string` | DataKit 接入必填 |  | DataKit 上报地址，格式为 `协议 + 域名/IP + 可选端口`。 |
 | `env` | `string` | 否 |  | 当前环境，例如 `prod`、`gray`、`pre`、`common`、`local`。 |
 | `version` | `string` | 否 |  | 当前应用版本。 |
 | `service` | `string` | 否 | `browser` | 服务名。 |
@@ -193,7 +195,8 @@ datafluxRum.snapshotCanvas(canvas)
 ```js
 datafluxRum.init({
   applicationId: 'Your Application ID',
-  datakitOrigin: '<DataKit Domain Name or IP>',
+  clientToken: '<CLIENT_TOKEN>',
+  site: '<PUBLIC_DATAWAY_URL>',
   sessionReplaySampleRate: 100,
 
   replayCanvasEnabled: true,
@@ -209,7 +212,8 @@ datafluxRum.startSessionReplayRecording()
 ```js
 datafluxRum.init({
   applicationId: 'Your Application ID',
-  datakitOrigin: '<DataKit Domain Name or IP>',
+  clientToken: '<CLIENT_TOKEN>',
+  site: '<PUBLIC_DATAWAY_URL>',
   sessionReplaySampleRate: 100,
 
   replayCanvasEnabled: true,
@@ -226,7 +230,8 @@ datafluxRum.startSessionReplayRecording()
 ```js
 datafluxRum.init({
   applicationId: 'Your Application ID',
-  datakitOrigin: '<DataKit Domain Name or IP>',
+  clientToken: '<CLIENT_TOKEN>',
+  site: '<PUBLIC_DATAWAY_URL>',
   sessionReplaySampleRate: 100,
 
   replayCanvasEnabled: true,

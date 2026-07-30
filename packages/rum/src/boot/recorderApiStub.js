@@ -15,33 +15,7 @@ export function makeRecorderApiStub() {
   recorderApi.getSerializedNodeIdForDebug = function () {
     return undefined
   }
-  recorderApi.getLastAutoCanvasSnapshotResultForDebug = function () {
-    return undefined
-  }
-  recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug = function () {
-    return undefined
-  }
-  recorderApi.getLastCanvasMutationForDebug = function () {
-    return undefined
-  }
-  recorderApi.getCanvasMutationHistoryForDebug = function () {
-    return undefined
-  }
-  recorderApi.getLastDomMutationForDebug = function () {
-    return undefined
-  }
-  recorderApi.getDomMutationHistoryForDebug = function () {
-    return undefined
-  }
-  recorderApi.getLastReplaySegmentFlushForDebug = function () {
-    return undefined
-  }
-  recorderApi.getReplaySegmentFlushHistoryForDebug = function () {
-    return undefined
-  }
-  recorderApi.getReplayPerformanceForDebug = function () {
-    return undefined
-  }
+  recorderApi.$rGetDebug = noop
   recorderApi.flushReplayMutationsForDebug = noop
   return recorderApi
 }

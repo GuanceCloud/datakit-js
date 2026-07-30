@@ -235,3 +235,34 @@ export var dataMap = {
     }
   }
 }
+
+// Keep the WebSocket schema in one compact list.  The flattened intake key
+// mirrors the nested payload path, with dots replaced by underscores.
+;[
+  'connection_id',
+  'handshake_succeeded',
+  'start_time',
+  'end_time',
+  'start_view_id',
+  'end_view_id',
+  'tracking_end_reason',
+  'close_code',
+  'close_reason',
+  'was_clean',
+  'messages_in.count',
+  'messages_in.size',
+  'messages_out.count',
+  'messages_out.size',
+  'time_to_first_message_in',
+  'time_to_first_message_out',
+  'last_message_in_at',
+  'longest_inbound_silence',
+  'inbound_idle_duration_before_close',
+  'buffered_amount_max',
+  'protocol',
+  'setup_duration'
+].forEach(function (path) {
+  dataMap.resource.fields[
+    'resource_websocket_' + path.replace('.', '_')
+  ] = 'resource.websocket.' + path
+})

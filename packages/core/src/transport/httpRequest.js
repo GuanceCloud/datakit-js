@@ -1,4 +1,8 @@
-import { newRetryState, sendWithRetryStrategy } from './sendWithRetryStrategy'
+import {
+  drainQueuedPayloads,
+  newRetryState,
+  sendWithRetryStrategy
+} from './sendWithRetryStrategy'
 import { addEventListener } from '../browser/addEventListener'
 import { monitor } from '../helper/monitor'
 import { addTelemetryError } from '../telemetry/telemetry'
@@ -46,10 +50,100 @@ export function createHttpRequest(
      * Since fetch keepalive behaves like regular fetch on Firefox,
      * keep using sendBeaconStrategy on exit
      */
-    sendOnExit: function (payload) {
-      sendBeaconStrategy(endpointUrl, bytesLimit, payload)
+    sendOnExit: function (payload, bytesBudget) {
+      var hasBytesBudget =
+        typeof bytesBudget === 'number' &&
+        isFinite(bytesBudget) &&
+        bytesBudget >= 0
+      if (!hasBytesBudget) {
+        sendBeaconStrategy(endpointUrl, bytesLimit, payload)
+        return {
+          $rBytesCount: getExitBytesCount(payload),
+          $rCurrentPayloadSent: true
+        }
+      }
+
+      // Replay explicitly provides a shared unload budget. Its regular fetches
+      // may have been held behind the retry strategy's bandwidth gate, so
+      // promote them before the final tail while preserving their order.
+      var exitPayloads = drainQueuedPayloads(retryState)
+      var currentPayloadIndex = exitPayloads.indexOf(payload)
+      if (currentPayloadIndex === -1) {
+        currentPayloadIndex = exitPayloads.length
+        exitPayloads.push(payload)
+      }
+      var delivery = sendPayloadsOnExit(
+        endpointUrl,
+        bytesLimit,
+        exitPayloads,
+        bytesBudget
+      )
+
+      return {
+        $rBytesCount: delivery[0],
+        $rCurrentPayloadSent: currentPayloadIndex < delivery[1]
+      }
+    },
+    // Session Replay calls this explicitly on UNLOADING so retry payloads are
+    // promoted even when there is no current segment to pass to sendOnExit().
+    $rDrainOnExit: function (bytesBudget) {
+      var hasBytesBudget =
+        typeof bytesBudget === 'number' &&
+        isFinite(bytesBudget) &&
+        bytesBudget >= 0
+      if (!hasBytesBudget) {
+        return {
+          $rBytesCount: 0,
+          $rAllPayloadsSent: false
+        }
+      }
+
+      var exitPayloads = drainQueuedPayloads(retryState)
+      var delivery = sendPayloadsOnExit(
+        endpointUrl,
+        bytesLimit,
+        exitPayloads,
+        bytesBudget
+      )
+
+      return {
+        $rBytesCount: delivery[0],
+        $rAllPayloadsSent: delivery[1] === exitPayloads.length
+      }
     }
   }
+}
+
+function sendPayloadsOnExit(
+  endpointUrl,
+  bytesLimit,
+  payloads,
+  bytesBudget
+) {
+  var sentBytesCount = 0
+  var sentPayloadCount = 0
+  for (; sentPayloadCount < payloads.length; sentPayloadCount += 1) {
+    var payload = payloads[sentPayloadCount]
+    var exitBytesCount = getExitBytesCount(payload)
+    if (sentBytesCount + exitBytesCount > bytesBudget) {
+      // Replay segments form an ordered dependency chain. Once an older
+      // payload cannot fit, never skip it to send a later dependent tail.
+      break
+    }
+    sendBeaconStrategy(endpointUrl, bytesLimit, payload)
+    sentBytesCount += exitBytesCount
+  }
+  return [sentBytesCount, sentPayloadCount]
+}
+
+function getExitBytesCount(payload) {
+  var bytesCount =
+    payload && typeof payload.$rExitBytesCount === 'number'
+      ? payload.$rExitBytesCount
+      : payload && payload.bytesCount
+  return typeof bytesCount === 'number' && isFinite(bytesCount)
+    ? Math.max(bytesCount, 0)
+    : 0
 }
 
 function sendBeaconStrategy(endpointUrl, bytesLimit, payload) {
@@ -94,9 +188,9 @@ export function fetchStrategyWithFallback(
 ) {
   var url = addBatchPrecision(endpointUrl, payload.encoding)
   if (typeof fetch === 'function') {
-    sendFetch(url, payload, onResponse)
+    return sendFetch(url, payload, onResponse)
   } else {
-    sendXHR(url, payload, onResponse)
+    return sendXHR(url, payload, onResponse)
   }
 }
 
@@ -123,8 +217,11 @@ function sendXHR(url, payload, onResponse) {
     }
   )
   request.send(data)
+  return request
 }
 function sendFetch(url, payload, onResponse) {
+  const controller =
+    typeof AbortController === 'function' && new AbortController()
   const fetchOption = {
     method: 'POST',
     body: payload.data,
@@ -137,6 +234,9 @@ function sendFetch(url, payload, onResponse) {
     headers['Content-Type'] = payload.type
   }
   fetchOption.headers = headers
+  if (controller) {
+    fetchOption.signal = controller.signal
+  }
 
   fetch(url, fetchOption)
     .then(
@@ -153,4 +253,7 @@ function sendFetch(url, payload, onResponse) {
         }
       })
     )
+  if (controller) {
+    return controller
+  }
 }

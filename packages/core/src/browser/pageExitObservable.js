@@ -5,6 +5,7 @@ import {
   addEventListener,
   addEventListeners
 } from '../browser/addEventListener'
+import { setTimeout } from '../helper/timer'
 export var PageExitReason = {
   HIDDEN: 'visibility_hidden',
   UNLOADING: 'before_unload',
@@ -51,7 +52,16 @@ export function createPageExitObservable() {
       window,
       DOM_EVENT.BEFORE_UNLOAD,
       function () {
-        observable.notify({ reason: PageExitReason.UNLOADING })
+        observable.notify({
+          reason: PageExitReason.UNLOADING,
+          // beforeunload can be canceled by the application or browser. A
+          // queued task only runs if the document survives, allowing replay
+          // to restart from a clean Full Snapshot without weakening the
+          // synchronous unload flush.
+          $rOnCancel: function (callback) {
+            setTimeout(callback, 0)
+          }
+        })
       }
     )
 

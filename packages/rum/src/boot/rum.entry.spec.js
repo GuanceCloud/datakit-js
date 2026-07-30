@@ -18,6 +18,10 @@ describe('rum.entry', () => {
 
     expect(rumEntry.datafluxRum).toEqual(jasmine.any(Object))
     expect(rumEntry.datafluxRum.init).toEqual(jasmine.any(Function))
+    expect(rumEntry.datafluxRum.startSession).toEqual(jasmine.any(Function))
+    expect(rumEntry.datafluxRum.startSessionReplayRecording).toEqual(
+      jasmine.any(Function)
+    )
     expect(rumEntry.datafluxRum.startView).toEqual(jasmine.any(Function))
     expect(globalThis.DATAFLUX_RUM).toBe(rumEntry.datafluxRum)
   })

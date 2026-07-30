@@ -291,6 +291,13 @@
         margin: 0;
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
       }
+      .canvas-demo__canvas-mount {
+        aspect-ratio: 480 / 220;
+      }
+      .canvas-demo__canvas-mount > .canvas-demo__board {
+        box-sizing: border-box;
+        height: 100%;
+      }
       .canvas-demo__dashboard-grid {
         display: grid;
         grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -312,9 +319,20 @@
         text-transform: uppercase;
         color: #5e738d;
       }
-      .canvas-demo__dashboard-tile .canvas-demo__board {
+      .canvas-demo__dashboard-canvas-slot > .canvas-demo__board {
+        position: absolute;
+        inset: 0;
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
         border-radius: 14px;
-        min-height: 132px;
+      }
+      .canvas-demo__dashboard-canvas-slot {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 220 / 132;
+        min-width: 0;
       }
       .canvas-demo__dashboard-meta {
         font-size: 10px;
@@ -791,6 +809,14 @@
         })
         // Keep the requested 70% configuration while making the acceptance
         // run deterministic.
+        if (
+          window.location.search.indexOf('freshSession=1') !== -1 &&
+          typeof window.DATAFLUX_RUM.stopSession === 'function' &&
+          typeof window.DATAFLUX_RUM.startSession === 'function'
+        ) {
+          window.DATAFLUX_RUM.stopSession()
+          window.DATAFLUX_RUM.startSession()
+        }
         window.DATAFLUX_RUM.setForcedSession()
         window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
         window.DATAFLUX_RUM && window.DATAFLUX_RUM.startSessionReplayRecording()
@@ -1177,12 +1203,7 @@
               </div>
             </div>
             <div class="demo-main">
-              <canvas
-                id="replay-canvas"
-                class="canvas-demo__board"
-                width="480"
-                height="220"
-              ></canvas>
+              <div id="replay-canvas-mount" class="canvas-demo__canvas-mount"></div>
               <div class="canvas-demo__toolbar demo-toolbar">
                 <div class="demo-toolbar-group">
                   <div class="demo-toolbar-group__title">Mode</div>
@@ -1292,7 +1313,58 @@
               </div>
             </div>
             <div class="demo-main">
-              <div id="replay-dashboard-canvas-grid" class="canvas-demo__dashboard-grid"></div>
+              <div id="replay-dashboard-canvas-grid" class="canvas-demo__dashboard-grid">
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Revenue</div>
+                  <div class="canvas-demo__dashboard-meta">panel 1 · line</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="0"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Orders</div>
+                  <div class="canvas-demo__dashboard-meta">panel 2 · bar</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="1"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Conversion</div>
+                  <div class="canvas-demo__dashboard-meta">panel 3 · area</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="2"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Latency</div>
+                  <div class="canvas-demo__dashboard-meta">panel 4 · line</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="3"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Errors</div>
+                  <div class="canvas-demo__dashboard-meta">panel 5 · bar</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="4"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Sessions</div>
+                  <div class="canvas-demo__dashboard-meta">panel 6 · area</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="5"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Retention</div>
+                  <div class="canvas-demo__dashboard-meta">panel 7 · line</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="6"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Regions</div>
+                  <div class="canvas-demo__dashboard-meta">panel 8 · bar</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="7"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Capacity</div>
+                  <div class="canvas-demo__dashboard-meta">panel 9 · area</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="8"></div>
+                </div>
+                <div class="canvas-demo__dashboard-tile">
+                  <div class="canvas-demo__dashboard-label">Forecast</div>
+                  <div class="canvas-demo__dashboard-meta">panel 10 · line</div>
+                  <div class="canvas-demo__dashboard-canvas-slot" data-dashboard-canvas-slot="9"></div>
+                </div>
+              </div>
               <div class="canvas-demo__toolbar demo-toolbar">
                 <div class="demo-toolbar-group">
                   <div class="demo-toolbar-group__title">Dashboard</div>
@@ -1635,7 +1707,8 @@
           )
         }, 700)
       }
-      const replayCanvas = document.getElementById('replay-canvas')
+      const replayCanvasMount = document.getElementById('replay-canvas-mount')
+      let replayCanvas
       const replayCanvasLog = document.getElementById('canvas-demo-log')
       const replayCanvasRecordingStatus = document.getElementById('canvas-status-recording')
       const replayCanvasSessionStatus = document.getElementById('canvas-status-session')
@@ -1715,6 +1788,8 @@
       const demoReplayCanvasWorkerMode =
         window.localStorage.getItem('demoReplayCanvasWorkerMode') || 'inline'
       let initialCanvasReplayBaselineCaptured = false
+      let replayCanvasTargetsReady = false
+      const replayCanvasTargetsReadyCallbacks = []
       let canvasStep = 0
       let canvasAnimationFrameId = null
       let canvasAutoDrawIntervalId = null
@@ -1786,6 +1861,11 @@
       let largeDomGenerateFinishedAt = 0
       let largeDomLastSnapshotMs = 0
       let largeDomBenchmarkResult = 'idle'
+      let largeDomGenerationEpoch = 0
+      let largeDomActiveGeneration
+      let largeDomBenchmarkEpoch = 0
+      let largeDomClearEpoch = 0
+      let largeDomActiveClear
       let resourceHookTrackerId = ''
       let resourceHookPendingFetch = false
       const legacyActionLog = document.getElementById('legacy-action-log')
@@ -2255,15 +2335,76 @@
           return
         }
         initialCanvasReplayBaselineCaptured = true
-        if (demoReplayCanvasMode === 'manual') {
-          window.setTimeout(async () => {
-            await snapshotCanvasScene('initial-ready')
-            await snapshotDashboardCanvasScene('initial-ready')
-          }, 0)
+        // Insert fresh canvas nodes only after the recorder is active. A blank
+        // canvas serialized by the initial FullSnapshot must conservatively be
+        // treated as possible pre-existing bitmap state in command mode.
+        createReplayCanvasTarget()
+        createDashboardCanvasTiles()
+        // Command capture cannot reference a canvas until its DOM add mutation
+        // has been admitted. The recorder intentionally batches DOM mutations,
+        // so one animation frame is not a publication barrier.
+        whenReplayCanvasTargetsPublished(() => {
+          drawCanvasScene('initial')
+          drawDashboardCanvasChart('initial-board')
+          replayCanvasTargetsReady = true
+          replayCanvasTargetsReadyCallbacks
+            .splice(0)
+            .forEach((readyCallback) => {
+              readyCallback()
+            })
+          if (demoReplayCanvasMode === 'manual') {
+            window.setTimeout(async () => {
+              await snapshotCanvasScene('initial-ready')
+              await snapshotDashboardCanvasScene('initial-ready')
+            }, 0)
+          }
+        })
+      }
+
+      function whenReplayCanvasTargetsReady(callback) {
+        if (replayCanvasTargetsReady) {
+          callback()
           return
         }
-        drawCanvasScene('initial')
-        drawDashboardCanvasChart('initial-board')
+        replayCanvasTargetsReadyCallbacks.push(callback)
+      }
+
+      function whenReplayCanvasTargetsPublished(callback) {
+        const rum = window.DATAFLUX_RUM
+        const targets = [replayCanvas].concat(replayDashboardCanvases)
+        const deadline = performance.now() + 10000
+
+        function tryPublish() {
+          if (
+            rum &&
+            typeof rum.flushReplayMutationsForDebug === 'function'
+          ) {
+            rum.flushReplayMutationsForDebug()
+          }
+          const published =
+            rum &&
+            typeof rum.getSerializedNodeIdForDebug === 'function' &&
+            targets.every((canvas) => {
+              const id = rum.getSerializedNodeIdForDebug(canvas)
+              return id !== undefined && id !== null && id !== -1
+            })
+          if (published) {
+            callback()
+            return
+          }
+          if (performance.now() >= deadline) {
+            setCanvasStatus(replayCanvasReasonStatus, 'canvas publication timeout')
+            setCanvasLog('Canvas targets were not admitted into the replay DOM')
+            setCanvasStatus(
+              replayDashboardCanvasReasonStatus,
+              'canvas publication timeout'
+            )
+            return
+          }
+          window.setTimeout(tryPublish, 32)
+        }
+
+        tryPublish()
       }
 
       function whenSessionReplayRecordingReady(callback) {
@@ -2272,24 +2413,32 @@
           return
         }
         if (typeof rum.isRecording !== 'function') {
-          window.setTimeout(callback, 0)
+          setCanvasStatus(replayCanvasReasonStatus, 'recorder unavailable')
+          setCanvasLog('Session Replay recorder API is unavailable')
+          setCanvasStatus(
+            replayDashboardCanvasReasonStatus,
+            'recorder unavailable'
+          )
           return
         }
 
-        var attempts = 0
-        var maxAttempts = 120
+        var deadline = performance.now() + 10000
 
         function tryRun() {
-          attempts += 1
           if (rum.isRecording()) {
             callback()
             return
           }
-          if (attempts >= maxAttempts) {
-            callback()
+          if (performance.now() >= deadline) {
+            setCanvasStatus(replayCanvasReasonStatus, 'recording start timeout')
+            setCanvasLog('Session Replay recording did not become ready')
+            setCanvasStatus(
+              replayDashboardCanvasReasonStatus,
+              'recording start timeout'
+            )
             return
           }
-          window.requestAnimationFrame(tryRun)
+          window.setTimeout(tryRun, 50)
         }
 
         tryRun()
@@ -2734,45 +2883,105 @@
         return batches
       }
 
-      function aggregateDashboardAutoCompletionRecords(records) {
-        const batches = []
-        const batchByKey = {}
-
-        records.forEach((record) => {
-          const startedAt = getAutoDebugStartedAt(record)
-          const completedAt = getAutoDebugCompletedAt(record)
-          const key =
-            (typeof startedAt === 'number' ? startedAt : 'na') +
-            ':' +
-            (typeof completedAt === 'number' ? completedAt : 'na')
-          var batch = batchByKey[key]
-          if (!batch) {
-            batch = {
-              startedAt: startedAt,
-              completedAt: completedAt,
-              selectedCanvasCount: 0,
-              records: []
-            }
-            batchByKey[key] = batch
-            batches.push(batch)
-          }
-          batch.selectedCanvasCount += record.selectedCanvasCount || 0
-          batch.records.push(record)
-        })
-
-        return batches
+      function cancelLargeDomGeneration(reason) {
+        largeDomGenerationEpoch += 1
+        const activeGeneration = largeDomActiveGeneration
+        largeDomActiveGeneration = undefined
+        if (activeGeneration && !activeGeneration.settled) {
+          activeGeneration.resolve({
+            rowCount: activeGeneration.rowCount,
+            generateMs: performance.now() - activeGeneration.startedAt,
+            estimatedElements: largeDomCurrentElements,
+            cancelled: true,
+            reason: reason || 'cancelled'
+          })
+        }
       }
 
-      function clearLargeDom() {
-        if (!largeDomHost) return
-        largeDomHost.innerHTML = ''
-        largeDomCurrentShape = 'none'
-        largeDomCurrentRows = 0
-        largeDomCurrentElements = 0
-        largeDomGenerateStartedAt = 0
-        largeDomGenerateFinishedAt = 0
-        largeDomLastSnapshotMs = 0
-        setLargeDomLastAction('cleared')
+      function cancelLargeDomBenchmark(reason) {
+        largeDomBenchmarkEpoch += 1
+        if (largeDomBenchmarkResult === 'running') {
+          largeDomBenchmarkResult = 'cancelled: ' + (reason || 'cancelled')
+          setLargeDomLastAction('benchmark cancelled: ' + (reason || 'cancelled'))
+          refreshLargeDomStatus()
+        }
+      }
+
+      function clearLargeDom(options) {
+        if (!largeDomHost) return Promise.resolve()
+        const preserveBenchmark = options && options.preserveBenchmark
+        if (!preserveBenchmark) {
+          cancelLargeDomBenchmark('cleared')
+        }
+        cancelLargeDomGeneration('cleared')
+        if (largeDomActiveClear) {
+          return largeDomActiveClear.promise
+        }
+
+        largeDomClearEpoch += 1
+        const clearEpoch = largeDomClearEpoch
+        let resolveClear
+        const clearOperation = {
+          epoch: clearEpoch,
+          settled: false,
+          resolve: function (result) {
+            if (clearOperation.settled) {
+              return
+            }
+            clearOperation.settled = true
+            if (largeDomActiveClear === clearOperation) {
+              largeDomActiveClear = undefined
+            }
+            resolveClear(result)
+          }
+        }
+        clearOperation.promise = new Promise((resolve) => {
+          resolveClear = resolve
+        })
+        largeDomActiveClear = clearOperation
+        setLargeDomLastAction('clearing')
+
+        function removeChunk() {
+          if (
+            clearOperation.epoch !== largeDomClearEpoch ||
+            largeDomActiveClear !== clearOperation
+          ) {
+            clearOperation.resolve({ cancelled: true })
+            return
+          }
+
+          // Replay coalesces several native MutationObserver callbacks before
+          // serializing them. Keep the merged batch below the 5,000-node
+          // cleanup budget: 12 roots * ~60 nodes * up to 4 frames = ~2,880
+          // nodes. A large synchronous clear would otherwise force a recovery
+          // snapshot while this stress DOM is still changing.
+          let remainingInChunk = 12
+          while (remainingInChunk > 0 && largeDomHost.firstChild) {
+            largeDomHost.removeChild(largeDomHost.firstChild)
+            remainingInChunk -= 1
+          }
+          largeDomCurrentRows = largeDomHost.children.length
+          largeDomCurrentElements = largeDomCurrentRows * 57
+
+          if (largeDomHost.firstChild) {
+            window.requestAnimationFrame(function () {
+              setTimeout(removeChunk, 0)
+            })
+            return
+          }
+
+          largeDomCurrentShape = 'none'
+          largeDomCurrentRows = 0
+          largeDomCurrentElements = 0
+          largeDomGenerateStartedAt = 0
+          largeDomGenerateFinishedAt = 0
+          largeDomLastSnapshotMs = 0
+          setLargeDomLastAction('cleared')
+          clearOperation.resolve({ cancelled: false })
+        }
+
+        removeChunk()
+        return clearOperation.promise
       }
 
       function wait(ms) {
@@ -2994,13 +3203,28 @@
         return section
       }
 
-      function generateDashboardDom(rowCount) {
+      function generateDashboardDom(rowCount, owner) {
         if (!largeDomHost) return Promise.resolve()
-        clearLargeDom()
-        largeDomCurrentShape = 'dashboard'
-        largeDomCurrentRows = rowCount
-        largeDomGenerateStartedAt = performance.now()
-        setLargeDomLastAction('generating dashboard ' + rowCount)
+        const generationOwner = owner || 'manual'
+        if (largeDomActiveGeneration) {
+          if (
+            largeDomActiveGeneration.owner === generationOwner &&
+            largeDomActiveGeneration.rowCount === rowCount
+          ) {
+            return largeDomActiveGeneration.promise
+          }
+          return Promise.resolve({
+            rowCount: rowCount,
+            generateMs: 0,
+            estimatedElements: largeDomCurrentElements,
+            cancelled: true,
+            reason: 'generation_in_progress'
+          })
+        }
+        const clearPromise = clearLargeDom({
+          preserveBenchmark: generationOwner.indexOf('benchmark:') === 0
+        })
+        const generationEpoch = largeDomGenerationEpoch
 
         let appendedRows = 0
         // One row contains about 57 referenced nodes. Keep each native
@@ -3009,8 +3233,45 @@
         // instead of immediately forcing an impossible 142k-node baseline.
         const chunkSize = 4
 
-        return new Promise((resolve) => {
-          function appendChunk() {
+        let resolveGeneration
+        const generation = {
+          epoch: generationEpoch,
+          rowCount: rowCount,
+          owner: generationOwner,
+          startedAt: performance.now(),
+          settled: false,
+          resolve: function (result) {
+            if (generation.settled) {
+              return
+            }
+            generation.settled = true
+            if (largeDomActiveGeneration === generation) {
+              largeDomActiveGeneration = undefined
+            }
+            resolveGeneration(result)
+          }
+        }
+        generation.promise = new Promise((resolve) => {
+          resolveGeneration = resolve
+        })
+        largeDomActiveGeneration = generation
+
+        function appendChunk() {
+          if (
+            generation.epoch !== largeDomGenerationEpoch ||
+            largeDomActiveGeneration !== generation
+          ) {
+            generation.resolve({
+              rowCount: rowCount,
+              generateMs: performance.now() - generation.startedAt,
+              estimatedElements: largeDomCurrentElements,
+              cancelled: true,
+              reason: 'superseded'
+            })
+            return
+          }
+
+          try {
             const fragment = document.createDocumentFragment()
             const chunkEnd = Math.min(appendedRows + chunkSize, rowCount)
             for (let rowIndex = appendedRows; rowIndex < chunkEnd; rowIndex += 1) {
@@ -3019,26 +3280,62 @@
             largeDomHost.appendChild(fragment)
             appendedRows = chunkEnd
             largeDomCurrentElements = appendedRows * 57
-            refreshLargeDomStatus()
+          } catch (error) {
+            setLargeDomLastAction('generation failed')
+            generation.resolve({
+              rowCount: rowCount,
+              generateMs: performance.now() - generation.startedAt,
+              estimatedElements: largeDomCurrentElements,
+              cancelled: true,
+              reason: 'generation_error'
+            })
+            return
+          }
 
-            if (appendedRows < rowCount) {
-              window.requestAnimationFrame(function () {
-                setTimeout(appendChunk, 8)
+          if (appendedRows < rowCount) {
+            window.requestAnimationFrame(function () {
+              setTimeout(appendChunk, 8)
+            })
+            return
+          }
+
+          largeDomGenerateFinishedAt = performance.now()
+          setLargeDomLastAction('generated dashboard ' + rowCount)
+          generation.resolve({
+            rowCount: rowCount,
+            generateMs: largeDomGenerateFinishedAt - largeDomGenerateStartedAt,
+            estimatedElements: largeDomCurrentElements
+          })
+        }
+
+        Promise.resolve(clearPromise)
+          .then(function () {
+            // Let the recorder admit the final removal batch before beginning
+            // the next generation.
+            return wait(50)
+          })
+          .then(function () {
+            if (
+              generation.epoch !== largeDomGenerationEpoch ||
+              largeDomActiveGeneration !== generation
+            ) {
+              generation.resolve({
+                rowCount: rowCount,
+                generateMs: performance.now() - generation.startedAt,
+                estimatedElements: largeDomCurrentElements,
+                cancelled: true,
+                reason: 'superseded'
               })
               return
             }
-
-            largeDomGenerateFinishedAt = performance.now()
-            setLargeDomLastAction('generated dashboard ' + rowCount)
-            resolve({
-              rowCount: rowCount,
-              generateMs: largeDomGenerateFinishedAt - largeDomGenerateStartedAt,
-              estimatedElements: largeDomCurrentElements
-            })
-          }
-
-          appendChunk()
-        })
+            largeDomCurrentShape = 'dashboard'
+            largeDomCurrentRows = rowCount
+            largeDomGenerateStartedAt = performance.now()
+            generation.startedAt = largeDomGenerateStartedAt
+            setLargeDomLastAction('generating dashboard ' + rowCount)
+            appendChunk()
+          })
+        return generation.promise
       }
 
       function takeLargeDomFullSnapshot() {
@@ -3083,10 +3380,16 @@
           return
         }
 
+        largeDomBenchmarkEpoch += 1
+        const benchmarkEpoch = largeDomBenchmarkEpoch
+        const benchmarkOwner = 'benchmark:' + benchmarkEpoch
         largeDomBenchmarkResult = 'running'
         refreshLargeDomStatus()
         setLargeDomReplayRecording(replayEnabled)
         await wait(100)
+        if (benchmarkEpoch !== largeDomBenchmarkEpoch) {
+          return
+        }
 
         const runCount = 3
         const rowCount = 2500
@@ -3110,13 +3413,37 @@
         const runs = []
         try {
           for (let runIndex = 0; runIndex < runCount; runIndex += 1) {
-            clearLargeDom()
+            if (benchmarkEpoch !== largeDomBenchmarkEpoch) {
+              return
+            }
+            await clearLargeDom({ preserveBenchmark: true })
             await wait(50)
+            if (benchmarkEpoch !== largeDomBenchmarkEpoch) {
+              return
+            }
 
             const replayPerformanceBefore = getReplayPerformanceForBenchmark()
             const runStart = performance.now()
-            const generation = await generateDashboardDom(rowCount)
+            const generation = await generateDashboardDom(rowCount, benchmarkOwner)
+            if (
+              benchmarkEpoch !== largeDomBenchmarkEpoch ||
+              !generation ||
+              generation.cancelled ||
+              generation.rowCount !== rowCount
+            ) {
+              if (benchmarkEpoch === largeDomBenchmarkEpoch) {
+                cancelLargeDomBenchmark(
+                  generation && generation.reason
+                    ? generation.reason
+                    : 'generation_invalid'
+                )
+              }
+              return
+            }
             await wait(600)
+            if (benchmarkEpoch !== largeDomBenchmarkEpoch) {
+              return
+            }
             const runEnd = performance.now()
             const replayPerformanceAfter = getReplayPerformanceForBenchmark()
             const replayPerformanceDelta = diffReplayPerformanceStats(
@@ -3355,31 +3682,50 @@
         return replayDashboardCanvases[0].getContext('2d')
       }
 
+      function createReplayCanvasTarget() {
+        if (
+          replayCanvas ||
+          !replayCanvasMount
+        ) {
+          return
+        }
+        const nextCanvas = document.createElement('canvas')
+        nextCanvas.id = 'replay-canvas'
+        nextCanvas.className = 'canvas-demo__board'
+        nextCanvas.width = 480
+        nextCanvas.height = 220
+        nextCanvas.dataset.replayReady = 'true'
+        replayCanvasMount.appendChild(nextCanvas)
+        replayCanvas = nextCanvas
+      }
+
       function createDashboardCanvasTiles() {
-        if (!replayDashboardCanvasGrid) return
-        replayDashboardCanvasGrid.innerHTML = ''
+        if (
+          !replayDashboardCanvasGrid ||
+          replayDashboardCanvases.length
+        ) {
+          return
+        }
+        const slots = Array.from(
+          replayDashboardCanvasGrid.querySelectorAll(
+            '[data-dashboard-canvas-slot]'
+          )
+        )
+        if (slots.length !== dashboardCanvasPanels.length) {
+          setCanvasStatus(
+            replayDashboardCanvasReasonStatus,
+            'dashboard canvas slots unavailable'
+          )
+          setDashboardCanvasLog('Dashboard canvas slots are incomplete')
+          return
+        }
         replayDashboardCanvases = dashboardCanvasPanels.map((panel, index) => {
-          const tile = document.createElement('div')
-          tile.className = 'canvas-demo__dashboard-tile'
-
-          const label = document.createElement('div')
-          label.className = 'canvas-demo__dashboard-label'
-          label.textContent = panel.title
-          tile.appendChild(label)
-
-          const meta = document.createElement('div')
-          meta.className = 'canvas-demo__dashboard-meta'
-          meta.textContent = 'panel ' + (index + 1) + ' · ' + panel.type
-          tile.appendChild(meta)
-
           const canvas = document.createElement('canvas')
           canvas.className = 'canvas-demo__board'
           canvas.width = 220
           canvas.height = 132
           canvas.dataset.panelIndex = String(index)
-          tile.appendChild(canvas)
-
-          replayDashboardCanvasGrid.appendChild(tile)
+          slots[index].appendChild(canvas)
           return canvas
         })
       }
@@ -5026,9 +5372,6 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
         startAutoDraw()
       }
 
-      createDashboardCanvasTiles()
-      drawCanvasScene('initial')
-      drawDashboardCanvasChart('initial-board')
       if (window.__demoCanvasReplayBaselinePending) {
         window.__demoCanvasReplayBaselinePending = false
         whenSessionReplayRecordingReady(captureInitialCanvasReplayBaseline)
@@ -5056,19 +5399,21 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
               parsedCanvasBenchmark.scheduler === demoReplayCanvasScheduler
             ) {
               window.sessionStorage.removeItem(canvasPendingBenchmarkStorageKey)
-              window.setTimeout(() => {
-                if (parsedCanvasBenchmark.kind === 'auto_visibility_main') {
-                  runMainCanvasVisibilityBenchmark(
-                    parsedCanvasBenchmark.mode,
-                    parsedCanvasBenchmark.scheduler
-                  )
-                } else {
-                  runMainCanvasAutoBenchmark(
-                    parsedCanvasBenchmark.mode,
-                    parsedCanvasBenchmark.scheduler
-                  )
-                }
-              }, 250)
+              whenReplayCanvasTargetsReady(() => {
+                window.setTimeout(() => {
+                  if (parsedCanvasBenchmark.kind === 'auto_visibility_main') {
+                    runMainCanvasVisibilityBenchmark(
+                      parsedCanvasBenchmark.mode,
+                      parsedCanvasBenchmark.scheduler
+                    )
+                  } else {
+                    runMainCanvasAutoBenchmark(
+                      parsedCanvasBenchmark.mode,
+                      parsedCanvasBenchmark.scheduler
+                    )
+                  }
+                }, 250)
+              })
               return
             }
           } catch (_) {}
@@ -5090,13 +5435,21 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
             parsed.scheduler === demoReplayCanvasScheduler
           ) {
             window.sessionStorage.removeItem(dashboardCanvasPendingBenchmarkStorageKey)
-            window.setTimeout(() => {
-              if (parsed.kind === 'auto_visibility') {
-                runDashboardCanvasVisibilityBenchmark(parsed.mode, parsed.scheduler)
-              } else {
-                runDashboardCanvasAutoBenchmark(parsed.mode, parsed.scheduler)
-              }
-            }, 250)
+            whenReplayCanvasTargetsReady(() => {
+              window.setTimeout(() => {
+                if (parsed.kind === 'auto_visibility') {
+                  runDashboardCanvasVisibilityBenchmark(
+                    parsed.mode,
+                    parsed.scheduler
+                  )
+                } else {
+                  runDashboardCanvasAutoBenchmark(
+                    parsed.mode,
+                    parsed.scheduler
+                  )
+                }
+              }, 250)
+            })
             return
           }
         } catch (_) {}

@@ -29,6 +29,14 @@ export interface InternalContext {
   }
 }
 
+export interface StartSessionOptions {
+  /**
+   * Overrides the runtime RUM session sample rate for the new session and
+   * subsequent automatic session renewals.
+   */
+  sessionSampleRate?: number
+}
+
 export interface ResourceTrackerSnapshot {
   trackerId: string
   status:
@@ -48,6 +56,61 @@ export interface ResourceTrackerSnapshot {
       }
     | undefined
   rawRumEvent?: object | undefined
+}
+
+export interface ViewOptions {
+  name?: string | undefined
+  service?: string | undefined
+  version?: string | undefined
+  url?: string | undefined
+  context?: Context | undefined
+}
+
+export interface RumPluginApi {
+  startView: (options?: string | ViewOptions) => void
+  setViewName: (name: string) => void
+  setViewContext: (context: Context) => void
+  setViewContextProperty: (key: string, value: any) => void
+  addAction: (name: string, context?: object | undefined) => void
+  addTypeAction: (
+    name: string,
+    type?: string,
+    context?: object | undefined
+  ) => void
+  addError: (error: unknown, context?: object | undefined) => void
+  getInternalContext: (
+    startTime?: number | undefined
+  ) => InternalContext | undefined
+}
+
+export interface RumPluginContext {
+  addError: (error: RumPluginError) => void
+  publicApi: RumPluginApi
+  rum: RumPluginApi
+  initConfiguration: RumSlimPluginInitConfiguration
+}
+
+export interface RumPluginStartContext {
+  addError: (error: RumPluginError) => void
+  publicApi: RumPluginApi
+  rum: RumPluginApi
+}
+
+export interface RumPluginError {
+  error: unknown
+  handlingStack?: string | undefined
+  context?: Context | undefined
+  startClocks: {
+    relative: number
+    timeStamp: number
+  }
+}
+
+export interface RumPlugin {
+  name: string
+  onInit?: (context: RumPluginContext) => void
+  onRumStart?: (context: RumPluginStartContext) => void
+  getConfigurationTelemetry?: () => Record<string, unknown>
 }
 
 type RumSlimUnsupportedInitOption =
@@ -81,11 +144,16 @@ export type RumSlimSiteInitConfiguration = Omit<
   RumSiteInitConfiguration,
   RumSlimUnsupportedInitOption
 >
+export type RumSlimPluginInitConfiguration = (
+  | RumSlimInitConfiguration
+  | RumSlimSiteInitConfiguration
+) & {
+  plugins?: RumPlugin[] | undefined
+}
 
 export declare const datafluxRum: {
-  init: (
-    initConfiguration: RumSlimInitConfiguration | RumSlimSiteInitConfiguration
-  ) => void
+  init: (initConfiguration: RumSlimPluginInitConfiguration) => void
+  startView: (options?: string | ViewOptions) => void
   setViewName: (name: string) => void
   setViewContext: (context: Context) => void
   setViewContextProperty: (key: string, value: any) => void
@@ -101,8 +169,7 @@ export declare const datafluxRum: {
     startTime?: number | undefined
   ) => InternalContext | undefined
   getInitConfiguration: () =>
-    | RumSlimInitConfiguration
-    | RumSlimSiteInitConfiguration
+    | RumSlimPluginInitConfiguration
     | undefined
   getRemoteConfiguration: (
     callback: (remoteConfiguration: object) => void
@@ -122,6 +189,7 @@ export declare const datafluxRum: {
   removeUserProperty: (key: any) => void
   clearUser: () => void
   stopSession: () => void
+  startSession: (options?: StartSessionOptions) => void
   setForcedSession: () => void
   createResourceTrackerId: () => string
   setResourceContext: (trackerId: string, context: Context) => void
@@ -131,4 +199,3 @@ export declare const datafluxRum: {
 } & {
   onReady(callback: () => void): void
 }
-

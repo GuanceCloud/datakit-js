@@ -2,7 +2,9 @@ import {
   LifeCycle,
   LifeCycleEventType,
   Observable,
-  PageExitReason
+  PageExitReason,
+  resetTelemetry,
+  startFakeTelemetry
 } from '@cloudcare/browser-core'
 import {
   computeSegmentContext,
@@ -1056,10 +1058,14 @@ describe('segmentCollection', () => {
     expect(sendOnExit).toHaveBeenCalledTimes(1)
   })
 
-  it('should discard a finalized segment that exceeds the actual byte limit', () => {
+  it('should send a regular finalized segment that exceeds the beacon byte limit', () => {
     const lifeCycle = new LifeCycle()
     const send = jasmine.createSpy('send')
     const encoder = createEncoder()
+    const flushedSegments = []
+    const onReplayResetNeeded = jasmine.createSpy(
+      'onReplayResetNeeded'
+    )
     setSegmentBytesLimit(2)
     const segmentCollection = doStartSegmentCollection(
       lifeCycle,
@@ -1069,12 +1075,56 @@ describe('segmentCollection', () => {
       }),
       { send, sendOnExit: jasmine.createSpy('sendOnExit') },
       encoder,
-      false
+      false,
+      {
+        onReplayResetNeeded,
+        onSegmentFlushed: (segment) => flushedSegments.push(segment)
+      }
     )
 
-    segmentCollection.addRecord({ type: 2, timestamp: 10 })
+    expect(
+      segmentCollection.$rAddBaselineRecords([
+        {
+          type: RecordType.Meta,
+          timestamp: 10,
+          data: { width: 1280, height: 720 }
+        },
+        {
+          type: RecordType.Focus,
+          timestamp: 10,
+          data: { has_focus: true }
+        },
+        {
+          type: RecordType.FullSnapshot,
+          timestamp: 10
+        }
+      ])
+    ).toBeTrue()
 
-    expect(send).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(flushedSegments[0].recordCountsByType).toEqual({
+      meta: 1,
+      focus: 1,
+      full_snapshot: 1
+    })
+    expect(onReplayResetNeeded).not.toHaveBeenCalled()
+
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 20,
+        data: {
+          source: IncrementalSource.Mutation
+        }
+      })
+    ).toBeTrue()
+    jasmine.clock().tick(SEGMENT_DURATION_LIMIT)
+
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(flushedSegments[1].recordCountsByType).toEqual({
+      mutation: 1
+    })
+    expect(onReplayResetNeeded).not.toHaveBeenCalled()
   })
 
   it('should use sendOnExit when stop receives a page-exit reason', () => {
@@ -1100,6 +1150,77 @@ describe('segmentCollection', () => {
 
     expect(send).not.toHaveBeenCalled()
     expect(sendOnExit).toHaveBeenCalledTimes(1)
+  })
+
+  it('should drain prior retry payloads on unload when the current segment is empty', () => {
+    const lifeCycle = new LifeCycle()
+    const send = jasmine.createSpy('send')
+    const sendOnExit = jasmine.createSpy('sendOnExit')
+    const drainOnExit = jasmine
+      .createSpy('drainOnExit')
+      .and.returnValue({
+        $rBytesCount: 12000,
+        $rAllPayloadsSent: true
+      })
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit, $rDrainOnExit: drainOnExit },
+      createEncoder(),
+      false
+    )
+
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.UNLOADING
+    })
+    segmentCollection.stop(PageExitReason.UNLOADING)
+
+    expect(drainOnExit).toHaveBeenCalledOnceWith(SEGMENT_BYTES_LIMIT)
+    expect(send).not.toHaveBeenCalled()
+    expect(sendOnExit).not.toHaveBeenCalled()
+  })
+
+  it('should drain prior retry payloads before rejecting an oversized unload tail', () => {
+    const lifeCycle = new LifeCycle()
+    const send = jasmine.createSpy('send')
+    const sendOnExit = jasmine.createSpy('sendOnExit')
+    const drainOnExit = jasmine
+      .createSpy('drainOnExit')
+      .and.returnValue({
+        $rBytesCount: 10000,
+        $rAllPayloadsSent: true
+      })
+    const encoder = createDeferredEncoder()
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit, $rDrainOnExit: drainOnExit },
+      encoder,
+      false
+    )
+
+    segmentCollection.addRecord({
+      type: RecordType.FullSnapshot,
+      timestamp: 10
+    })
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.UNLOADING
+    })
+    encoder.resolve(0, {
+      rawBytesCount: 50000,
+      output: new Uint8Array(50000),
+      outputBytesCount: 50000
+    })
+
+    expect(drainOnExit).toHaveBeenCalledOnceWith(SEGMENT_BYTES_LIMIT)
+    expect(send).not.toHaveBeenCalled()
+    expect(sendOnExit).not.toHaveBeenCalled()
   })
 
   it('should synchronously settle a deferred segment finish before stop returns', () => {
@@ -1421,6 +1542,100 @@ describe('segmentCollection', () => {
       full_snapshot: 1
     })
   })
+
+  ;['Meta', 'Focus', 'FullSnapshot'].forEach(
+    (failingRecordName, failingWriteIndex) => {
+      it(
+        'should reject the baseline transaction when ' +
+          failingRecordName +
+          ' encoding fails synchronously',
+        () => {
+          const lifeCycle = new LifeCycle()
+          const encoder = createEncoder()
+          let writeIndex = 0
+          encoder.write.and.callFake((data, callback) => {
+            encoder.empty = false
+            const currentWriteIndex = writeIndex
+            writeIndex += 1
+            if (!callback) {
+              return
+            }
+            if (
+              currentWriteIndex % (failingWriteIndex + 1) ===
+              failingWriteIndex
+            ) {
+              callback(0, new Error('synchronous encoder failure'))
+            } else {
+              callback(data.length)
+            }
+          })
+          const onReplayResetNeeded = jasmine.createSpy(
+            'onReplayResetNeeded'
+          )
+          const onReplayResetExhausted = jasmine.createSpy(
+            'onReplayResetExhausted'
+          )
+          const segmentCollection = doStartSegmentCollection(
+            lifeCycle,
+            () => ({
+              session: { id: 'session-1' },
+              view: { id: 'view-1' }
+            }),
+            {
+              send: jasmine.createSpy('send'),
+              sendOnExit: jasmine.createSpy('sendOnExit')
+            },
+            encoder,
+            false,
+            {
+              onReplayResetNeeded,
+              onReplayResetExhausted
+            }
+          )
+
+          for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+            let accepted
+            expect(() => {
+              accepted = segmentCollection.$rAddBaselineRecords([
+                {
+                  type: RecordType.Meta,
+                  timestamp: 10 + attemptIndex,
+                  data: { width: 1280, height: 720 }
+                },
+                {
+                  type: RecordType.Focus,
+                  timestamp: 10 + attemptIndex,
+                  data: { has_focus: true }
+                },
+                {
+                  type: RecordType.FullSnapshot,
+                  timestamp: 10 + attemptIndex
+                }
+              ])
+            }).not.toThrow()
+            expect(accepted).toBeFalse()
+            if (attemptIndex < 2) {
+              jasmine.clock().tick(0)
+              expect(onReplayResetNeeded).toHaveBeenCalledTimes(
+                attemptIndex + 1
+              )
+            }
+          }
+
+          expect(encoder.write).toHaveBeenCalledTimes(
+            (failingWriteIndex + 1) * 3
+          )
+          expect(onReplayResetNeeded.calls.allArgs()).toEqual([
+            ['encoder_error'],
+            ['encoder_error']
+          ])
+          expect(onReplayResetExhausted).toHaveBeenCalledOnceWith(
+            'encoder_error'
+          )
+        }
+      )
+    }
+  )
 
   it('should replay the whole baseline transaction when its prelude fills the segment', () => {
     setSegmentBytesLimit(2)
@@ -1854,6 +2069,58 @@ describe('segmentCollection', () => {
     ).toEqual([10, 20, 30])
   })
 
+  ;[
+    PageExitReason.HIDDEN,
+    PageExitReason.FROZEN,
+    PageExitReason.PAGEHIDE
+  ].forEach((pageExitReason) => {
+    it(
+      'should upgrade a completed pending dependent segment on ' +
+        pageExitReason,
+      () => {
+        const lifeCycle = new LifeCycle()
+        const send = jasmine.createSpy('send')
+        const sendOnExit = jasmine.createSpy('sendOnExit')
+        const encoder = createDeferredEncoder()
+        const segmentCollection = doStartSegmentCollection(
+          lifeCycle,
+          () => ({
+            session: { id: 'session-1' },
+            view: { id: 'view-1' }
+          }),
+          { send, sendOnExit },
+          encoder,
+          false
+        )
+
+        segmentCollection.addRecord({
+          type: RecordType.FullSnapshot,
+          timestamp: 10
+        })
+        lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+        segmentCollection.addRecord({
+          type: RecordType.IncrementalSnapshot,
+          timestamp: 20
+        })
+        lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+
+        // Complete the dependent first so it leaves the encoder in-flight set
+        // and waits for its baseline generation.
+        encoder.resolve(1)
+        expect(send).not.toHaveBeenCalled()
+        expect(sendOnExit).not.toHaveBeenCalled()
+
+        lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+          reason: pageExitReason
+        })
+        encoder.resolve(0)
+
+        expect(send).not.toHaveBeenCalled()
+        expect(sendOnExit).toHaveBeenCalledTimes(2)
+      }
+    )
+  })
+
   it('should send a completed dependent segment through the exit transport after unload', () => {
     const lifeCycle = new LifeCycle()
     const send = jasmine.createSpy('send')
@@ -1953,6 +2220,57 @@ describe('segmentCollection', () => {
     ).toBe(1)
   })
 
+  it('should include promoted transport bytes and report a dropped current unload segment', () => {
+    const telemetryEvents = startFakeTelemetry()
+    try {
+      const lifeCycle = new LifeCycle()
+      const send = jasmine.createSpy('send')
+      const sendOnExit = jasmine
+        .createSpy('sendOnExit')
+        .and.returnValue({
+          $rBytesCount: 55000,
+          $rCurrentPayloadSent: false
+        })
+      const encoder = createDeferredEncoder()
+      const segmentCollection = doStartSegmentCollection(
+        lifeCycle,
+        () => ({
+          session: { id: 'session-1' },
+          view: { id: 'view-1' }
+        }),
+        { send, sendOnExit },
+        encoder,
+        false
+      )
+
+      segmentCollection.addRecord({
+        type: RecordType.FullSnapshot,
+        timestamp: 10
+      })
+      lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+        reason: PageExitReason.UNLOADING
+      })
+      encoder.resolve(0, {
+        rawBytesCount: 10000,
+        output: new Uint8Array(10000),
+        outputBytesCount: 10000
+      })
+
+      expect(send).not.toHaveBeenCalled()
+      expect(sendOnExit).toHaveBeenCalledTimes(1)
+      expect(sendOnExit.calls.argsFor(0)[1]).toBe(SEGMENT_BYTES_LIMIT)
+      expect(telemetryEvents).toContain(
+        jasmine.objectContaining({
+          message: 'Session Replay record discarded.',
+          reason: 'page_exit_delivery_budget',
+          estimated_bytes_count: 12048
+        })
+      )
+    } finally {
+      resetTelemetry()
+    }
+  })
+
   it('should reserve multipart envelope bytes for every unload segment', () => {
     const lifeCycle = new LifeCycle()
     const send = jasmine.createSpy('send')
@@ -2046,9 +2364,10 @@ describe('segmentCollection', () => {
     const encoder = createEncoder()
     encoder.finish.and.callFake((callback) => {
       callback({
-        rawBytesCount: 100,
-        output: new Uint8Array([1, 2, 3]),
-        outputBytesCount: 60001
+        rawBytesCount: 0,
+        output: new Uint8Array(),
+        outputBytesCount: 0,
+        error: new Error('failed')
       })
     })
     const onReplayResetNeeded = jasmine.createSpy('onReplayResetNeeded')
@@ -2093,7 +2412,7 @@ describe('segmentCollection', () => {
 
     expect(onReplayResetNeeded).toHaveBeenCalledTimes(2)
     expect(onReplayResetExhausted).toHaveBeenCalledOnceWith(
-      'full_snapshot_segment_too_large'
+      'encoder_error'
     )
     expect(encoder.write.calls.count()).toBe(writesAfterFailureLimit)
   })

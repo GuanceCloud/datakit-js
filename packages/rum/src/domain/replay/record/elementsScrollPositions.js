@@ -17,6 +17,9 @@ export function createElementsScrollPositions() {
     },
     has: function (element) {
       return scrollPositionsByElement.has(element)
+    },
+    reset: function () {
+      scrollPositionsByElement = new WeakMap()
     }
   }
 }

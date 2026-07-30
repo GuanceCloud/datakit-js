@@ -45,8 +45,13 @@ export var ResourceType = {
   IMAGE: 'image',
   FONT: 'font',
   MEDIA: 'media',
+  WEBSOCKET: 'websocket',
   OTHER: 'other',
   CUSTOM: 'custom'
+}
+
+export var ExperimentalFeature = {
+  TRACK_WEBSOCKETS: 'track_websockets'
 }
 
 export var ActionType = {

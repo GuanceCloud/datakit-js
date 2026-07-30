@@ -163,6 +163,118 @@ describe('replay/record/shadowRootsController', () => {
     host.remove()
   })
 
+  it('should clean disconnected roots by scanning the bounded registry', () => {
+    const connectedContainer = document.createElement('section')
+    const connectedHost = document.createElement('div')
+    const disconnectedHost = document.createElement('div')
+    const movedDocumentHost = document.createElement('div')
+    document.body.appendChild(connectedContainer)
+    connectedContainer.appendChild(connectedHost)
+    document.body.appendChild(disconnectedHost)
+    document.body.appendChild(movedDocumentHost)
+    const connectedRoot = connectedHost.attachShadow({ mode: 'open' })
+    const disconnectedRoot = disconnectedHost.attachShadow({ mode: 'open' })
+    const movedDocumentRoot = movedDocumentHost.attachShadow({
+      mode: 'open'
+    })
+    const connectedInput = document.createElement('input')
+    const disconnectedInput = document.createElement('input')
+    const movedDocumentInput = document.createElement('input')
+    setSerializedNodeId(connectedInput, 43)
+    setSerializedNodeId(disconnectedInput, 44)
+    setSerializedNodeId(movedDocumentInput, 45)
+    connectedRoot.appendChild(connectedInput)
+    disconnectedRoot.appendChild(disconnectedInput)
+    movedDocumentRoot.appendChild(movedDocumentInput)
+    const cleanupScheduler = createCleanupScheduler()
+    const inputCb = jasmine.createSpy('inputCb')
+    const controller = initShadowRootsController(
+      { defaultPrivacyLevel: undefined },
+      {
+        mutationCb: function () {},
+        inputCb,
+        scheduleCleanup: cleanupScheduler.schedule
+      }
+    )
+
+    controller.addShadowRoot(connectedRoot)
+    controller.addShadowRoot(disconnectedRoot)
+    controller.addShadowRoot(movedDocumentRoot)
+    document.body.appendChild(connectedHost)
+    disconnectedHost.remove()
+    const foreignDocument = document.implementation.createHTMLDocument(
+      'foreign'
+    )
+    foreignDocument.body.appendChild(
+      foreignDocument.adoptNode(movedDocumentHost)
+    )
+    controller.cleanupDisconnectedShadowRoots()
+
+    disconnectedInput.value = 'detached'
+    disconnectedInput.dispatchEvent(new Event('change', { bubbles: true }))
+    movedDocumentInput.value = 'foreign-document'
+    movedDocumentInput.dispatchEvent(new Event('change', { bubbles: true }))
+    connectedInput.value = 'connected'
+    connectedInput.dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(inputCb).toHaveBeenCalledOnceWith({
+      id: 43,
+      text: 'connected'
+    })
+    controller.stop()
+    cleanupScheduler.drain()
+    connectedHost.remove()
+    connectedContainer.remove()
+  })
+
+  it('should continue disconnected root cleanup when one observer throws', () => {
+    const firstHost = document.createElement('div')
+    const secondHost = document.createElement('div')
+    const firstRoot = firstHost.attachShadow({ mode: 'open' })
+    const secondRoot = secondHost.attachShadow({ mode: 'open' })
+    const cleanupErrorCb = jasmine.createSpy('cleanupErrorCb')
+    const deactivateFirst = jasmine
+      .createSpy('deactivateFirst')
+      .and.throwError('deactivate failed')
+    const deactivateSecond = jasmine.createSpy('deactivateSecond')
+    let observerIndex = 0
+    const controller = initShadowRootsController(
+      {},
+      {
+        mutationCb: function () {},
+        inputCb: function () {},
+        cleanupErrorCb,
+        startMutationObserver: function () {
+          const deactivate =
+            observerIndex === 0 ? deactivateFirst : deactivateSecond
+          observerIndex += 1
+          return {
+            deactivate,
+            flush: function () {
+              return true
+            },
+            stop: function () {}
+          }
+        },
+        initInputObserver: function () {
+          return function () {}
+        }
+      }
+    )
+    controller.addShadowRoot(firstRoot)
+    controller.addShadowRoot(secondRoot)
+
+    expect(() => controller.cleanupDisconnectedShadowRoots()).not.toThrow()
+    expect(deactivateFirst).toHaveBeenCalledTimes(1)
+    expect(deactivateSecond).toHaveBeenCalledTimes(1)
+    expect(cleanupErrorCb).toHaveBeenCalledTimes(1)
+
+    controller.cleanupDisconnectedShadowRoots()
+    expect(deactivateFirst).toHaveBeenCalledTimes(1)
+    expect(deactivateSecond).toHaveBeenCalledTimes(1)
+    controller.stop()
+  })
+
   it('should restore published shadow root observers after a recovery generation is abandoned', () => {
     const firstHost = document.createElement('div')
     const secondHost = document.createElement('div')
@@ -209,6 +321,63 @@ describe('replay/record/shadowRootsController', () => {
     cleanupScheduler.drain()
     firstHost.remove()
     secondHost.remove()
+  })
+
+  it('should restore only recovery roots that still belong to the observed document', () => {
+    const firstContainer = document.createElement('section')
+    const secondContainer = document.createElement('section')
+    const movedHost = document.createElement('div')
+    const foreignHost = document.createElement('div')
+    document.body.appendChild(firstContainer)
+    document.body.appendChild(secondContainer)
+    firstContainer.appendChild(movedHost)
+    firstContainer.appendChild(foreignHost)
+    const movedRoot = movedHost.attachShadow({ mode: 'open' })
+    const foreignRoot = foreignHost.attachShadow({ mode: 'open' })
+    const movedInput = document.createElement('input')
+    const foreignInput = document.createElement('input')
+    setSerializedNodeId(movedInput, 423)
+    setSerializedNodeId(foreignInput, 424)
+    movedRoot.appendChild(movedInput)
+    foreignRoot.appendChild(foreignInput)
+    const cleanupScheduler = createCleanupScheduler()
+    const inputCb = jasmine.createSpy('inputCb')
+    const controller = initShadowRootsController(
+      { defaultPrivacyLevel: undefined },
+      {
+        mutationCb: jasmine.createSpy('mutationCb'),
+        inputCb,
+        scheduleCleanup: cleanupScheduler.schedule
+      }
+    )
+
+    controller.addShadowRoot(movedRoot)
+    controller.addShadowRoot(foreignRoot)
+    controller.$rBeginRecovery()
+    secondContainer.appendChild(movedHost)
+    const foreignDocument = document.implementation.createHTMLDocument(
+      'foreign'
+    )
+    foreignDocument.body.appendChild(
+      foreignDocument.adoptNode(foreignHost)
+    )
+    controller.cleanupDisconnectedShadowRoots()
+    controller.$rRollbackRecovery()
+
+    movedInput.value = 'same-document-move'
+    movedInput.dispatchEvent(new Event('change', { bubbles: true }))
+    foreignInput.value = 'foreign-document'
+    foreignInput.dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(inputCb).toHaveBeenCalledOnceWith({
+      id: 423,
+      text: 'same-document-move'
+    })
+
+    controller.stop()
+    cleanupScheduler.drain()
+    firstContainer.remove()
+    secondContainer.remove()
   })
 
   it('should restore a provisional shadow root committed after recovery begins', () => {

@@ -103,4 +103,20 @@ describe('sessionManagement', () => {
       })
     )
   })
+
+  it('should immediately replace the active session when renewSession is called', () => {
+    const manager = createManager()
+    const previousSessionId = manager.findSession().id
+    const expireSpy = jasmine.createSpy('expire')
+    const renewSpy = jasmine.createSpy('renew')
+    manager.expireObservable.subscribe(expireSpy)
+    manager.renewObservable.subscribe(renewSpy)
+
+    manager.renewSession()
+
+    expect(expireSpy).toHaveBeenCalledTimes(1)
+    expect(renewSpy).toHaveBeenCalledTimes(1)
+    expect(manager.findSession().id).toEqual(jasmine.any(String))
+    expect(manager.findSession().id).not.toBe(previousSessionId)
+  })
 })

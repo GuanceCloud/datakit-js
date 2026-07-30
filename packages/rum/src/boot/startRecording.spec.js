@@ -146,7 +146,7 @@ describe('startRecording', () => {
     expect(onStopped).toHaveBeenCalledOnceWith('manual_stop')
   })
 
-  it('should report stopped and suppress records when the initial full snapshot exceeds its sync budget', () => {
+  it('should keep records suppressed while the initial full snapshot continues asynchronously', () => {
     const sendEvent = jasmine.createSpy('sendEvent')
     const lifeCycle = new LifeCycle()
     const onStopped = jasmine.createSpy('onStopped')
@@ -175,8 +175,8 @@ describe('startRecording', () => {
       onStopped
     )
 
-    expect(recording.isStopped()).toBeTrue()
-    expect(onStopped).toHaveBeenCalledTimes(1)
+    expect(recording.isStopped()).toBeFalse()
+    expect(onStopped).not.toHaveBeenCalled()
     expect(
       parseBridgePayloads(sendEvent).some(
         (payload) =>
@@ -192,6 +192,148 @@ describe('startRecording', () => {
     document.body.dispatchEvent(new Event('input', { bubbles: true }))
 
     expect(sendEvent).not.toHaveBeenCalled()
+    recording.stop('pending_initial_stop')
+    expect(recording.isStopped()).toBeTrue()
+    expect(onStopped).toHaveBeenCalledOnceWith('pending_initial_stop')
+  })
+
+  it('should replace a pending initial snapshot at the next view boundary', () => {
+    jasmine.clock().install()
+    const sendEvent = jasmine.createSpy('sendEvent')
+    const lifeCycle = new LifeCycle()
+    const onStopped = jasmine.createSpy('onStopped')
+    let now = 0
+    const performanceNow = spyOn(performance, 'now').and.callFake(() => {
+      now += 40
+      return now
+    })
+
+    window.FTWebViewJavascriptBridge = {
+      getAllowedWebViewHosts: () => '["localhost"]',
+      sendEvent
+    }
+
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {},
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      undefined,
+      undefined,
+      onStopped
+    )
+
+    try {
+      expect(
+        parseBridgePayloads(sendEvent).some(
+          (payload) => payload.data.type === RecordType.FullSnapshot
+        )
+      ).toBeFalse()
+
+      lifeCycle.notify(LifeCycleEventType.VIEW_ENDED)
+      expect(recording.isStopped()).toBeFalse()
+      expect(onStopped).not.toHaveBeenCalled()
+
+      performanceNow.and.returnValue(0)
+      lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
+        startClocks: { timeStamp: 4568 }
+      })
+      jasmine.clock().tick(250)
+
+      expect(
+        parseBridgePayloads(sendEvent).some(
+          (payload) =>
+            payload.data.type === RecordType.FullSnapshot &&
+            payload.data.timestamp === 4568
+        )
+      ).toBeTrue()
+      expect(recording.isStopped()).toBeFalse()
+    } finally {
+      recording.stop()
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should supersede a pending view snapshot without stopping recording', () => {
+    jasmine.clock().install()
+    const sendEvent = jasmine.createSpy('sendEvent')
+    const lifeCycle = new LifeCycle()
+    const onStopped = jasmine.createSpy('onStopped')
+    const performanceNow = spyOn(performance, 'now').and.returnValue(0)
+
+    window.FTWebViewJavascriptBridge = {
+      getAllowedWebViewHosts: () => '["localhost"]',
+      sendEvent
+    }
+
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {},
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      undefined,
+      undefined,
+      onStopped
+    )
+
+    try {
+      sendEvent.calls.reset()
+      let now = 0
+      performanceNow.and.callFake(() => {
+        now += 40
+        return now
+      })
+      lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
+        startClocks: { timeStamp: 5000 }
+      })
+      lifeCycle.notify(LifeCycleEventType.VIEW_ENDED)
+
+      expect(recording.isStopped()).toBeFalse()
+      expect(onStopped).not.toHaveBeenCalled()
+
+      performanceNow.and.returnValue(0)
+      lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
+        startClocks: { timeStamp: 6000 }
+      })
+      jasmine.clock().tick(250)
+
+      const payloads = parseBridgePayloads(sendEvent)
+      const fullSnapshots = payloads.filter(
+        (payload) => payload.data.type === RecordType.FullSnapshot
+      )
+      expect(
+        fullSnapshots.some(
+          (payload) => payload.data.timestamp === 5000
+        )
+      ).toBeFalse()
+      expect(
+        fullSnapshots.some(
+          (payload) => payload.data.timestamp === 6000
+        )
+      ).toBeTrue()
+      const viewEndIndex = payloads.findIndex(
+        (payload) => payload.data.type === RecordType.ViewEnd
+      )
+      const nextFullSnapshotIndex = payloads.findIndex(
+        (payload) =>
+          payload.data.type === RecordType.FullSnapshot &&
+          payload.data.timestamp === 6000
+      )
+      expect(viewEndIndex).toBeGreaterThanOrEqual(0)
+      expect(nextFullSnapshotIndex).toBeGreaterThan(viewEndIndex)
+      expect(recording.isStopped()).toBeFalse()
+    } finally {
+      recording.stop()
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should expose snapshotCanvas from the underlying recorder', async () => {
@@ -800,9 +942,10 @@ describe('startRecording', () => {
       const encoder = createEncoder()
       encoder.finish.and.callFake((callback) => {
         callback({
-          rawBytesCount: 100,
-          output: new Uint8Array([1, 2, 3]),
-          outputBytesCount: 60001
+          rawBytesCount: 0,
+          output: new Uint8Array(),
+          outputBytesCount: 0,
+          error: new Error('failed')
         })
       })
       const recording = startRecording(

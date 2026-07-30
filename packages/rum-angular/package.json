@@ -1,0 +1,79 @@
+{
+    "name": "@cloudcare/browser-rum-angular",
+    "version": "3.3.6",
+    "main": "cjs/index.js",
+    "module": "esm/index.js",
+    "types": "types/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./types/index.d.ts",
+            "node": "./cjs/index.js",
+            "import": "./esm/index.js",
+            "require": "./cjs/index.js"
+        },
+        "./providers": {
+            "types": "./types/providers.d.ts",
+            "node": "./cjs/providers.js",
+            "import": "./esm/providers.js",
+            "require": "./cjs/providers.js"
+        }
+    },
+    "files": [
+        "cjs",
+        "esm",
+        "types",
+        "README.md"
+    ],
+    "sideEffects": false,
+    "description": "Guance Browser SDK RUM Angular integration",
+    "scripts": {
+        "build": "run-p build:cjs build:esm",
+        "build:cjs": "rm -rf cjs && babel --config-file ./babel.cjs.json --out-dir cjs ./src",
+        "build:esm": "rm -rf esm && babel --config-file ./babel.esm.json --out-dir esm ./src",
+        "demo:build": "webpack --config demo/webpack.config.js --mode=development",
+        "prepack": "npm run build"
+    },
+    "dependencies": {
+        "@cloudcare/browser-core": "3.3.6"
+    },
+    "peerDependencies": {
+        "@angular/core": ">=15 <23",
+        "@angular/router": ">=15 <23",
+        "@cloudcare/browser-rum": ">=3.3.6",
+        "@cloudcare/browser-rum-slim": ">=3.3.6",
+        "rxjs": ">=7"
+    },
+    "peerDependenciesMeta": {
+        "@cloudcare/browser-rum": {
+            "optional": true
+        },
+        "@cloudcare/browser-rum-slim": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "@angular/common": "21.2.18",
+        "@angular/compiler": "21.2.18",
+        "@angular/core": "21.2.18",
+        "@angular/platform-browser": "21.2.18",
+        "@angular/router": "21.2.18",
+        "rxjs": "7.8.2"
+    },
+    "keywords": [
+        "dataflux",
+        "rum",
+        "angular",
+        "sdk"
+    ],
+    "repository": {
+        "url": "https://github.com/GuanceCloud/datakit-js",
+        "type": "git",
+        "directory": "packages/rum-angular"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "author": "dataflux",
+    "license": "MIT",
+    "homepage": "https://github.com/GuanceCloud/datakit-js/README.md"
+}

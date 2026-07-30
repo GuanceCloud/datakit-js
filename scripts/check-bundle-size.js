@@ -2,16 +2,17 @@ const fs = require('fs')
 const path = require('path')
 const { spawnSync } = require('child_process')
 
-// Keep measurable headroom above the accepted replay-enabled bundle after the
-// bounded canvas, Shadow DOM, and synchronous page-exit reliability paths.
-// This check is part of the RUM package build, so npm and OSS release paths
-// cannot silently grow the browser download.  Raw and compressed budgets are
-// both intentional: gzip protects transfer cost while raw protects parse cost.
-const RUM_BUNDLE_RAW_BYTES_LIMIT = 338000
-// Canvas/WebGL replay establishes a larger accepted production baseline.
-// Keep roughly two percent of deterministic gzip headroom while the recorder
-// and its workers are moved behind an optional bundle boundary.
-const RUM_BUNDLE_GZIP_BYTES_LIMIT = 104000
+// The full bundle includes replay, framework plugin support, forced-session
+// renewal, and the v3.3.6 experimental WebSocket collector.  Production-only
+// debug work is stripped before accepting this baseline.  Keep the budget
+// close to the measured artifact so future growth remains explicit.
+const RUM_BUNDLE_RAW_BYTES_LIMIT = 348000
+const RUM_BUNDLE_GZIP_BYTES_LIMIT = 108000
+// Size-sensitive applications can use the slim package, which intentionally
+// omits Session Replay.  Gate it independently so growth in the full feature
+// set never weakens the lightweight distribution's contract.
+const RUM_SLIM_BUNDLE_RAW_BYTES_LIMIT = 164000
+const RUM_SLIM_BUNDLE_GZIP_BYTES_LIMIT = 51000
 // This list mirrors the enumerable API exposed by makeRumPublicApi(),
 // makeSessionReplayPublicApi(), and makePublicApi().  Keep it explicit so a
 // production-only property mangle cannot silently rename a public method.
@@ -67,13 +68,74 @@ const RUM_PUBLIC_API_KEYS = [
   'setViewContextProperty',
   'setViewName',
   'snapshotCanvas',
+  'startSession',
   'startSessionReplayRecording',
   'startView',
   'stopSession',
   'stopSessionReplayRecording',
   'takeSubsequentFullSnapshot'
 ]
+const RUM_SLIM_PUBLIC_API_KEYS = [
+  'addAction',
+  'addDebugSession',
+  'addError',
+  'addResource',
+  'addRumGlobalContext',
+  'addTiming',
+  'addTypeAction',
+  'appendResourceContext',
+  'clearDebugSession',
+  'clearGlobalContext',
+  'clearUser',
+  'createResourceTrackerId',
+  'finishResource',
+  'getDebugSession',
+  'getGlobalContext',
+  'getInitConfiguration',
+  'getInternalContext',
+  'getRemoteConfiguration',
+  'getResource',
+  'getRumGlobalContext',
+  'getUser',
+  'getViewContext',
+  'init',
+  'onReady',
+  'removeGlobalContextProperty',
+  'removeRumGlobalContext',
+  'removeUser',
+  'removeUserProperty',
+  'setForcedSession',
+  'setGlobalContext',
+  'setGlobalContextProperty',
+  'setResourceContext',
+  'setRumGlobalContext',
+  'setUser',
+  'setUserProperty',
+  'setViewContext',
+  'setViewContextProperty',
+  'setViewName',
+  'startSession',
+  'startView',
+  'stopSession'
+]
 const repositoryRoot = path.resolve(__dirname, '..')
+const bundleProfileName = process.argv[3] || 'full'
+const bundleProfile =
+  bundleProfileName === 'slim'
+    ? {
+        label: 'RUM slim bundle',
+        rawBytesLimit: RUM_SLIM_BUNDLE_RAW_BYTES_LIMIT,
+        gzipBytesLimit: RUM_SLIM_BUNDLE_GZIP_BYTES_LIMIT,
+        publicApiKeys: RUM_SLIM_PUBLIC_API_KEYS
+      }
+    : bundleProfileName === 'full'
+      ? {
+          label: 'RUM bundle',
+          rawBytesLimit: RUM_BUNDLE_RAW_BYTES_LIMIT,
+          gzipBytesLimit: RUM_BUNDLE_GZIP_BYTES_LIMIT,
+          publicApiKeys: RUM_PUBLIC_API_KEYS
+        }
+      : fail(`Unknown bundle profile: ${bundleProfileName}`)
 const bundlePath = process.argv[2]
   ? path.resolve(process.argv[2])
   : path.join(repositoryRoot, 'packages/rum/bundle/dataflux-rum.js')
@@ -82,7 +144,10 @@ if (!fs.existsSync(bundlePath)) {
   fail(`RUM bundle not found: ${bundlePath}`)
 }
 
-const publicApiResult = inspectPublicApi(bundlePath)
+const publicApiResult = inspectPublicApi(
+  bundlePath,
+  bundleProfile.publicApiKeys
+)
 const rawBytes = fs.statSync(bundlePath).size
 const gzipResult = spawnSync('gzip', ['-9', '-n', '-c', bundlePath], {
   encoding: null,
@@ -103,25 +168,25 @@ if (gzipResult.status !== 0) {
 const gzipBytes = gzipResult.stdout.length
 console.log(
   [
-    `RUM bundle: ${path.relative(repositoryRoot, bundlePath)}`,
+    `${bundleProfile.label}: ${path.relative(repositoryRoot, bundlePath)}`,
     `public API: ${publicApiResult.apiKeyCount} methods (contract verified)`,
-    `raw: ${rawBytes} / ${RUM_BUNDLE_RAW_BYTES_LIMIT} bytes`,
-    `gzip -9 -n: ${gzipBytes} / ${RUM_BUNDLE_GZIP_BYTES_LIMIT} bytes`
+    `raw: ${rawBytes} / ${bundleProfile.rawBytesLimit} bytes`,
+    `gzip -9 -n: ${gzipBytes} / ${bundleProfile.gzipBytesLimit} bytes`
   ].join('\n')
 )
 
 const failures = []
-if (rawBytes > RUM_BUNDLE_RAW_BYTES_LIMIT) {
+if (rawBytes > bundleProfile.rawBytesLimit) {
   failures.push(
     `raw size exceeds the limit by ${
-      rawBytes - RUM_BUNDLE_RAW_BYTES_LIMIT
+      rawBytes - bundleProfile.rawBytesLimit
     } bytes`
   )
 }
-if (gzipBytes > RUM_BUNDLE_GZIP_BYTES_LIMIT) {
+if (gzipBytes > bundleProfile.gzipBytesLimit) {
   failures.push(
     `gzip size exceeds the limit by ${
-      gzipBytes - RUM_BUNDLE_GZIP_BYTES_LIMIT
+      gzipBytes - bundleProfile.gzipBytesLimit
     } bytes`
   )
 }
@@ -129,7 +194,7 @@ if (failures.length) {
   fail(failures.join('; '))
 }
 
-function inspectPublicApi(bundlePath) {
+function inspectPublicApi(bundlePath, expectedPublicApiKeys) {
   var previousDatafluxRum = globalThis.DATAFLUX_RUM
   var hadDatafluxRum = Object.prototype.hasOwnProperty.call(
     globalThis,
@@ -147,7 +212,7 @@ function inspectPublicApi(bundlePath) {
     }
 
     var actualKeys = Object.keys(publicApi).sort()
-    var expectedKeys = RUM_PUBLIC_API_KEYS.slice().sort()
+    var expectedKeys = expectedPublicApiKeys.slice().sort()
     var missingKeys = expectedKeys.filter((key) => !actualKeys.includes(key))
     var unexpectedKeys = actualKeys.filter(
       (key) => !expectedKeys.includes(key)

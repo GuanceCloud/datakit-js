@@ -1676,6 +1676,117 @@ describe('replay/record/canvasEncodeBridge', () => {
     }
   })
 
+  it('should bound a caller waiting on a hung main-thread canvas encode', async () => {
+    jasmine.clock().install()
+    var blobCallback
+    try {
+      canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
+        callback
+      ) {
+        blobCallback = callback
+      })
+      var bridge = createCanvasEncodeBridge(
+        {
+          replayCanvasMimeType: 'image/webp',
+          replayCanvasQuality: 0.4,
+          replayCanvasMaxCanvasSize: 1280,
+          replayCanvasMaxConcurrentEncodes: 2,
+          replayCanvasMaxEncodedBytes: 1000
+        },
+        {
+          createImageBitmap: undefined,
+          Worker: undefined,
+          url: undefined
+        }
+      )
+      var encodeErrorPromise = bridge.encode(canvas).catch(function (error) {
+        return error
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+
+      jasmine.clock().tick(10999)
+      var settled = false
+      encodeErrorPromise.then(function () {
+        settled = true
+      })
+      await Promise.resolve()
+      expect(settled).toBeFalse()
+
+      jasmine.clock().tick(1)
+      expect((await encodeErrorPromise).message).toBe(
+        'Canvas encode request timed out'
+      )
+
+      // Let the uncancellable native work settle so the module-level physical
+      // admission is released for later tests.
+      blobCallback(new Blob([new Uint8Array(1001)], { type: 'image/webp' }))
+      await Promise.resolve()
+      await Promise.resolve()
+      bridge.stop()
+    } finally {
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should release the bridge slot when reset cancels hung native work', async () => {
+    var blobCallbacks = []
+    canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
+      callback
+    ) {
+      blobCallbacks.push(callback)
+    })
+    var bridge = createCanvasEncodeBridge(
+      {
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasQuality: 0.4,
+        replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxConcurrentEncodes: 2,
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      {
+        createImageBitmap: undefined,
+        Worker: undefined,
+        url: undefined
+      }
+    )
+
+    var firstErrorPromise = bridge.encode(canvas).catch(function (error) {
+      return error
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(blobCallbacks.length).toBe(1)
+
+    bridge.reset()
+    expect((await firstErrorPromise).message).toBe(
+      'Canvas encode bridge reset'
+    )
+
+    var secondResultPromise = bridge.encode(canvas)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(blobCallbacks.length).toBe(2)
+
+    blobCallbacks[1](
+      new Blob([new Uint8Array(1001)], { type: 'image/webp' })
+    )
+    expect(await secondResultPromise).toEqual({
+      ok: false,
+      reason: 'encode_too_large',
+      encodedBytesCount: 1001
+    })
+
+    // Settle the first uncancellable operation to release its shared physical
+    // admission without ever publishing its stale result.
+    blobCallbacks[0](
+      new Blob([new Uint8Array(1001)], { type: 'image/webp' })
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    bridge.stop()
+  })
+
   it('should reject every pending request when worker postMessage throws', async () => {
     setReplayCanvasContextType(canvas, 'webgl')
     var workerHandle = createTestWorker()

@@ -2,6 +2,7 @@ import {
   BridgeCapability,
   LifeCycle,
   LifeCycleEventType,
+  Observable,
   PageExitReason
 } from '@cloudcare/browser-core'
 import {
@@ -203,32 +204,32 @@ describe('recorderApi', () => {
     expect(snapshotResult).toBe(snapshotCanvas.calls.mostRecent().returnValue)
     expect(recorderApi.getSerializedNodeIdForDebug(canvas)).toBe(42)
     expect(getSerializedNodeIdForDebug).toHaveBeenCalledWith(canvas)
-    expect(recorderApi.getLastAutoCanvasSnapshotResultForDebug()).toEqual({
+    expect(recorderApi.$rGetDebug(0)).toEqual({
       status: 'completed',
       selectedCanvasCount: 1
     })
     expect(getLastAutoCanvasSnapshotResultForDebug).toHaveBeenCalled()
-    expect(recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug()).toEqual([
+    expect(recorderApi.$rGetDebug(1)).toEqual([
       { status: 'completed', selectedCanvasCount: 1 }
     ])
     expect(getAutoCanvasSnapshotDebugHistoryForDebug).toHaveBeenCalled()
-    expect(recorderApi.getLastCanvasMutationForDebug()).toEqual({
+    expect(recorderApi.$rGetDebug(2)).toEqual({
       canvasId: 42,
       encodedBytesCount: 2048
     })
     expect(getLastCanvasMutationForDebug).toHaveBeenCalled()
-    expect(recorderApi.getCanvasMutationHistoryForDebug()).toEqual([
+    expect(recorderApi.$rGetDebug(3)).toEqual([
       { canvasId: 42, encodedBytesCount: 2048 }
     ])
     expect(getCanvasMutationHistoryForDebug).toHaveBeenCalled()
-    expect(recorderApi.getLastDomMutationForDebug()).toEqual({
+    expect(recorderApi.$rGetDebug(4)).toEqual({
       addsCount: 1,
       removesCount: 0,
       textsCount: 0,
       attributesCount: 0
     })
     expect(getLastDomMutationForDebug).toHaveBeenCalled()
-    expect(recorderApi.getDomMutationHistoryForDebug()).toEqual([
+    expect(recorderApi.$rGetDebug(5)).toEqual([
       {
         addsCount: 1,
         removesCount: 0,
@@ -237,7 +238,7 @@ describe('recorderApi', () => {
       }
     ])
     expect(getDomMutationHistoryForDebug).toHaveBeenCalled()
-    expect(recorderApi.getLastReplaySegmentFlushForDebug()).toEqual({
+    expect(recorderApi.$rGetDebug(6)).toEqual({
       creationReason: 'init',
       flushReason: 'segment_duration_limit',
       recordCountsByType: {
@@ -245,7 +246,7 @@ describe('recorderApi', () => {
       }
     })
     expect(getLastReplaySegmentFlushForDebug).toHaveBeenCalled()
-    expect(recorderApi.getReplaySegmentFlushHistoryForDebug()).toEqual([
+    expect(recorderApi.$rGetDebug(7)).toEqual([
       {
         creationReason: 'init',
         flushReason: 'segment_duration_limit'
@@ -256,7 +257,7 @@ describe('recorderApi', () => {
       }
     ])
     expect(getReplaySegmentFlushHistoryForDebug).toHaveBeenCalled()
-    expect(recorderApi.getReplayPerformanceForDebug()).toEqual({
+    expect(recorderApi.$rGetDebug(8)).toEqual({
       processMutationsCount: 12,
       mutationCallbackCount: 4,
       replaySegmentFlushCount: 2
@@ -270,6 +271,75 @@ describe('recorderApi', () => {
 
     recorderApi.takeSubsequentFullSnapshot()
     expect(takeSubsequentFullSnapshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('should restart after canceled beforeunload unless explicitly stopped', () => {
+    const worker = new FakeWorker()
+    const stopRecording = jasmine.createSpy('stopRecording')
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.returnValue({
+        stop: stopRecording,
+        isStopped: () => false,
+        takeSubsequentFullSnapshot: jasmine.createSpy(
+          'takeSubsequentFullSnapshot'
+        )
+      })
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+    const lifeCycle = new LifeCycle()
+    const setForcedSession = jasmine.createSpy('setForcedSession')
+
+    recorderApi.start({ force: true })
+    recorderApi.onRumStart(
+      lifeCycle,
+      { workerUrl: '/worker.js' },
+      {
+        setForcedSession,
+        findTrackedSession: () => ({
+          sessionReplayAllowed: true
+        })
+      },
+      {},
+      undefined
+    )
+    worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'initialized', version: '1.0.0' }
+      })
+    )
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
+
+    let recoverCanceledUnload
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.UNLOADING,
+      $rOnCancel: (callback) => {
+        recoverCanceledUnload = callback
+      }
+    })
+
+    expect(stopRecording).toHaveBeenCalledOnceWith(
+      PageExitReason.UNLOADING
+    )
+    expect(recorderApi.isRecording()).toBeFalse()
+
+    recoverCanceledUnload()
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+    expect(setForcedSession).toHaveBeenCalledTimes(1)
+    expect(recorderApi.isRecording()).toBeTrue()
+
+    let staleRecovery
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.UNLOADING,
+      $rOnCancel: (callback) => {
+        staleRecovery = callback
+      }
+    })
+    recorderApi.stop()
+    staleRecovery()
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(2)
+    expect(recorderApi.isRecording()).toBeFalse()
   })
 
   it('should not enter started state when recording stopped during initialization', () => {
@@ -358,7 +428,7 @@ describe('recorderApi', () => {
 
     // Verify the callback changed state without relying on isRecording() to
     // reconcile the stopped implementation first.
-    expect(recorderApi.getReplayPerformanceForDebug()).toBeUndefined()
+    expect(recorderApi.$rGetDebug(8)).toBeUndefined()
     expect(
       await recorderApi.snapshotCanvas(document.createElement('canvas'))
     ).toEqual({
@@ -473,6 +543,95 @@ describe('recorderApi', () => {
     lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
 
     expect(startRecordingImpl.calls.count()).toBe(2)
+  })
+
+  it('should preserve force before rum starts and force the session before recording', () => {
+    const worker = new FakeWorker()
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.returnValue({
+        stop: jasmine.createSpy('stop'),
+        takeSubsequentFullSnapshot: jasmine.createSpy(
+          'takeSubsequentFullSnapshot'
+        )
+      })
+    const lifeCycle = new LifeCycle()
+    let forced = false
+    const sessionManager = {
+      setForcedSession: jasmine
+        .createSpy('setForcedSession')
+        .and.callFake(function () {
+          forced = true
+          lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
+        }),
+      findTrackedSession: function () {
+        return forced
+          ? {
+              id: 'forced-session-id',
+              sessionReplayAllowed: true
+            }
+          : undefined
+      }
+    }
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+
+    recorderApi.start({ force: true })
+    recorderApi.onRumStart(
+      lifeCycle,
+      { workerUrl: '/worker.js' },
+      sessionManager,
+      {},
+      undefined
+    )
+
+    expect(sessionManager.setForcedSession).toHaveBeenCalledTimes(1)
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
+
+    recorderApi.start({ force: true })
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('should start an intent-to-record when the current session becomes forced', () => {
+    const worker = new FakeWorker()
+    const startRecordingImpl = jasmine
+      .createSpy('startRecordingImpl')
+      .and.returnValue({
+        stop: jasmine.createSpy('stop'),
+        takeSubsequentFullSnapshot: jasmine.createSpy(
+          'takeSubsequentFullSnapshot'
+        )
+      })
+    const sessionStateUpdateObservable = new Observable()
+    let forced = false
+    const sessionManager = {
+      sessionStateUpdateObservable,
+      findTrackedSession: function () {
+        return forced
+          ? {
+              id: 'forced-session-id',
+              sessionReplayAllowed: true
+            }
+          : undefined
+      }
+    }
+    const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
+    recorderApi.onRumStart(
+      new LifeCycle(),
+      { workerUrl: '/worker.js' },
+      sessionManager,
+      {},
+      undefined
+    )
+
+    recorderApi.start()
+    forced = true
+    sessionStateUpdateObservable.notify({
+      previousState: { forcedSession: undefined },
+      newState: { forcedSession: '1' }
+    })
+
+    expect(startRecordingImpl).toHaveBeenCalledTimes(1)
   })
 
   it('should stop recording and recreate the worker after a terminal encoder error', () => {
@@ -1017,14 +1176,14 @@ describe('recorderApi', () => {
     expect(
       recorderApi.getSerializedNodeIdForDebug(document.createElement('canvas'))
     ).toBeUndefined()
-    expect(recorderApi.getLastAutoCanvasSnapshotResultForDebug()).toBeUndefined()
-    expect(recorderApi.getAutoCanvasSnapshotDebugHistoryForDebug()).toBeUndefined()
-    expect(recorderApi.getLastCanvasMutationForDebug()).toBeUndefined()
-    expect(recorderApi.getCanvasMutationHistoryForDebug()).toBeUndefined()
-    expect(recorderApi.getLastDomMutationForDebug()).toBeUndefined()
-    expect(recorderApi.getDomMutationHistoryForDebug()).toBeUndefined()
-    expect(recorderApi.getLastReplaySegmentFlushForDebug()).toBeUndefined()
-    expect(recorderApi.getReplaySegmentFlushHistoryForDebug()).toBeUndefined()
-    expect(recorderApi.getReplayPerformanceForDebug()).toBeUndefined()
+    expect(recorderApi.$rGetDebug(0)).toBeUndefined()
+    expect(recorderApi.$rGetDebug(1)).toBeUndefined()
+    expect(recorderApi.$rGetDebug(2)).toBeUndefined()
+    expect(recorderApi.$rGetDebug(3)).toBeUndefined()
+    expect(recorderApi.$rGetDebug(4)).toBeUndefined()
+    expect(recorderApi.$rGetDebug(5)).toBeUndefined()
+    expect(recorderApi.$rGetDebug(6)).toBeUndefined()
+    expect(recorderApi.$rGetDebug(7)).toBeUndefined()
+    expect(recorderApi.$rGetDebug(8)).toBeUndefined()
   })
 })

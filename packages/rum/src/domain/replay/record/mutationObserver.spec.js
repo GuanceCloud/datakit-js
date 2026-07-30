@@ -667,6 +667,106 @@ describe('replay/record/mutationObserver', () => {
     )
   })
 
+  it('should finish a bounded contiguous append batch after a short clock interruption', () => {
+    let nowCalls = 0
+    spyOn(performance, 'now').and.callFake(() => {
+      nowCalls += 1
+      // The debug build reads processStart once before creating the same 0ms
+      // normalization deadline used by production. Every later check observes
+      // the interrupted 10ms clock.
+      return nowCalls <= 2 ? 0 : 10
+    })
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    markSerializedAncestors(parent, 154)
+    const mutationCallback = jasmine.createSpy('mutationCallback')
+    const mutationOverflowCallback = jasmine.createSpy(
+      'mutationOverflowCallback'
+    )
+    const observer = startMutationObserver(
+      mutationCallback,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      { removeShadowRoot: jasmine.createSpy('removeShadowRoot') },
+      parent,
+      undefined,
+      mutationOverflowCallback
+    )
+    const mutations = Array.from({ length: 12 }, () => {
+      const addedNodes = Array.from({ length: 4 }, () => {
+        const node = document.createElement('section')
+        parent.appendChild(node)
+        return node
+      })
+      return {
+        type: 'childList',
+        target: parent,
+        addedNodes,
+        removedNodes: []
+      }
+    })
+
+    observedCallback(mutations)
+    observer.flush()
+
+    expect(mutationOverflowCallback).not.toHaveBeenCalled()
+    expect(
+      mutationCallback
+        .calls
+        .allArgs()
+        .reduce((count, args) => count + args[0].adds.length, 0)
+    ).toBe(48)
+    observer.stop()
+    parent.remove()
+  })
+
+  it('should enforce the normalization deadline after the small-batch operation grace', () => {
+    let nowCalls = 0
+    spyOn(performance, 'now').and.callFake(() => {
+      nowCalls += 1
+      return nowCalls <= 2 ? 0 : 10
+    })
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    markSerializedAncestors(parent, 1541)
+    const mutationCallback = jasmine.createSpy('mutationCallback')
+    const mutationOverflowCallback = jasmine.createSpy(
+      'mutationOverflowCallback'
+    )
+    const observer = startMutationObserver(
+      mutationCallback,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      { removeShadowRoot: jasmine.createSpy('removeShadowRoot') },
+      parent,
+      undefined,
+      mutationOverflowCallback
+    )
+    const addedNodes = Array.from({ length: 96 }, () => {
+      const node = document.createElement('section')
+      parent.appendChild(node)
+      return node
+    })
+
+    observedCallback([
+      {
+        type: 'childList',
+        target: parent,
+        addedNodes,
+        removedNodes: []
+      }
+    ])
+
+    expect(observer.flush()).toBeFalse()
+    expect(mutationCallback).not.toHaveBeenCalled()
+    expect(mutationOverflowCallback).toHaveBeenCalledOnceWith(
+      jasmine.objectContaining({
+        reason: 'mutation_normalization_budget',
+        mutationRecordCount: 1
+      })
+    )
+    observer.stop()
+    parent.remove()
+  })
+
   it('should reject an over-budget normalization batch atomically and keep observing', () => {
     let nowCalls = 0
     const performanceNowSpy = spyOn(performance, 'now').and.callFake(() => {
@@ -1587,7 +1687,7 @@ describe('replay/record/mutationObserver', () => {
     parent.remove()
   })
 
-  it('should bound removed-subtree shadow cleanup and request recovery', () => {
+  it('should preserve a large root removal by using bounded shadow registry cleanup', () => {
     spyOn(performance, 'now').and.returnValue(0)
     const parent = document.createElement('div')
     document.body.appendChild(parent)
@@ -1607,9 +1707,13 @@ describe('replay/record/mutationObserver', () => {
     }
     removedRoot.appendChild(children)
     parent.appendChild(removedRoot)
+    setSerializedNodeId(removedRoot, 181)
     parent.removeChild(removedRoot)
 
     const removeShadowRoot = jasmine.createSpy('removeShadowRoot')
+    const cleanupDisconnectedShadowRoots = jasmine
+      .createSpy('cleanupDisconnectedShadowRoots')
+      .and.callFake(() => removeShadowRoot(shadowRoot))
     const resetShadowRoots = jasmine.createSpy('resetShadowRoots')
     const mutationCallback = jasmine.createSpy('mutationCallback')
     const mutationOverflowCallback = jasmine.createSpy(
@@ -1618,7 +1722,11 @@ describe('replay/record/mutationObserver', () => {
     const observer = startMutationObserver(
       mutationCallback,
       { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
-      { removeShadowRoot, reset: resetShadowRoots },
+      {
+        cleanupDisconnectedShadowRoots,
+        removeShadowRoot,
+        reset: resetShadowRoots
+      },
       parent,
       undefined,
       mutationOverflowCallback
@@ -1634,13 +1742,17 @@ describe('replay/record/mutationObserver', () => {
     ])
     observer.flush()
 
+    expect(cleanupDisconnectedShadowRoots).toHaveBeenCalledTimes(1)
     expect(removeShadowRoot).toHaveBeenCalledOnceWith(shadowRoot)
-    expect(resetShadowRoots).toHaveBeenCalledTimes(1)
-    expect(mutationOverflowCallback).toHaveBeenCalledOnceWith({
-      reason: 'removed_subtree_watermark',
-      mutationNodeCount: MAX_REMOVED_SUBTREE_TRAVERSAL_NODES
-    })
-    expect(mutationCallback).not.toHaveBeenCalled()
+    expect(resetShadowRoots).not.toHaveBeenCalled()
+    expect(mutationOverflowCallback).not.toHaveBeenCalled()
+    expect(mutationCallback).toHaveBeenCalledTimes(1)
+    expect(mutationCallback.calls.mostRecent().args[0].removes).toEqual([
+      {
+        parentId: 180,
+        id: 181
+      }
+    ])
     observer.stop()
     parent.remove()
   })

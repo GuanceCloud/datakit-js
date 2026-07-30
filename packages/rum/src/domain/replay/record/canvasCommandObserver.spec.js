@@ -1,5 +1,9 @@
 import { IncrementalSource, RecordType } from '../../../types'
-import { markReplayInternalCanvas } from './canvasContext'
+import {
+  markReplayInternalCanvas,
+  ReplayCanvasContextType,
+  setReplayCanvasContextType
+} from './canvasContext'
 import { startCanvasCommandCapture } from './canvasCommandObserver'
 
 describe('replay/record/canvasCommandObserver', () => {
@@ -197,6 +201,80 @@ describe('replay/record/canvasCommandObserver', () => {
     recorder.stop()
   })
 
+  it('should keep the rejected fallback retry cap while the canvas keeps drawing', async () => {
+    var recordedFrameCallback
+    var scheduledMicrotasks = []
+    var scheduledTimers = []
+    var currentTime = 0
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(
+        Promise.resolve({ ok: false, reason: 'record_rejected' })
+      )
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration({
+        replayCanvasAutoCooldown: 1,
+        replayCanvasAutoFailureBackoff: 1000,
+        replayCanvasMaxConcurrentEncodes: 1,
+        replayCanvasAutoMaxPerRun: 1
+      }),
+      emit: jasmine.createSpy('emit').and.returnValue(false),
+      snapshotCanvas: snapshotCanvas,
+      getCanvases: function () {
+        return []
+      },
+      getSerializedNodeId: function (node) {
+        return node && node.__sn && node.__sn.id
+      },
+      now: function () {
+        return currentTime
+      },
+      requestAnimationFrameImpl: function (callback) {
+        recordedFrameCallback = callback
+        return 1
+      },
+      cancelAnimationFrameImpl: function () {},
+      scheduleMicrotask: function (callback) {
+        scheduledMicrotasks.push(callback)
+      },
+      setTimeoutImpl: function (callback, delay) {
+        scheduledTimers.push({ callback: callback, delay: delay })
+        return scheduledTimers.length
+      },
+      clearTimeoutImpl: function () {}
+    })
+    var canvas = document.createElement('canvas')
+    canvas.__sn = { id: 702 }
+    var context = canvas.getContext('2d')
+
+    function drainMicrotasks() {
+      while (scheduledMicrotasks.length) {
+        scheduledMicrotasks.shift()()
+      }
+    }
+
+    context.fillRect(1, 2, 3, 4)
+    recordedFrameCallback()
+    drainMicrotasks()
+    await waitForAsyncSnapshotDebug()
+
+    for (var retryIndex = 0; retryIndex < 2; retryIndex += 1) {
+      context.fillRect(retryIndex + 2, retryIndex + 2, 1, 1)
+      recordedFrameCallback()
+      drainMicrotasks()
+      expect(scheduledTimers.length).toBe(1)
+      currentTime += 1000
+      scheduledTimers.shift().callback()
+      drainMicrotasks()
+      await waitForAsyncSnapshotDebug()
+    }
+
+    expect(snapshotCanvas).toHaveBeenCalledTimes(3)
+    expect(scheduledTimers.length).toBe(0)
+
+    recorder.stop()
+  })
+
   it('should retry a static bitmap when its canvas is published after polling is exhausted', async () => {
     var recordedFrameCallback
     var scheduledMicrotasks = []
@@ -247,7 +325,7 @@ describe('replay/record/canvasCommandObserver', () => {
     var canvas = document.createElement('canvas')
     var context = canvas.getContext('2d')
 
-    context.fillRect(1, 2, 3, 4)
+    context.createPattern(canvas, 'repeat')
     recordedFrameCallback()
     scheduledMicrotasks.shift()()
     await waitForAsyncSnapshotDebug()
@@ -272,6 +350,58 @@ describe('replay/record/canvasCommandObserver', () => {
     await waitForAsyncSnapshotDebug()
 
     expect(snapshotCanvas).toHaveBeenCalledTimes(9)
+    recorder.stop()
+  })
+
+  it('should emit a retained command batch when its canvas add is published', () => {
+    var recordedFrameCallback
+    var isSerialized = false
+    var emit = jasmine.createSpy('emit')
+    var snapshotCanvas = jasmine.createSpy('snapshotCanvas')
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration(),
+      emit: emit,
+      snapshotCanvas: snapshotCanvas,
+      getCanvases: function () {
+        return []
+      },
+      getSerializedNodeId: function () {
+        return isSerialized ? 703 : undefined
+      },
+      requestAnimationFrameImpl: function (callback) {
+        recordedFrameCallback = callback
+        return 1
+      },
+      cancelAnimationFrameImpl: function () {}
+    })
+    var canvas = document.createElement('canvas')
+    var context = canvas.getContext('2d')
+
+    context.fillRect(1, 2, 3, 4)
+    recordedFrameCallback()
+
+    expect(emit).not.toHaveBeenCalled()
+    expect(snapshotCanvas).not.toHaveBeenCalled()
+
+    isSerialized = true
+    recorder.$rRetryPublishedCanvas(canvas)
+    recorder.$rRetryPublishedCanvas(canvas)
+
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(emit).toHaveBeenCalledWith(
+      jasmine.objectContaining({
+        data: jasmine.objectContaining({
+          id: 703,
+          commands: [
+            jasmine.objectContaining({
+              property: 'fillRect',
+              args: [1, 2, 3, 4]
+            })
+          ]
+        })
+      })
+    )
+    expect(snapshotCanvas).not.toHaveBeenCalled()
     recorder.stop()
   })
 
@@ -1264,6 +1394,232 @@ describe('replay/record/canvasCommandObserver', () => {
         'height'
       ).set
     ).toBe(originalHeightSetter)
+  })
+
+  it('should flush commands before a dimension change and DOM mutations after it', () => {
+    var calls = []
+    var canvas
+    var context
+    var globalCommandFlush = jasmine.createSpy('globalCommandFlush')
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration(),
+      emit: jasmine.createSpy('emit'),
+      getCanvases: function () {
+        return []
+      },
+      flushMutations: function (targetCanvas) {
+        expect(targetCanvas).toBe(canvas)
+        calls.push('mutations:' + canvas.width)
+      },
+      commandRecorder: {
+        patchContext: jasmine.createSpy('patchContext'),
+        flush: globalCommandFlush,
+        flushContext: function (targetContext) {
+          expect(targetContext).toBe(context)
+          calls.push('commands:' + canvas.width)
+        },
+        stop: jasmine.createSpy('stop')
+      }
+    })
+    canvas = document.createElement('canvas')
+    canvas.__sn = { id: 41 }
+    context = canvas.getContext('2d')
+
+    canvas.width = 20
+
+    expect(calls).toEqual(['commands:300', 'mutations:20'])
+    expect(globalCommandFlush).not.toHaveBeenCalled()
+    recorder.stop()
+  })
+
+  it('should preserve the reset barrier when an active 2d canvas is assigned the same dimension', () => {
+    var commandFlush = jasmine.createSpy('commandFlush')
+    var mutationFlush = jasmine.createSpy('mutationFlush')
+    var forceSnapshotFallback = jasmine.createSpy(
+      'forceSnapshotFallback'
+    )
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration(),
+      emit: jasmine.createSpy('emit'),
+      getCanvases: function () {
+        return []
+      },
+      flushMutations: mutationFlush,
+      commandRecorder: {
+        patchContext: jasmine.createSpy('patchContext'),
+        flush: commandFlush,
+        forceSnapshotFallback: forceSnapshotFallback,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+    var canvas = document.createElement('canvas')
+    canvas.__sn = { id: 42 }
+    var context = canvas.getContext('2d')
+    var baselineToken =
+      recorder.createCanvasSnapshotBaselineToken(canvas)
+
+    canvas.width = canvas.width
+
+    expect(commandFlush).toHaveBeenCalledTimes(1)
+    expect(mutationFlush).not.toHaveBeenCalled()
+    expect(forceSnapshotFallback).toHaveBeenCalledOnceWith(
+      context,
+      'canvas_dimension_reset'
+    )
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(canvas, baselineToken)
+    ).toBe(false)
+    recorder.stop()
+  })
+
+  it('should invalidate dimension baselines without globally flushing paused, non-2d, or unpublished canvases', () => {
+    var commandFlush = jasmine.createSpy('commandFlush')
+    var mutationFlush = jasmine.createSpy('mutationFlush')
+    var forceSnapshotFallback = jasmine.createSpy(
+      'forceSnapshotFallback'
+    )
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration(),
+      emit: jasmine.createSpy('emit'),
+      getCanvases: function () {
+        return []
+      },
+      flushMutations: mutationFlush,
+      startPaused: true,
+      commandRecorder: {
+        patchContext: jasmine.createSpy('patchContext'),
+        flush: commandFlush,
+        forceSnapshotFallback: forceSnapshotFallback,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+    var pausedCanvas = document.createElement('canvas')
+    pausedCanvas.__sn = { id: 43 }
+    pausedCanvas.getContext('2d')
+    var pausedToken =
+      recorder.createCanvasSnapshotBaselineToken(pausedCanvas)
+
+    pausedCanvas.width = 20
+
+    var unpublishedCanvas = document.createElement('canvas')
+    unpublishedCanvas.getContext('2d')
+    var unpublishedToken =
+      recorder.createCanvasSnapshotBaselineToken(unpublishedCanvas)
+    unpublishedCanvas.width = 20
+
+    var unknownCanvas = document.createElement('canvas')
+    unknownCanvas.__sn = { id: 44 }
+    var unknownToken =
+      recorder.createCanvasSnapshotBaselineToken(unknownCanvas)
+    unknownCanvas.width = 20
+
+    var webglCanvas = document.createElement('canvas')
+    webglCanvas.__sn = { id: 45 }
+    setReplayCanvasContextType(
+      webglCanvas,
+      ReplayCanvasContextType.WebGL
+    )
+    var webglToken =
+      recorder.createCanvasSnapshotBaselineToken(webglCanvas)
+    webglCanvas.width = 20
+
+    expect(commandFlush).not.toHaveBeenCalled()
+    expect(mutationFlush).not.toHaveBeenCalled()
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(pausedCanvas, pausedToken)
+    ).toBe(false)
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(
+        unpublishedCanvas,
+        unpublishedToken
+      )
+    ).toBe(false)
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(unknownCanvas, unknownToken)
+    ).toBe(false)
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(webglCanvas, webglToken)
+    ).toBe(false)
+
+    recorder.scanExistingCanvases()
+    pausedCanvas.width = pausedCanvas.width
+
+    expect(commandFlush).toHaveBeenCalledTimes(1)
+    expect(mutationFlush).not.toHaveBeenCalled()
+    expect(forceSnapshotFallback).toHaveBeenCalledOnceWith(
+      pausedCanvas.getContext('2d'),
+      'canvas_dimension_reset'
+    )
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(pausedCanvas, pausedToken)
+    ).toBe(false)
+    recorder.stop()
+  })
+
+  it('should switch an unpublished resized 2d canvas to bitmap fallback without a global DOM flush', () => {
+    var commandFlush = jasmine.createSpy('commandFlush')
+    var mutationFlush = jasmine.createSpy('mutationFlush')
+    var forceSnapshotFallback = jasmine.createSpy(
+      'forceSnapshotFallback'
+    )
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration(),
+      emit: jasmine.createSpy('emit'),
+      getCanvases: function () {
+        return []
+      },
+      flushMutations: mutationFlush,
+      commandRecorder: {
+        patchContext: jasmine.createSpy('patchContext'),
+        flush: commandFlush,
+        forceSnapshotFallback: forceSnapshotFallback,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+    var canvas = document.createElement('canvas')
+    var context = canvas.getContext('2d')
+
+    canvas.width = 640
+
+    expect(commandFlush).not.toHaveBeenCalled()
+    expect(mutationFlush).not.toHaveBeenCalled()
+    expect(forceSnapshotFallback).toHaveBeenCalledOnceWith(
+      context,
+      'canvas_dimension_reset'
+    )
+    recorder.stop()
+  })
+
+  it('should invalidate bitmap baseline tokens after drawing or resizing', () => {
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration(),
+      emit: jasmine.createSpy('emit'),
+      getCanvases: function () {
+        return []
+      }
+    })
+    var canvas = document.createElement('canvas')
+    canvas.__sn = { id: 46 }
+    var context = canvas.getContext('2d')
+    var drawToken = recorder.createCanvasSnapshotBaselineToken(canvas)
+
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(canvas, drawToken)
+    ).toBe(true)
+    context.fillRect(0, 0, 1, 1)
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(canvas, drawToken)
+    ).toBe(false)
+
+    var resizeToken = recorder.createCanvasSnapshotBaselineToken(canvas)
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(canvas, resizeToken)
+    ).toBe(true)
+    canvas.width += 1
+    expect(
+      recorder.$rIsSnapshotBaselineCurrent(canvas, resizeToken)
+    ).toBe(false)
+    recorder.stop()
   })
 
   it('should preserve a later getContext patch when stopping', () => {

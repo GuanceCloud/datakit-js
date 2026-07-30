@@ -128,6 +128,96 @@ describe('sessionStore', () => {
     store.stop()
   })
 
+  it('should immediately replace the active session when renewed explicitly', () => {
+    const store = startSessionStore(
+      { type: SessionPersistence.LOCAL_STORAGE },
+      'rum',
+      function () {
+        return { trackingType: 'tracked', isTracked: true }
+      }
+    )
+    store.expandOrRenewSession()
+    const previousSessionId = store.getSession().id
+    const expireSpy = jasmine.createSpy('expire')
+    const renewSpy = jasmine.createSpy('renew')
+    store.expireObservable.subscribe(expireSpy)
+    store.renewObservable.subscribe(renewSpy)
+
+    store.renewSession()
+
+    expect(expireSpy).toHaveBeenCalledTimes(1)
+    expect(renewSpy).toHaveBeenCalledTimes(1)
+    expect(store.getSession()).toEqual(
+      jasmine.objectContaining({
+        rum: 'tracked',
+        id: jasmine.any(String)
+      })
+    )
+    expect(store.getSession().id).not.toBe(previousSessionId)
+
+    store.stop()
+  })
+
+  it('should assign an id when forcing an active untracked session', () => {
+    const store = startSessionStore(
+      { type: SessionPersistence.LOCAL_STORAGE },
+      'rum',
+      function () {
+        return { trackingType: 'untracked', isTracked: false }
+      }
+    )
+    store.expandOrRenewSession()
+    const updateSpy = jasmine.createSpy('update')
+    const expireSpy = jasmine.createSpy('expire')
+    const renewSpy = jasmine.createSpy('renew')
+    store.sessionStateUpdateObservable.subscribe(updateSpy)
+    store.expireObservable.subscribe(expireSpy)
+    store.renewObservable.subscribe(renewSpy)
+
+    store.forceSession()
+
+    expect(store.getSession()).toEqual(
+      jasmine.objectContaining({
+        rum: 'untracked',
+        id: jasmine.any(String),
+        forcedSession: '1'
+      })
+    )
+    expect(localStorage.getItem(SESSION_STORE_KEY)).toContain('forcedSession=1')
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(expireSpy).not.toHaveBeenCalled()
+    expect(renewSpy).not.toHaveBeenCalled()
+
+    store.stop()
+  })
+
+  it('should immediately renew a forced session after expiration', () => {
+    const store = startSessionStore(
+      { type: SessionPersistence.LOCAL_STORAGE },
+      'rum',
+      function () {
+        return { trackingType: 'untracked', isTracked: false }
+      }
+    )
+    store.expandOrRenewSession()
+    store.expire()
+    const renewSpy = jasmine.createSpy('renew')
+    store.renewObservable.subscribe(renewSpy)
+
+    store.forceSession()
+
+    expect(store.getSession()).toEqual(
+      jasmine.objectContaining({
+        rum: 'untracked',
+        id: jasmine.any(String),
+        forcedSession: '1'
+      })
+    )
+    expect(renewSpy).toHaveBeenCalledTimes(1)
+
+    store.stop()
+  })
+
   it('should not restore an expired session when restarting the store', () => {
     const store = startSessionStore(
       { type: SessionPersistence.LOCAL_STORAGE },

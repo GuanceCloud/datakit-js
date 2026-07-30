@@ -137,6 +137,69 @@ describe('replay/record/observers', () => {
     }
   })
 
+  it('should retain scroll state while its incremental record is gated', () => {
+    jasmine.clock().install()
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    Object.defineProperty(element, 'scrollTop', {
+      configurable: true,
+      value: 42
+    })
+    setSerializedNodeId(element, 101)
+    const scrollPositions = new Map()
+    const scrollCb = jasmine.createSpy('scrollCb')
+    const callback = jasmine.createSpy('callback')
+    const observers = initObservers({
+      lifeCycle: {
+        subscribe() {
+          return { unsubscribe: function () {} }
+        }
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      elementsScrollPositions: scrollPositions,
+      inputCb: callback,
+      mediaInteractionCb: callback,
+      mouseInteractionCb: callback,
+      mousemoveCb: callback,
+      mutationCb: callback,
+      mutationPerfCb: callback,
+      mutationOverflowCb: callback,
+      mutationActivityCb: callback,
+      scrollCb,
+      styleSheetCb: callback,
+      viewportResizeCb: callback,
+      frustrationCb: callback,
+      focusCb: callback,
+      visualViewportResizeCb: callback,
+      isNodeIgnored: function () {
+        return true
+      },
+      shadowRootsController: {
+        addShadowRoot: function () {
+          return true
+        },
+        removeShadowRoot: function () {}
+      }
+    })
+
+    try {
+      element.dispatchEvent(new Event('scroll', { bubbles: true }))
+      jasmine.clock().tick(100)
+
+      expect(scrollPositions.get(element)).toEqual({
+        scrollTop: 42,
+        scrollLeft: 0
+      })
+      expect(scrollCb).not.toHaveBeenCalled()
+    } finally {
+      observers.stop()
+      element.remove()
+      jasmine.clock().uninstall()
+    }
+  })
+
   it('should allocate stable record ids per event object', () => {
     const eventA = {}
     const eventB = {}

@@ -16,7 +16,6 @@ import {
   getSerializedNodeApproxBytes,
   SERIALIZATION_MAX_NODE_COUNT,
   SERIALIZATION_MAX_APPROX_BYTES,
-  SERIALIZATION_MAX_SYNC_DURATION_MS
 } from './serialize'
 import { initObservers } from './observers'
 
@@ -55,10 +54,23 @@ var MAX_PENDING_MUTATION_ADMISSION_APPROX_BYTES = 32 * 1024 * 1024
 var DYNAMIC_SHADOW_ROOT_SERIALIZATION_MAX_NODE_COUNT = 5000
 var DYNAMIC_SHADOW_ROOT_SERIALIZATION_MAX_APPROX_BYTES =
   MAX_MUTATION_EMIT_APPROX_BYTES - 1024
+var INITIAL_FULL_SNAPSHOT_SERIALIZATION_SLICE_MS = 8
 var FULL_SNAPSHOT_SERIALIZATION_SLICE_MS = 4
+// The churn fallback runs without yielding so the baseline cannot mix DOM
+// generations. Keep the whole transaction within one frame.
+var FULL_SNAPSHOT_SYNCHRONOUS_FINALIZATION_BUDGET_MS = 12
+// Initial snapshots may need several serializer watermarks, but the complete
+// record must still fit below the segment layer's 4 MiB pending-raw budget.
+var FULL_SNAPSHOT_SERIALIZATION_MAX_NODE_COUNT =
+  SERIALIZATION_MAX_NODE_COUNT * 4
+var FULL_SNAPSHOT_SERIALIZATION_MAX_APPROX_BYTES =
+  SERIALIZATION_MAX_APPROX_BYTES * 4 - 64 * 1024
 var FULL_SNAPSHOT_MAX_RESTART_COUNT = 3
 var FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS = 1000
+var FULL_SNAPSHOT_MUTATION_QUIET_DELAY_MS = 250
 export var MAX_FULL_SNAPSHOT_CANVAS_BASELINE_COUNT = 64
+var FULL_SNAPSHOT_CANVAS_BASELINE_TOTAL_TIMEOUT_MS = 2000
+var FULL_SNAPSHOT_CANVAS_BASELINE_ITEM_TIMEOUT_MS = 1000
 var CANVAS_DEBUG_HISTORY_LIMIT = 200
 var DOM_MUTATION_DEBUG_HISTORY_LIMIT = 20
 var DOM_MUTATION_DEBUG_SAMPLE_LIMIT = 5
@@ -248,6 +260,8 @@ export function record(options) {
   var pendingFullSnapshotActiveDuration = 0
   var pendingFullSnapshotRestartCount = 0
   var pendingFullSnapshotRestartRequested = false
+  var pendingFullSnapshotIsInitial = false
+  var fullSnapshotWasPublished = false
   var domMutationVersion = 0
   var mutationActivityTargets = new Set()
   var mutationActivityFlushScheduled = false
@@ -708,6 +722,7 @@ export function record(options) {
         mutation,
         mutationMeasurements.approxBytes,
         pendingPublicationTokenByNode,
+        pendingNodeParentByNode,
         wasNodePublishedBeforePendingMutation
       )
     ) {
@@ -765,6 +780,48 @@ export function record(options) {
     pendingMutationAdmissionApproxBytes = 0
   }
 
+  function isPureAddMutationPayload(mutationPayload) {
+    return Boolean(
+      mutationPayload &&
+        mutationPayload.adds.length &&
+        !mutationPayload.removes.length &&
+        !mutationPayload.texts.length &&
+        !mutationPayload.attributes.length
+    )
+  }
+
+  function tryMergePendingPureAddMutationAdmission(entry) {
+    var previousEntry =
+      pendingMutationAdmissionQueue[
+        pendingMutationAdmissionQueue.length - 1
+      ]
+    var mutationPayload = entry[0]
+    if (
+      !previousEntry ||
+      previousEntry[3] ||
+      !isPureAddMutationPayload(previousEntry[0]) ||
+      !isPureAddMutationPayload(mutationPayload) ||
+      previousEntry[1] + entry[1] > MAX_MUTATION_EMIT_APPROX_BYTES ||
+      pendingMutationAdmissionApproxBytes + entry[1] >
+        MAX_PENDING_MUTATION_ADMISSION_APPROX_BYTES
+    ) {
+      return false
+    }
+
+    // The previous record has been assembled but never offered to the
+    // segment encoder, so its mutation arrays have not been serialized or
+    // cached yet. Keep one exact admission boundary for adjacent independent
+    // adds while retaining insertion order and every publication token.
+    // Never mutate an attempted entry: a rejected encoder admission can cache
+    // its serialized bytes for the exact-object retry contract.
+    mutationPayload.adds.forEach(function (addMutation) {
+      previousEntry[0].adds.push(addMutation)
+    })
+    previousEntry[1] += entry[1]
+    pendingMutationAdmissionApproxBytes += entry[1]
+    return true
+  }
+
   function enqueueMutationEntriesForAdmission(mutationEntries) {
     if (!mutationEntries.length) {
       return
@@ -780,6 +837,9 @@ export function record(options) {
     }
     for (var entryIndex = 0; entryIndex < mutationEntries.length; entryIndex += 1) {
       var entry = mutationEntries[entryIndex]
+      if (tryMergePendingPureAddMutationAdmission(entry)) {
+        continue
+      }
       if (
         pendingMutationAdmissionQueue.length + 1 >
           MAX_PENDING_MUTATION_ADMISSION_PAYLOADS ||
@@ -850,6 +910,7 @@ export function record(options) {
           DOM_MUTATION_DEBUG_HISTORY_LIMIT
         )
       }
+      entry[3] = true
       if (
         emit(entry[2])
       ) {
@@ -937,7 +998,7 @@ export function record(options) {
       mutationOverflowCb: requestFullSnapshotAfterMutationDrop,
       mutationActivityCb: trackDomMutationActivity,
       inputCb,
-      isNodeIgnored: isNodeIgnored,
+      isNodeIgnored: isObservedNodeIgnored,
       isNodePublished: isNodeQueuedOrPublished,
       mutationNodeSerializationCb: stageMutationNodePublication,
       shadowRootCreatedCb: captureDynamicShadowRoot
@@ -958,6 +1019,21 @@ export function record(options) {
       // cannot be established, fail closed instead of emitting a stale id.
       return true
     }
+  }
+
+  function isObservedNodeIgnored(node, includeQueued) {
+    var ignored = isNodeIgnored(node, includeQueued)
+    if (
+      ignored &&
+      pendingFullSnapshotTask &&
+      publishedNodeParentByNode.has(node)
+    ) {
+      // Input, media and scroll state are not DOM mutations. If an observer
+      // ignores one after the node was serialized, rebuild the mixed-time
+      // baseline so the state change is represented by the next attempt.
+      pendingFullSnapshotRestartRequested = true
+    }
+    return ignored
   }
 
   function getActiveSerializedNodeId(node) {
@@ -1029,6 +1105,9 @@ export function record(options) {
       isNodeActive: function (node) {
         return !isNodeIgnored(node)
       },
+      flushMutations: function (canvas) {
+        return flushMutationRootForNode(canvas)
+      },
       onMutationDebug: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
         ? handleCanvasMutationDebug
         : undefined
@@ -1096,6 +1175,9 @@ export function record(options) {
       onMutationDebug: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
         ? handleCanvasMutationDebug
         : undefined,
+      flushMutations: function (canvas) {
+        return flushMutationRootForNode(canvas)
+      },
       startPaused: true
     })
   } catch (error) {
@@ -1141,8 +1223,47 @@ export function record(options) {
       canvasCommandCapture.createCanvasSnapshotBaselineToken
         ? canvasCommandCapture.createCanvasSnapshotBaselineToken(canvas)
         : undefined
+    var effectiveSnapshotOptions =
+      shouldUseCanvasCommandCapture &&
+      snapshotOptions &&
+      snapshotOptions.trigger === 'manual' &&
+      !snapshotOptions.scheduler
+        ? assign({}, snapshotOptions, {
+            scheduler: 'command_capture'
+          })
+        : snapshotOptions
+    if (
+      baselineToken &&
+      canvasCommandCapture &&
+      canvasCommandCapture.$rIsSnapshotBaselineCurrent
+    ) {
+      var originalIsCancelled =
+        effectiveSnapshotOptions &&
+        effectiveSnapshotOptions.$rIsCancelled
+      effectiveSnapshotOptions = assign({}, effectiveSnapshotOptions, {
+        $rIsCancelled: function () {
+          if (typeof originalIsCancelled === 'function') {
+            try {
+              if (originalIsCancelled()) {
+                return true
+              }
+            } catch (_) {
+              return true
+            }
+          }
+          try {
+            return !canvasCommandCapture.$rIsSnapshotBaselineCurrent(
+              canvas,
+              baselineToken
+            )
+          } catch (_) {
+            return true
+          }
+        }
+      })
+    }
     return Promise.resolve(
-      canvasObserver.snapshot(canvas, snapshotOptions)
+      canvasObserver.snapshot(canvas, effectiveSnapshotOptions)
     ).then(function (result) {
       if (
         result &&
@@ -1153,7 +1274,8 @@ export function record(options) {
         canvasCommandCapture.markCanvasSnapshotBaseline(
           canvas,
           baselineToken,
-          snapshotOptions && snapshotOptions.scheduler
+          effectiveSnapshotOptions &&
+            effectiveSnapshotOptions.scheduler
         )
       }
       return result
@@ -1162,7 +1284,11 @@ export function record(options) {
 
   function createFullSnapshotSerializerTask(serializationContext) {
     var publicationToken = currentFullSnapshotPublicationToken
-    return createMutationSerializerTask(document, {
+    var createSerializerTask =
+      (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+        options.$rCreateFullSnapshotSerializerTask) ||
+      createMutationSerializerTask
+    return createSerializerTask(document, {
       serializationContext: serializationContext,
       parentNodePrivacyLevel: options.configuration.defaultPrivacyLevel,
       configuration: options.configuration,
@@ -1174,6 +1300,37 @@ export function record(options) {
         )
       }
     })
+  }
+
+  function advanceFullSnapshotSerializerTask(
+    serializerTask,
+    deadline
+  ) {
+    var maxNodeCount = Math.min(
+      serializerTask.processedNodeCount + SERIALIZATION_MAX_NODE_COUNT,
+      FULL_SNAPSHOT_SERIALIZATION_MAX_NODE_COUNT
+    )
+    var maxApproxBytes = Math.min(
+      serializerTask.approxBytes + SERIALIZATION_MAX_APPROX_BYTES,
+      FULL_SNAPSHOT_SERIALIZATION_MAX_APPROX_BYTES
+    )
+    var completed = serializerTask.advance(
+      deadline,
+      maxNodeCount,
+      maxApproxBytes
+    )
+    return {
+      completed: completed,
+      isWatermarkReached:
+        !completed &&
+        (serializerTask.isMaxDepthReached ||
+          serializerTask.isMaxNodeComplexityReached ||
+          (serializerTask.isMaxNodeCountReached &&
+            maxNodeCount >= FULL_SNAPSHOT_SERIALIZATION_MAX_NODE_COUNT) ||
+          (serializerTask.isMaxApproxBytesReached &&
+            maxApproxBytes >=
+              FULL_SNAPSHOT_SERIALIZATION_MAX_APPROX_BYTES))
+    }
   }
 
   function emitFullSnapshot(timestamp, serializedDocument, startedAt) {
@@ -1221,6 +1378,7 @@ export function record(options) {
     if (!fullSnapshotAccepted) {
       return false
     }
+    fullSnapshotWasPublished = true
     currentFullSnapshotPublicationToken.$rPublished = true
 
     if (window.visualViewport) {
@@ -1249,9 +1407,11 @@ export function record(options) {
         canvasCommandCapture.scanExistingCanvases()
       }
     } catch (error) {
-      addTelemetryDebug('Session Replay canvas baseline scan failed.', {
-        error: String(error)
-      })
+      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+        addTelemetryDebug('Session Replay canvas baseline scan failed.', {
+          error: String(error)
+        })
+      }
     }
   }
 
@@ -1266,6 +1426,7 @@ export function record(options) {
 
     var baselineGeneration = fullSnapshotCanvasBaselineGeneration + 1
     fullSnapshotCanvasBaselineGeneration = baselineGeneration
+    var baselineStartedAt = getPerformanceTime()
     // The registry is already bounded and contains only canvases assigned an id
     // by the successful full snapshot.  Do not inspect or create a target
     // context here: a bitmap snapshot also covers contexts created before
@@ -1278,9 +1439,11 @@ export function record(options) {
         )
       )
     } catch (error) {
-      addTelemetryDebug('Session Replay canvas baseline lookup failed.', {
-        error: String(error)
-      })
+      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+        addTelemetryDebug('Session Replay canvas baseline lookup failed.', {
+          error: String(error)
+        })
+      }
       scanExistingCommandCaptureCanvases()
       return
     }
@@ -1301,18 +1464,63 @@ export function record(options) {
 
       var canvas = canvases[canvasIndex]
       canvasIndex += 1
+      var remainingBaselineTime =
+        FULL_SNAPSHOT_CANVAS_BASELINE_TOTAL_TIMEOUT_MS -
+        (getPerformanceTime() - baselineStartedAt)
+      if (remainingBaselineTime <= 0) {
+        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          addTelemetryDebug('Session Replay canvas baseline budget exhausted.', {
+            canvasCount: canvases.length,
+            completedCanvasCount: canvasIndex - 1
+          })
+        }
+        scanExistingCommandCaptureCanvases()
+        return Promise.resolve()
+      }
+      var canvasBaselineCancelled = false
       var snapshotResult
       try {
         snapshotResult = snapshotCanvasIfActive(canvas, {
           trigger: 'auto',
-          scheduler: 'full_snapshot_baseline'
+          scheduler: 'full_snapshot_baseline',
+          $rIsCancelled: function () {
+            return (
+              canvasBaselineCancelled ||
+              recordStopping ||
+              recordStopped ||
+              baselineGeneration !== fullSnapshotCanvasBaselineGeneration
+            )
+          }
         })
       } catch (_) {
         snapshotResult = undefined
       }
-      return Promise.resolve(snapshotResult)
-        .catch(function () {})
-        .then(runNextCanvasBaseline)
+      var canvasBaselineTimeoutId
+      var canvasBaselineTimeout = new Promise(function (resolve) {
+        canvasBaselineTimeoutId = setTimeout(function () {
+          canvasBaselineTimeoutId = undefined
+          canvasBaselineCancelled = true
+          if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+            addTelemetryDebug('Session Replay canvas baseline timed out.', {
+              canvasIndex: canvasIndex,
+              canvasCount: canvases.length
+            })
+          }
+          resolve()
+        }, Math.min(
+          FULL_SNAPSHOT_CANVAS_BASELINE_ITEM_TIMEOUT_MS,
+          remainingBaselineTime
+        ))
+      })
+      return Promise.race([
+        Promise.resolve(snapshotResult).catch(function () {}),
+        canvasBaselineTimeout
+      ]).then(function () {
+        if (canvasBaselineTimeoutId !== undefined) {
+          clearTimeout(canvasBaselineTimeoutId)
+        }
+        return runNextCanvasBaseline()
+      })
     }
 
     // Invoke the first item synchronously so the baseline gets the first
@@ -1336,38 +1544,60 @@ export function record(options) {
     var serializerTask = createFullSnapshotSerializerTask(
       serializationContext
     )
-    if (
-      !serializerTask ||
-      !serializerTask.advance(
-        getPerformanceTime() + SERIALIZATION_MAX_SYNC_DURATION_MS,
-        SERIALIZATION_MAX_NODE_COUNT,
-        SERIALIZATION_MAX_APPROX_BYTES
-      )
-    ) {
-      return false
+    if (!serializerTask) {
+      return {
+        status: 'failed',
+        reason: 'initial_full_snapshot_serialization_error'
+      }
     }
-    return emitFullSnapshot(
-      timestamp,
-      serializerTask.serializedNode,
-      fullSnapshotStartedAt
+    var advanceResult = advanceFullSnapshotSerializerTask(
+      serializerTask,
+      getPerformanceTime() + INITIAL_FULL_SNAPSHOT_SERIALIZATION_SLICE_MS
     )
+    if (advanceResult.isWatermarkReached) {
+      return {
+        status: 'failed',
+        reason: 'initial_full_snapshot_serialization_watermark'
+      }
+    }
+    if (!advanceResult.completed) {
+      return {
+        status: 'pending',
+        timestamp: timestamp
+      }
+    }
+    return {
+      status: emitFullSnapshot(
+        timestamp,
+        serializerTask.serializedNode,
+        fullSnapshotStartedAt
+      )
+        ? 'completed'
+        : 'failed',
+      reason: 'initial_full_snapshot_admission_rejected'
+    }
   }
 
-  var initialFullSnapshotSucceeded
+  var initialFullSnapshotResult
   try {
-    initialFullSnapshotSucceeded = takeInitialFullSnapshot()
+    initialFullSnapshotResult = takeInitialFullSnapshot()
   } catch (error) {
     return abortRecorderInitialization(
       'recorder_initialization_error',
       error
     )
   }
-  if (initialFullSnapshotSucceeded) {
+  if (initialFullSnapshotResult.status === 'completed') {
     takeFullSnapshotCanvasBaseline()
-  } else {
+  } else if (initialFullSnapshotResult.status === 'failed') {
     return abortRecorderInitialization(
-      'initial_full_snapshot_serialization_budget'
+      initialFullSnapshotResult.reason
     )
+  } else {
+    // The first short attempt ran before MutationObservers existed. Restart
+    // from a clean tree after observers are attached, so changes made between
+    // slices cannot produce a mixed-time initial baseline.
+    resetPublishedReplayTree()
   }
   var _initObservers
   try {
@@ -1394,7 +1624,7 @@ export function record(options) {
       mutationOverflowCb: requestFullSnapshotAfterMutationDrop,
       mutationActivityCb: trackDomMutationActivity,
       mutationNodeSerializationCb: stageMutationNodePublication,
-      isNodeIgnored: isNodeIgnored,
+      isNodeIgnored: isObservedNodeIgnored,
       isNodePublished: isNodeQueuedOrPublished,
       scrollCb: function (p) {
         emit(assembleIncrementalSnapshot(IncrementalSource.Scroll, p))
@@ -1452,6 +1682,13 @@ export function record(options) {
   var flushMutationsFromObservers = _initObservers.flush
   var resetMutationsFromObservers = _initObservers.reset || function () {}
   initializationCleanupTasks = []
+  if (
+    initialFullSnapshotResult.status === 'pending' &&
+    !beginInitialFullSnapshot(initialFullSnapshotResult.timestamp)
+  ) {
+    return createInactiveRecorder()
+  }
+
   function requestFullSnapshotAfterMutationDrop() {
     if (recordStopping || recordStopped) {
       return
@@ -1496,6 +1733,35 @@ export function record(options) {
     }
     flushPendingMutations()
     return true
+  }
+
+  function flushMutationRootForNode(node) {
+    if (!node || !flushMutationsFromObservers) {
+      return
+    }
+    mutationSourceFlushInProgress = true
+    var flushResult
+    try {
+      flushResult = refreshAndFlushPendingRootForNode(node)
+      if (
+        typeof flushResult === 'undefined' &&
+        shadowRootsController.refreshAndFlushPendingRootForNode
+      ) {
+        flushResult =
+          shadowRootsController.refreshAndFlushPendingRootForNode(node)
+      }
+    } finally {
+      mutationSourceFlushInProgress = false
+    }
+    if (flushResult === false) {
+      return false
+    }
+    flushPendingMutations()
+    return (
+      !pendingMutationAdmissionQueue.length &&
+      !suppressRecordsUntilFullSnapshot &&
+      !recordStopped
+    )
   }
 
   function discardPendingMutationPayload() {
@@ -1558,6 +1824,7 @@ export function record(options) {
     pendingFullSnapshotActiveDuration = 0
     pendingFullSnapshotRestartCount = 0
     pendingFullSnapshotRestartRequested = false
+    pendingFullSnapshotIsInitial = false
   }
 
   function clearDeferredRecords() {
@@ -1649,6 +1916,32 @@ export function record(options) {
     scanExistingCommandCaptureCanvases()
   }
 
+  function beginInitialFullSnapshot(timestamp) {
+    if (recordStopping || recordStopped) {
+      return false
+    }
+    cancelScheduledFullSnapshot()
+    pendingFullSnapshotTimestamp = timestamp
+    pendingFullSnapshotStartedAt = getPerformanceTime()
+    pendingFullSnapshotActiveDuration = 0
+    pendingFullSnapshotRestartCount = 0
+    pendingFullSnapshotRestartRequested = false
+    pendingFullSnapshotIsInitial = true
+    suppressRecordsUntilFullSnapshot = true
+    try {
+      prepareForFullSnapshot()
+      createPendingFullSnapshotTask()
+    } catch (error) {
+      handleFullSnapshotException(
+        'full_snapshot_initialization_error',
+        error
+      )
+      return false
+    }
+    schedulePendingFullSnapshotSlice()
+    return true
+  }
+
   function beginSubsequentFullSnapshot(
     timestamp,
     canBeDiscarded,
@@ -1674,12 +1967,16 @@ export function record(options) {
     pendingFullSnapshotActiveDuration = 0
     pendingFullSnapshotRestartCount = 0
     pendingFullSnapshotRestartRequested = false
+    pendingFullSnapshotIsInitial = !fullSnapshotWasPublished
     suppressRecordsUntilFullSnapshot = true
     if (!previousPublishedReplayTree) {
       previousPublishedReplayTree = getPublishedReplayTree()
     }
     try {
-      if (shadowRootsController.$rBeginRecovery) {
+      if (
+        !pendingFullSnapshotIsInitial &&
+        shadowRootsController.$rBeginRecovery
+      ) {
         shadowRootsController.$rBeginRecovery()
       }
       prepareForFullSnapshot()
@@ -1695,26 +1992,110 @@ export function record(options) {
   }
 
   function createPendingFullSnapshotTask() {
+    if (pendingFullSnapshotIsInitial) {
+      elementsScrollPositions.reset()
+    }
     pendingFullSnapshotTask = createFullSnapshotSerializerTask({
       shadowRootsController: shadowRootsController,
-      status: SerializationContextStatus.SUBSEQUENT_FULL_SNAPSHOT,
+      status: pendingFullSnapshotIsInitial
+        ? SerializationContextStatus.INITIAL_FULL_SNAPSHOT
+        : SerializationContextStatus.SUBSEQUENT_FULL_SNAPSHOT,
       elementsScrollPositions: elementsScrollPositions
     })
+    if (!pendingFullSnapshotTask) {
+      throw new Error('Full snapshot unavailable.')
+    }
     pendingFullSnapshotMutationVersion = domMutationVersion
   }
 
-  function schedulePendingFullSnapshotSlice() {
+  function schedulePendingFullSnapshotSlice(delay) {
     if (
+      recordStopping ||
       recordStopped ||
       pendingFullSnapshotTimeout !== undefined ||
-      !pendingFullSnapshotTask
+      pendingFullSnapshotTimestamp === undefined
     ) {
       return
     }
+    delay = delay || 0
     pendingFullSnapshotTimeout = setTimeout(function () {
       pendingFullSnapshotTimeout = undefined
+      if (!pendingFullSnapshotTask) {
+        var completeSynchronously = false
+        if (
+          pendingFullSnapshotMutationVersion !== domMutationVersion
+        ) {
+          pendingFullSnapshotMutationVersion = domMutationVersion
+          if (
+            getPerformanceTime() - pendingFullSnapshotStartedAt <
+            FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS
+          ) {
+            schedulePendingFullSnapshotSlice(delay)
+            return
+          }
+          completeSynchronously = true
+        }
+        try {
+          prepareForFullSnapshot()
+          clearDeferredRecords()
+          createPendingFullSnapshotTask()
+        } catch (error) {
+          handleFullSnapshotException(
+            'full_snapshot_initialization_error',
+            error
+          )
+          return
+        }
+        if (completeSynchronously) {
+          pendingFullSnapshotActiveDuration = 0
+          var synchronousStartedAt = getPerformanceTime()
+          var synchronousDeadline =
+            synchronousStartedAt +
+            FULL_SNAPSHOT_SYNCHRONOUS_FINALIZATION_BUDGET_MS
+          var synchronousMaxSliceCount = Math.ceil(
+            FULL_SNAPSHOT_SYNCHRONOUS_FINALIZATION_BUDGET_MS /
+              FULL_SNAPSHOT_SERIALIZATION_SLICE_MS
+          )
+          var synchronousSliceCount = 0
+          while (pendingFullSnapshotTask) {
+            if (
+              synchronousSliceCount >= synchronousMaxSliceCount ||
+              getPerformanceTime() >= synchronousDeadline
+            ) {
+              failOrAbandonFullSnapshot(
+                'full_snapshot_serialization_timeout'
+              )
+              return
+            }
+            synchronousSliceCount += 1
+            if (
+              runPendingFullSnapshotSliceSafely(
+                false,
+                synchronousDeadline
+              )
+            ) {
+              return
+            }
+          }
+          return
+        }
+      }
       runPendingFullSnapshotSliceSafely(true)
-    }, 0)
+    }, delay)
+  }
+
+  function deferPendingFullSnapshotUntilQuiet() {
+    pendingFullSnapshotTask = undefined
+    pendingFullSnapshotActiveDuration = 0
+    pendingFullSnapshotRestartCount = 0
+    pendingFullSnapshotRestartRequested = false
+    pendingFullSnapshotStartedAt = getPerformanceTime()
+    prepareForFullSnapshot()
+    clearDeferredRecords()
+    pendingFullSnapshotMutationVersion = domMutationVersion
+    schedulePendingFullSnapshotSlice(
+      FULL_SNAPSHOT_MUTATION_QUIET_DELAY_MS
+    )
   }
 
   function restartPendingFullSnapshot(allowScheduling) {
@@ -1724,6 +2105,16 @@ export function record(options) {
       pendingFullSnapshotRestartCount > FULL_SNAPSHOT_MAX_RESTART_COUNT ||
       pendingFullSnapshotActiveDuration > FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS
     ) {
+      if (
+        !pendingFullSnapshotCanBeDiscarded &&
+        allowScheduling
+      ) {
+        // Keep one bounded transaction alive while a large dashboard mutates.
+        // A single timer waits for a quiet window; no serializer task or
+        // deferred tail grows while churn continues.
+        deferPendingFullSnapshotUntilQuiet()
+        return
+      }
       failOrAbandonFullSnapshot(
         'full_snapshot_changed_during_serialization'
       )
@@ -1741,7 +2132,10 @@ export function record(options) {
     }
   }
 
-  function runPendingFullSnapshotSlice(allowScheduling) {
+  function runPendingFullSnapshotSlice(
+    allowScheduling,
+    serializationDeadline
+  ) {
     if (!pendingFullSnapshotTask || recordStopped) {
       return false
     }
@@ -1761,10 +2155,17 @@ export function record(options) {
     }
 
     var sliceStartedAt = getPerformanceTime()
-    var completed = pendingFullSnapshotTask.advance(
-      sliceStartedAt + FULL_SNAPSHOT_SERIALIZATION_SLICE_MS,
-      SERIALIZATION_MAX_NODE_COUNT,
-      SERIALIZATION_MAX_APPROX_BYTES
+    var sliceDeadline =
+      sliceStartedAt + FULL_SNAPSHOT_SERIALIZATION_SLICE_MS
+    if (
+      typeof serializationDeadline === 'number' &&
+      isFinite(serializationDeadline)
+    ) {
+      sliceDeadline = Math.min(sliceDeadline, serializationDeadline)
+    }
+    var advanceResult = advanceFullSnapshotSerializerTask(
+      pendingFullSnapshotTask,
+      sliceDeadline
     )
     pendingFullSnapshotActiveDuration += Math.max(
       getPerformanceTime() - sliceStartedAt,
@@ -1777,16 +2178,11 @@ export function record(options) {
       failOrAbandonFullSnapshot('full_snapshot_serialization_timeout')
       return false
     }
-    if (
-      pendingFullSnapshotTask.isMaxNodeCountReached ||
-      pendingFullSnapshotTask.isMaxApproxBytesReached ||
-      pendingFullSnapshotTask.isMaxDepthReached ||
-      pendingFullSnapshotTask.isMaxNodeComplexityReached
-    ) {
+    if (advanceResult.isWatermarkReached) {
       failOrAbandonFullSnapshot('full_snapshot_serialization_watermark')
       return false
     }
-    if (!completed) {
+    if (!advanceResult.completed) {
       if (allowScheduling) {
         schedulePendingFullSnapshotSlice()
       }
@@ -1810,12 +2206,16 @@ export function record(options) {
     var timestamp = pendingFullSnapshotTimestamp
     var serializedDocument = pendingFullSnapshotTask.serializedNode
     var startedAt = pendingFullSnapshotStartedAt
+    var wasInitialFullSnapshot = pendingFullSnapshotIsInitial
     if (!emitFullSnapshot(timestamp, serializedDocument, startedAt)) {
       failOrAbandonFullSnapshot('full_snapshot_admission_rejected')
       return false
     }
     cancelScheduledFullSnapshot()
-    if (shadowRootsController.$rCommitRecovery) {
+    if (
+      !wasInitialFullSnapshot &&
+      shadowRootsController.$rCommitRecovery
+    ) {
       shadowRootsController.$rCommitRecovery()
     }
     previousPublishedReplayTree = undefined
@@ -1836,9 +2236,15 @@ export function record(options) {
     return false
   }
 
-  function runPendingFullSnapshotSliceSafely(allowScheduling) {
+  function runPendingFullSnapshotSliceSafely(
+    allowScheduling,
+    serializationDeadline
+  ) {
     try {
-      return runPendingFullSnapshotSlice(allowScheduling)
+      return runPendingFullSnapshotSlice(
+        allowScheduling,
+        serializationDeadline
+      )
     } catch (error) {
       return handleFullSnapshotException(
         'full_snapshot_serialization_error',
@@ -1878,6 +2284,9 @@ export function record(options) {
   }
 
   function failFullSnapshot(reason) {
+    var failureReason = pendingFullSnapshotIsInitial
+      ? 'initial_' + reason
+      : reason
     var shouldDiscardTail =
       pendingFullSnapshotRequiresTailDiscard
     cancelScheduledFullSnapshot()
@@ -1891,7 +2300,7 @@ export function record(options) {
     }
     stopRecording(undefined, true)
     if (options.onFullSnapshotFailure) {
-      options.onFullSnapshotFailure(reason)
+      options.onFullSnapshotFailure(failureReason)
     }
   }
 
@@ -1901,9 +2310,32 @@ export function record(options) {
     }
   }
 
-  function flushScheduledFullSnapshot(skipRecoveryRestore) {
+  function flushScheduledFullSnapshot(
+    skipRecoveryRestore,
+    supersedeForView
+  ) {
+    if (
+      supersedeForView &&
+      pendingFullSnapshotTimestamp !== undefined
+    ) {
+      // The next view starts its own baseline transaction. Discard every held
+      // tail from the old view before ViewEnd is emitted.
+      abandonPendingFullSnapshot(true)
+      return true
+    }
     if (!pendingFullSnapshotTask) {
-      return false
+      if (pendingFullSnapshotTimestamp === undefined) {
+        return false
+      }
+      if (
+        skipRecoveryRestore ||
+        pendingFullSnapshotCanBeDiscarded
+      ) {
+        abandonPendingFullSnapshot(skipRecoveryRestore)
+      } else {
+        failFullSnapshot('full_snapshot_incomplete_at_flush')
+      }
+      return true
     }
     if (pendingFullSnapshotCanBeDiscarded) {
       abandonPendingFullSnapshot(skipRecoveryRestore)
@@ -1930,7 +2362,7 @@ export function record(options) {
     canBeDiscarded,
     requiresTailDiscard
   ) {
-    if (pendingFullSnapshotTask) {
+    if (pendingFullSnapshotTimestamp !== undefined) {
       // Any request arriving while a replacement baseline is being built must
       // reuse the same bounded transaction. Re-running begin() would reset its
       // restart/time budget and let sustained mutation churn spin forever.
@@ -1949,8 +2381,14 @@ export function record(options) {
           options.$rOnMandatoryFullSnapshotStarted()
         }
       }
-      pendingFullSnapshotRestartRequested = true
-      schedulePendingFullSnapshotSlice()
+      if (pendingFullSnapshotTask) {
+        pendingFullSnapshotRestartRequested = true
+      }
+      schedulePendingFullSnapshotSlice(
+        pendingFullSnapshotTask
+          ? 0
+          : FULL_SNAPSHOT_MUTATION_QUIET_DELAY_MS
+      )
       return
     }
     if (
@@ -1974,7 +2412,12 @@ export function record(options) {
     recordStopping = true
     var firstCleanupError
     try {
-      if (!skipPendingFlush && !flushScheduledFullSnapshot(true)) {
+      if (pendingFullSnapshotIsInitial) {
+        // An initial snapshot has no published tail to finalize. Teardown must
+        // cancel its timer/task instead of forcing another slice or reporting
+        // a failure for an intentional stop.
+        cancelScheduledFullSnapshot()
+      } else if (!skipPendingFlush && !flushScheduledFullSnapshot(true)) {
         // Capture small records still queued by native MutationObservers.
         // Oversized subtree serialization is discarded once its synchronous
         // budget is exhausted.
@@ -2029,43 +2472,6 @@ export function record(options) {
     getSerializedNodeIdForDebug: function (node) {
       return getActiveSerializedNodeId(node)
     },
-    getLastAutoCanvasSnapshotResultForDebug: function () {
-      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        return cloneAutoCanvasSnapshotDebugResult(lastAutoCanvasSnapshotResult)
-      }
-    },
-    getAutoCanvasSnapshotDebugHistoryForDebug: function () {
-      return __BUILD_ENV__REPLAY_DEBUG_ENABLED__
-        ? autoCanvasSnapshotDebugHistoryForDebug.map(
-            cloneAutoCanvasSnapshotDebugResult
-          )
-        : []
-    },
-    getLastCanvasMutationForDebug: function () {
-      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        return cloneCanvasMutationDebugResult(lastCanvasMutationForDebug)
-      }
-    },
-    getCanvasMutationHistoryForDebug: function () {
-      return __BUILD_ENV__REPLAY_DEBUG_ENABLED__
-        ? canvasMutationHistoryForDebug.map(cloneCanvasMutationDebugResult)
-        : []
-    },
-    getLastDomMutationForDebug: function () {
-      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        return cloneDomMutationDebugResult(lastDomMutationForDebug)
-      }
-    },
-    getDomMutationHistoryForDebug: function () {
-      return __BUILD_ENV__REPLAY_DEBUG_ENABLED__
-        ? domMutationHistoryForDebug.map(cloneDomMutationDebugResult)
-        : []
-    },
-    getReplayPerformanceForDebug: function () {
-      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        return cloneReplayPerformanceStats(replayPerformanceStats)
-      }
-    },
     takeSubsequentFullSnapshot: takeSubsequentFullSnapshot,
     flushScheduledFullSnapshot: flushScheduledFullSnapshot,
     scheduleSubsequentFullSnapshot: scheduleSubsequentFullSnapshot,
@@ -2073,28 +2479,44 @@ export function record(options) {
     flushMutations: flushMutations,
     shadowRootsController: shadowRootsController
   }
+  if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+    assign(recorder, {
+      getLastAutoCanvasSnapshotResultForDebug: function () {
+        return cloneAutoCanvasSnapshotDebugResult(lastAutoCanvasSnapshotResult)
+      },
+      getAutoCanvasSnapshotDebugHistoryForDebug: function () {
+        return autoCanvasSnapshotDebugHistoryForDebug.map(
+          cloneAutoCanvasSnapshotDebugResult
+        )
+      },
+      getLastCanvasMutationForDebug: function () {
+        return cloneCanvasMutationDebugResult(lastCanvasMutationForDebug)
+      },
+      getCanvasMutationHistoryForDebug: function () {
+        return canvasMutationHistoryForDebug.map(
+          cloneCanvasMutationDebugResult
+        )
+      },
+      getLastDomMutationForDebug: function () {
+        return cloneDomMutationDebugResult(lastDomMutationForDebug)
+      },
+      getDomMutationHistoryForDebug: function () {
+        return domMutationHistoryForDebug.map(cloneDomMutationDebugResult)
+      },
+      getReplayPerformanceForDebug: function () {
+        return cloneReplayPerformanceStats(replayPerformanceStats)
+      }
+    })
+  }
   return recorder
 }
 
 function createInactiveRecorder() {
   var noop = function () {}
-  return {
+  var recorder = {
     stop: noop,
     snapshotCanvas: noop,
     getSerializedNodeIdForDebug: noop,
-    getLastAutoCanvasSnapshotResultForDebug: noop,
-    getAutoCanvasSnapshotDebugHistoryForDebug: function () {
-      return []
-    },
-    getLastCanvasMutationForDebug: noop,
-    getCanvasMutationHistoryForDebug: function () {
-      return []
-    },
-    getLastDomMutationForDebug: noop,
-    getDomMutationHistoryForDebug: function () {
-      return []
-    },
-    getReplayPerformanceForDebug: noop,
     takeSubsequentFullSnapshot: noop,
     flushScheduledFullSnapshot: function () {
       return false
@@ -2103,6 +2525,24 @@ function createInactiveRecorder() {
     prepareForViewChange: noop,
     flushMutations: noop
   }
+  if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+    assign(recorder, {
+      getLastAutoCanvasSnapshotResultForDebug: noop,
+      getAutoCanvasSnapshotDebugHistoryForDebug: function () {
+        return []
+      },
+      getLastCanvasMutationForDebug: noop,
+      getCanvasMutationHistoryForDebug: function () {
+        return []
+      },
+      getLastDomMutationForDebug: noop,
+      getDomMutationHistoryForDebug: function () {
+        return []
+      },
+      getReplayPerformanceForDebug: noop
+    })
+  }
+  return recorder
 }
 
 function materializeMutationPayload(pendingMutationPayload) {
@@ -2245,6 +2685,7 @@ function shouldFlushPendingMutationPayloadBeforeMerge(
   source,
   sourceApproxBytes,
   pendingPublicationTokenByNode,
+  pendingNodeParentByNode,
   wasNodePublishedBeforePendingMutation
 ) {
   // Structural arrays do not encode the order in which separate callbacks
@@ -2260,6 +2701,7 @@ function shouldFlushPendingMutationPayloadBeforeMerge(
       target,
       source,
       pendingPublicationTokenByNode,
+      pendingNodeParentByNode,
       wasNodePublishedBeforePendingMutation
     )
   }
@@ -2277,19 +2719,24 @@ function hasCrossCallbackMoveDependency(
   first,
   second,
   pendingPublicationTokenByNode,
+  pendingNodeParentByNode,
   wasNodePublishedBeforePendingMutation
 ) {
   return (
     hasRemoveToAddDependency(
       first.removes,
       second.adds,
+      second.removes,
       pendingPublicationTokenByNode,
+      pendingNodeParentByNode,
       wasNodePublishedBeforePendingMutation
     ) ||
     hasRemoveToAddDependency(
       second.removes,
       first.adds,
+      first.removes,
       pendingPublicationTokenByNode,
+      pendingNodeParentByNode,
       wasNodePublishedBeforePendingMutation
     )
   )
@@ -2298,7 +2745,9 @@ function hasCrossCallbackMoveDependency(
 function hasRemoveToAddDependency(
   removes,
   adds,
+  removesAlreadyPairedWithAdds,
   pendingPublicationTokenByNode,
+  pendingNodeParentByNode,
   wasNodePublishedBeforePendingMutation
 ) {
   if (!removes.length || !adds.length) {
@@ -2311,16 +2760,67 @@ function hasRemoveToAddDependency(
       addPublicationTokens.add(publicationToken)
     }
   })
+  // A later remove is a new transition when the same node (or an ancestor in
+  // the staged add tree) was already paired with this add. Keep sibling removes
+  // eligible: one add token can contain nodes moved from several observers.
+  var pairedRemovedNodesByPublicationToken = new Map()
+  removesAlreadyPairedWithAdds.forEach(function (remove) {
+    var removedNode = getMutationRemoveSourceNode(remove)
+    if (
+      removedNode &&
+      wasNodePublishedBeforePendingMutation(removedNode)
+    ) {
+      var publicationToken =
+        pendingPublicationTokenByNode.get(removedNode)
+      if (addPublicationTokens.has(publicationToken)) {
+        var pairedRemovedNodes =
+          pairedRemovedNodesByPublicationToken.get(publicationToken)
+        if (!pairedRemovedNodes) {
+          pairedRemovedNodes = new Set()
+          pairedRemovedNodesByPublicationToken.set(
+            publicationToken,
+            pairedRemovedNodes
+          )
+        }
+        pairedRemovedNodes.add(removedNode)
+      }
+    }
+  })
   return removes.some(function (remove) {
     var removedNode = getMutationRemoveSourceNode(remove)
+    var publicationToken =
+      removedNode && pendingPublicationTokenByNode.get(removedNode)
     return Boolean(
       removedNode &&
         wasNodePublishedBeforePendingMutation(removedNode) &&
-        addPublicationTokens.has(
-          pendingPublicationTokenByNode.get(removedNode)
+        addPublicationTokens.has(publicationToken) &&
+        !isNodeCoveredByPairedRemove(
+          removedNode,
+          pairedRemovedNodesByPublicationToken.get(publicationToken),
+          pendingNodeParentByNode
         )
     )
   })
+}
+
+function isNodeCoveredByPairedRemove(
+  node,
+  pairedRemovedNodes,
+  pendingNodeParentByNode
+) {
+  if (!pairedRemovedNodes) {
+    return false
+  }
+  var current = node
+  var depth = 0
+  while (current && depth < MAX_SERIALIZED_NODE_ANCESTOR_DEPTH) {
+    if (pairedRemovedNodes.has(current)) {
+      return true
+    }
+    current = pendingNodeParentByNode.get(current)
+    depth += 1
+  }
+  return false
 }
 
 function splitPendingMutationPayloadForEmit(

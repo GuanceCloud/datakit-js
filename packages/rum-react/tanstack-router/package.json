@@ -1,0 +1,7 @@
+{
+  "name": "@cloudcare/browser-rum-react/tanstack-router",
+  "private": true,
+  "main": "../cjs/entries/tanstackRouter.js",
+  "module": "../esm/entries/tanstackRouter.js",
+  "types": "../types/tanstackRouter.d.ts"
+}

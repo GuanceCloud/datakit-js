@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>React RUM Plugin Demo</title>
+    <link rel="stylesheet" href="/framework-demo.css" />
+  </head>
+  <body>
+    <main class="demo-shell">
+      <header class="demo-header">
+        <div>
+          <h1>React RUM Plugin</h1>
+          <p>React Router view tracking and ErrorBoundary reporting</p>
+        </div>
+        <div id="demo-result" class="demo-badge">Starting</div>
+      </header>
+      <div class="demo-grid">
+        <section class="demo-workspace">
+          <div id="app"></div>
+        </section>
+        <aside class="demo-status">
+          <h2>RUM events</h2>
+          <div class="demo-kpis">
+            <div class="demo-kpi"><span>Views</span><strong id="demo-view-count">0</strong></div>
+            <div class="demo-kpi"><span>Errors</span><strong id="demo-error-count">0</strong></div>
+            <div class="demo-kpi"><span>Uploads</span><strong id="demo-request-count">0</strong></div>
+          </div>
+          <pre id="demo-log" class="demo-log"></pre>
+        </aside>
+      </div>
+    </main>
+    <script src="/dataflux-rum.js"></script>
+    <script src="/framework-react/bundle.js"></script>
+  </body>
+</html>

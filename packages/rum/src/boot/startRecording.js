@@ -274,42 +274,47 @@ export function startRecording(
       _record.prepareForViewChange || _record.flushMutations
     var snapshotCanvas = _record.snapshotCanvas
     var getSerializedNodeIdForDebug = _record.getSerializedNodeIdForDebug
-    var getLastAutoCanvasSnapshotResultForDebug =
-      _record.getLastAutoCanvasSnapshotResultForDebug
-    var getAutoCanvasSnapshotDebugHistoryForDebug =
-      _record.getAutoCanvasSnapshotDebugHistoryForDebug
-    var getLastCanvasMutationForDebug = _record.getLastCanvasMutationForDebug
-    var getCanvasMutationHistoryForDebug =
-      _record.getCanvasMutationHistoryForDebug
-    var getLastDomMutationForDebug = _record.getLastDomMutationForDebug
-    var getDomMutationHistoryForDebug = _record.getDomMutationHistoryForDebug
-    var getReplayPerformanceForDebug = function () {
-      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        return cloneReplayPerformanceForDebug(
-          _record.getReplayPerformanceForDebug
-            ? _record.getReplayPerformanceForDebug()
-            : undefined,
-          replaySegmentFlushCount
-        )
-      }
-    }
-    var getLastReplaySegmentFlushForDebug = function () {
-      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        return cloneReplaySegmentFlushForDebug(lastReplaySegmentFlushForDebug)
-      }
-    }
-    var getReplaySegmentFlushHistoryForDebug = function () {
-      return __BUILD_ENV__REPLAY_DEBUG_ENABLED__
-        ? replaySegmentFlushHistoryForDebug.map(function (segmentFlush) {
+    var recordingDebug
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      recordingDebug = {
+        getLastAutoCanvasSnapshotResultForDebug:
+          _record.getLastAutoCanvasSnapshotResultForDebug,
+        getAutoCanvasSnapshotDebugHistoryForDebug:
+          _record.getAutoCanvasSnapshotDebugHistoryForDebug,
+        getLastCanvasMutationForDebug:
+          _record.getLastCanvasMutationForDebug,
+        getCanvasMutationHistoryForDebug:
+          _record.getCanvasMutationHistoryForDebug,
+        getLastDomMutationForDebug: _record.getLastDomMutationForDebug,
+        getDomMutationHistoryForDebug:
+          _record.getDomMutationHistoryForDebug,
+        getReplayPerformanceForDebug: function () {
+          return cloneReplayPerformanceForDebug(
+            _record.getReplayPerformanceForDebug
+              ? _record.getReplayPerformanceForDebug()
+              : undefined,
+            replaySegmentFlushCount
+          )
+        },
+        getLastReplaySegmentFlushForDebug: function () {
+          return cloneReplaySegmentFlushForDebug(
+            lastReplaySegmentFlushForDebug
+          )
+        },
+        getReplaySegmentFlushHistoryForDebug: function () {
+          return replaySegmentFlushHistoryForDebug.map(function (
+            segmentFlush
+          ) {
             return cloneReplaySegmentFlushForDebug(segmentFlush)
           })
-        : []
+        }
+      }
     }
     var flushMutations = _record.flushMutations
     var subscribeViewEnded = lifeCycle.subscribe(
       LifeCycleEventType.VIEW_ENDED,
       function () {
-        if (!flushScheduledFullSnapshot(true)) {
+        if (!flushScheduledFullSnapshot(true, true)) {
           // Preserve DOM changes still queued by the native MutationObservers.
           // The next view snapshot has not been scheduled yet, so resetting the
           // observers here would otherwise lose the old view's final state.
@@ -340,7 +345,7 @@ export function startRecording(
     throw error
   }
 
-  return {
+  var recording = {
     stop: stopRecording,
     isStopped: function () {
       return isRecordingStopped
@@ -348,20 +353,12 @@ export function startRecording(
     takeSubsequentFullSnapshot: takeSubsequentFullSnapshot,
     snapshotCanvas: snapshotCanvas,
     getSerializedNodeIdForDebug: getSerializedNodeIdForDebug,
-    getLastAutoCanvasSnapshotResultForDebug:
-      getLastAutoCanvasSnapshotResultForDebug,
-    getAutoCanvasSnapshotDebugHistoryForDebug:
-      getAutoCanvasSnapshotDebugHistoryForDebug,
-    getLastCanvasMutationForDebug: getLastCanvasMutationForDebug,
-    getCanvasMutationHistoryForDebug: getCanvasMutationHistoryForDebug,
-    getLastDomMutationForDebug: getLastDomMutationForDebug,
-    getDomMutationHistoryForDebug: getDomMutationHistoryForDebug,
-    getLastReplaySegmentFlushForDebug: getLastReplaySegmentFlushForDebug,
-    getReplaySegmentFlushHistoryForDebug:
-      getReplaySegmentFlushHistoryForDebug,
-    getReplayPerformanceForDebug: getReplayPerformanceForDebug,
     flushReplayMutationsForDebug: flushMutations
   }
+  if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+    assign(recording, recordingDebug)
+  }
+  return recording
 }
 
 function createReplayResetScheduler(takeSubsequentFullSnapshot, cleanupTasks) {

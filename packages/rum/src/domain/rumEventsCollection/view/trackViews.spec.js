@@ -184,6 +184,53 @@ describe('trackViews', () => {
     detailsAnchor.remove()
   })
 
+  it('should use an explicit URL for a manually started view', () => {
+    const lifeCycle = new LifeCycle()
+    const createdEvents = []
+    const updatedEvents = []
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_CREATED, (event) => {
+      createdEvents.push(event)
+    })
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      {
+        pathname: '/old',
+        hash: '',
+        href: 'https://example.com/old'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      new Observable(),
+      false
+    )
+
+    tracking.startView({
+      name: '/products/[id]',
+      url: '/products/42?tab=details#reviews'
+    })
+
+    const routeChangeView = createdEvents.find((event) => {
+      return event.name === '/products/[id]'
+    })
+    expect(routeChangeView.url).toBe('/products/42?tab=details#reviews')
+
+    const routeChangeUpdate = updatedEvents.find((event) => {
+      return event.id === routeChangeView.id
+    })
+    expect(routeChangeUpdate.location).toEqual(
+      jasmine.objectContaining({
+        href: 'https://example.com/old',
+        pathname: '/old'
+      })
+    )
+
+    tracking.stop()
+  })
+
   it('should preserve metadata and context when the session is renewed', () => {
     const lifeCycle = new LifeCycle()
     const locationChangeObservable = new Observable()

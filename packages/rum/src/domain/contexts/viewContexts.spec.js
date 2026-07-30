@@ -62,4 +62,24 @@ describe('viewContexts', () => {
     expect(viewContexts.findView(10)).toBeUndefined()
     viewContexts.stop()
   })
+
+  it('should allow looking up an inactive view when requested', () => {
+    const lifeCycle = new LifeCycle()
+    const viewContexts = startViewContexts(lifeCycle)
+
+    lifeCycle.notify(LifeCycleEventType.BEFORE_VIEW_CREATED, {
+      id: 'view-1',
+      startClocks: { relative: 10 }
+    })
+    lifeCycle.notify(LifeCycleEventType.AFTER_VIEW_ENDED, {
+      endClocks: { relative: 20 }
+    })
+
+    expect(viewContexts.findView(21)).toBeUndefined()
+    expect(
+      viewContexts.findView(21, { returnInactive: true })
+    ).toEqual(jasmine.objectContaining({ id: 'view-1' }))
+
+    viewContexts.stop()
+  })
 })

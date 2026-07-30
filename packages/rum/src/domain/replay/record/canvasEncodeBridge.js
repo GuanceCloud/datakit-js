@@ -6,6 +6,7 @@ import {
 } from './canvasContext'
 
 var CANVAS_ENCODE_REQUEST_TIMEOUT = 10000
+var CANVAS_ENCODE_CALLER_TIMEOUT = CANVAS_ENCODE_REQUEST_TIMEOUT + 1000
 var MAX_WEBGL_READBACK_PIXELS = 3840 * 2160
 var MAX_WEBGL_READBACK_CAPTURE_BYTES = 16 * 1024 * 1024
 var MAX_WEBGL_READBACK_CACHE_BYTES = 16 * 1024 * 1024
@@ -1215,19 +1216,44 @@ export function createCanvasEncodeBridge(configuration, options) {
         return runEncodeJob(job, encodeGeneration)
       }
     )
+    job.$rCallerTimeoutId = setTimeout(function () {
+      if (job.$rCancelled) {
+        return
+      }
+      var timeoutError = new Error('Canvas encode request timed out')
+      job.$rCancelled = true
+      if (job.$rSharedAdmission) {
+        job.$rSharedAdmission.$rCancel(timeoutError)
+      }
+      job.$rReject(timeoutError)
+
+      // Native canvas work cannot be cancelled and keeps its module-level
+      // physical admission until it really settles. Release only this bridge's
+      // logical slot so one hung createImageBitmap/toBlob cannot leave every
+      // caller and scheduler pending forever.
+      var activeJobIndex = activeJobs.indexOf(job)
+      if (activeJobIndex !== -1) {
+        activeJobs.splice(activeJobIndex, 1)
+      }
+      releaseJobSlot(job)
+      runNextQueuedRequest()
+    }, CANVAS_ENCODE_CALLER_TIMEOUT)
 
     job.$rSharedAdmission.$rPromise
       .then(function (result) {
         if (!job.$rCancelled) {
+          clearJobCallerTimeout(job)
           job.$rResolve(result)
         }
       })
       .catch(function (error) {
         if (!job.$rCancelled) {
+          clearJobCallerTimeout(job)
           job.$rReject(error)
         }
       })
       .finally(function () {
+        clearJobCallerTimeout(job)
         releaseCapturedWebGLFrame(job)
         job.$rSharedAdmission = undefined
         var activeJobIndex = activeJobs.indexOf(job)
@@ -1237,6 +1263,13 @@ export function createCanvasEncodeBridge(configuration, options) {
         releaseJobSlot(job)
         runNextQueuedRequest()
       })
+  }
+
+  function clearJobCallerTimeout(job) {
+    if (job.$rCallerTimeoutId !== undefined) {
+      clearTimeout(job.$rCallerTimeoutId)
+      job.$rCallerTimeoutId = undefined
+    }
   }
 
   function releaseJobSlot(job) {
@@ -1252,6 +1285,7 @@ export function createCanvasEncodeBridge(configuration, options) {
       stopped || Object.keys(pendingRequests).length > 0
     queuedRequests.forEach(function (job) {
       job.$rCancelled = true
+      clearJobCallerTimeout(job)
       releaseCapturedWebGLFrame(job)
       job.$rReject(error)
     })
@@ -1259,17 +1293,32 @@ export function createCanvasEncodeBridge(configuration, options) {
 
     activeJobs.forEach(function (job) {
       job.$rCancelled = true
+      clearJobCallerTimeout(job)
       // Main-thread canvas APIs such as createImageBitmap() and toBlob() cannot
       // be cancelled.  Reject the caller immediately, but keep the physical
       // encode admitted until its real promise settles.  Releasing the slot or
       // staged-frame count here would let repeated replay resets bypass both
       // concurrency watermarks and retain an unbounded number of native
       // encodes/staging surfaces.
+      var cancelledBeforePhysicalStart = false
       if (job.$rSharedAdmission) {
-        job.$rSharedAdmission.$rCancel(error)
+        cancelledBeforePhysicalStart =
+          job.$rSharedAdmission.$rCancel(error)
+      }
+      if (cancelledBeforePhysicalStart) {
+        // A queued shared admission has not handed its staging surface to any
+        // native API yet, so it is safe to release immediately. Waiting for a
+        // promise finally turn here lets repeated reset/encode calls fill the
+        // bounded WebGL staging queue with already-cancelled jobs.
+        releaseCapturedWebGLFrame(job)
       }
       job.$rReject(error)
+      // Keep the shared physical admission until the native promise settles,
+      // but free this bridge's logical slot so a reset cannot strand every
+      // future request behind an uncancellable hung job.
+      releaseJobSlot(job)
     })
+    activeJobs = []
 
     rejectPendingRequests(error)
     if (shouldStopWorker) {
@@ -1295,7 +1344,8 @@ export function createCanvasEncodeBridge(configuration, options) {
           $rReject: reject,
           $rCancelled: false,
           $rOccupiesSlot: false,
-          $rSharedAdmission: undefined
+          $rSharedAdmission: undefined,
+          $rCallerTimeoutId: undefined
         }
         if (isWebGLReplayCanvas(canvas)) {
           if (stagedWebGLFrameCount >= maxStagedWebGLFrames) {

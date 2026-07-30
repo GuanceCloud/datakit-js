@@ -6,16 +6,18 @@ import {
   getEncodedCanvasDataUrlDiagnostics,
   isValidEncodedCanvasDataUrl
 } from './canvasSerializeArgs'
-import {
-  createCanvasMutationRecord,
-  createEncodedCanvasMutationRecord
-} from './canvasMutationRecord'
+import { createEncodedCanvasMutationRecord } from './canvasMutationRecord'
 import { createCanvasEncodeBridge } from './canvasEncodeBridge'
 import {
   createCanvasFrameSignatureExtractor,
   isCanvasFrameBelowThreshold
 } from './canvasFrameSignature'
-import { getReplayCanvasRecordingDecision } from './canvasContext'
+import {
+  getReplayCanvasRecordingDecision
+} from './canvasContext'
+
+var DEFAULT_ENCODED_DATA_URL_CACHE_MAX_CHARACTERS = 1024 * 1024
+var MAX_ENCODED_DATA_URL_CACHE_ENTRIES = 64
 
 function createSnapshotSuccessResult() {
   return { ok: true }
@@ -131,57 +133,183 @@ export function createCanvasObserver(options) {
   var isNodeActive = options.isNodeActive || function () {
     return true
   }
-  var onMutationDebug = options.onMutationDebug || function () {}
+  var onMutationDebug = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.onMutationDebug || function () {}
+    : undefined
   var now = options.now || Date.now
   var encodeBridge =
     options.encodeBridge || createCanvasEncodeBridge(configuration)
   var frameSignatureExtractor =
     options.frameSignatureExtractor || createCanvasFrameSignatureExtractor()
+  var flushMutations = options.flushMutations
+  var configuredEncodedDataUrlCacheMaxCharacters =
+    options.encodedDataUrlCacheMaxCharacters
+  var encodedDataUrlCacheMaxCharacters =
+    typeof configuredEncodedDataUrlCacheMaxCharacters === 'number' &&
+    isFinite(configuredEncodedDataUrlCacheMaxCharacters)
+      ? Math.max(0, Math.floor(configuredEncodedDataUrlCacheMaxCharacters))
+      : DEFAULT_ENCODED_DATA_URL_CACHE_MAX_CHARACTERS
+  var weakRefFactory = options.weakRefFactory
+  if (!weakRefFactory && typeof WeakRef === 'function') {
+    weakRefFactory = function (value) {
+      return new WeakRef(value)
+    }
+  }
   var stopped = false
   var generation = 0
-  var lastEncodedDataUrlByCanvas = new WeakMap()
+  var encodedDataUrlCacheEntries = []
+  var encodedDataUrlCacheCharacters = 0
   var hasResetBitmapReplayStateByCanvas = new WeakSet()
   var lastAutoFrameSignatureByCanvas = new WeakMap()
   var lastAutoSuccessfulSnapshotAtByCanvas = new WeakMap()
-  var lastSettledSnapshotSequenceByCanvas = new WeakMap()
+  var lastReplayCurrentSnapshotSequenceByCanvas = new WeakMap()
   var nextSnapshotSequence = 0
+
+  function clearEncodedDataUrlCache() {
+    encodedDataUrlCacheEntries = []
+    encodedDataUrlCacheCharacters = 0
+  }
+
+  function removeEncodedDataUrlCacheEntry(index) {
+    var entry = encodedDataUrlCacheEntries[index]
+    encodedDataUrlCacheCharacters -= entry[1].length
+    encodedDataUrlCacheEntries.splice(index, 1)
+  }
+
+  function findEncodedDataUrlCacheEntry(canvas) {
+    for (
+      var index = encodedDataUrlCacheEntries.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      var cachedCanvas = encodedDataUrlCacheEntries[index][0].deref()
+      if (!cachedCanvas) {
+        removeEncodedDataUrlCacheEntry(index)
+      } else if (cachedCanvas === canvas) {
+        return index
+      }
+    }
+    return -1
+  }
+
+  function isLastEncodedDataUrl(canvas, dataUrl) {
+    var entryIndex = findEncodedDataUrlCacheEntry(canvas)
+    if (entryIndex === -1) {
+      return false
+    }
+    var entry = encodedDataUrlCacheEntries[entryIndex]
+    if (entryIndex !== encodedDataUrlCacheEntries.length - 1) {
+      encodedDataUrlCacheEntries.splice(entryIndex, 1)
+      encodedDataUrlCacheEntries.push(entry)
+    }
+    return entry[1] === dataUrl
+  }
+
+  function setLastEncodedDataUrl(canvas, dataUrl) {
+    var previousEntryIndex = findEncodedDataUrlCacheEntry(canvas)
+    if (previousEntryIndex !== -1) {
+      removeEncodedDataUrlCacheEntry(previousEntryIndex)
+    }
+
+    // Keep exact strings only: an eviction can cause an extra bitmap, while a
+    // hash collision could incorrectly discard a real frame. The bounded LRU
+    // stores only WeakRefs to canvases, so it cannot retain a detached canvas
+    // and its GPU backing store. Older browsers without WeakRef simply skip
+    // this optional unchanged-frame cache.
+    if (
+      !weakRefFactory ||
+      dataUrl.length > encodedDataUrlCacheMaxCharacters
+    ) {
+      return
+    }
+
+    var canvasRef
+    try {
+      canvasRef = weakRefFactory(canvas)
+    } catch (_) {
+      return
+    }
+    if (!canvasRef || typeof canvasRef.deref !== 'function') {
+      return
+    }
+    encodedDataUrlCacheEntries.push([canvasRef, dataUrl])
+    encodedDataUrlCacheCharacters += dataUrl.length
+    while (
+      encodedDataUrlCacheCharacters > encodedDataUrlCacheMaxCharacters ||
+      encodedDataUrlCacheEntries.length >
+        MAX_ENCODED_DATA_URL_CACHE_ENTRIES
+    ) {
+      removeEncodedDataUrlCacheEntry(0)
+    }
+  }
 
   function reset() {
     generation += 1
     if (encodeBridge.reset) {
       encodeBridge.reset()
     }
-    lastEncodedDataUrlByCanvas = new WeakMap()
+    clearEncodedDataUrlCache()
     hasResetBitmapReplayStateByCanvas = new WeakSet()
     lastAutoFrameSignatureByCanvas = new WeakMap()
     lastAutoSuccessfulSnapshotAtByCanvas = new WeakMap()
-    lastSettledSnapshotSequenceByCanvas = new WeakMap()
+    lastReplayCurrentSnapshotSequenceByCanvas = new WeakMap()
     nextSnapshotSequence = 0
   }
 
-  function isSnapshotCompletionSuperseded(canvas, snapshotSequence) {
-    var lastSettledSnapshotSequence =
-      lastSettledSnapshotSequenceByCanvas.get(canvas) || 0
-    if (snapshotSequence < lastSettledSnapshotSequence) {
+  function isSnapshotSupersededByReplayCurrentFrame(canvas, snapshotSequence) {
+    return (
+      snapshotSequence <
+      (lastReplayCurrentSnapshotSequenceByCanvas.get(canvas) || 0)
+    )
+  }
+
+  function markSnapshotReplayCurrent(canvas, snapshotSequence) {
+    lastReplayCurrentSnapshotSequenceByCanvas.set(
+      canvas,
+      snapshotSequence
+    )
+  }
+
+  function flushCanvasDimensionMutation(canvas) {
+    if (flushMutations) {
+      try {
+        if (flushMutations(canvas) === false) {
+          return false
+        }
+      } catch (_) {
+        return false
+      }
+    }
+    return true
+  }
+
+  function isSnapshotCancelled(snapshotOptions) {
+    if (
+      !snapshotOptions ||
+      typeof snapshotOptions.$rIsCancelled !== 'function'
+    ) {
+      return false
+    }
+    try {
+      return snapshotOptions.$rIsCancelled()
+    } catch (_) {
       return true
     }
-    // Promise callbacks run to completion, so advancing this watermark before
-    // validation/emit makes every later completion for the same canvas
-    // monotonic without penalizing snapshots that resolve in request order.
-    lastSettledSnapshotSequenceByCanvas.set(canvas, snapshotSequence)
-    return false
   }
 
   return {
     snapshot: function (canvas, snapshotOptions) {
       var isAutoSnapshot = snapshotOptions && snapshotOptions.trigger === 'auto'
       var isForcedSnapshot = snapshotOptions && snapshotOptions.force === true
-      var isWebGLSnapshot =
-        snapshotOptions && snapshotOptions.scheduler === 'webgl_snapshot'
+      var shouldSkipFrameSignature =
+        snapshotOptions &&
+        (snapshotOptions.scheduler === 'webgl_snapshot' ||
+          snapshotOptions.scheduler === 'full_snapshot_baseline')
       var shouldResetBitmapReplayState =
         snapshotOptions && snapshotOptions.scheduler === 'command_capture'
       var shouldTrackAutoBaseline =
-        configuration.replayCanvasMode === 'auto' && !isWebGLSnapshot
+        configuration.replayCanvasMode === 'auto' &&
+        !shouldSkipFrameSignature
       if (stopped) {
         return Promise.resolve(createSnapshotFailureResult('observer_stopped'))
       }
@@ -210,8 +338,15 @@ export function createCanvasObserver(options) {
           createSnapshotFailureResult('rejected_by_should_record_canvas')
         )
       }
+      if (!flushCanvasDimensionMutation(canvas)) {
+        return Promise.resolve(
+          createSnapshotFailureResult('dimension_mutation_flush_failed')
+        )
+      }
 
       var snapshotGeneration = generation
+      nextSnapshotSequence += 1
+      var snapshotSequence = nextSnapshotSequence
       var autoFrameSignatureResult = getAutoFrameSignatureResult({
         canvas: canvas,
         configuration: configuration,
@@ -225,6 +360,7 @@ export function createCanvasObserver(options) {
         shouldTrackAutoBaseline: shouldTrackAutoBaseline
       })
       if (autoFrameSignatureResult && autoFrameSignatureResult.result) {
+        markSnapshotReplayCurrent(canvas, snapshotSequence)
         return Promise.resolve(autoFrameSignatureResult.result)
       }
 
@@ -233,9 +369,6 @@ export function createCanvasObserver(options) {
         configuration,
         snapshotOptions
       )
-      nextSnapshotSequence += 1
-      var snapshotSequence = nextSnapshotSequence
-
       return encodeBridge
         .encode(canvas, encodeOptions)
         .then(function (encodedCanvas) {
@@ -245,8 +378,14 @@ export function createCanvasObserver(options) {
           if (snapshotGeneration !== generation) {
             return createSnapshotFailureResult('reset_during_snapshot')
           }
+          if (isSnapshotCancelled(snapshotOptions)) {
+            return createSnapshotFailureResult('baseline_timeout')
+          }
           if (
-            isSnapshotCompletionSuperseded(canvas, snapshotSequence)
+            isSnapshotSupersededByReplayCurrentFrame(
+              canvas,
+              snapshotSequence
+            )
           ) {
             return createSnapshotFailureResult('superseded')
           }
@@ -270,8 +409,9 @@ export function createCanvasObserver(options) {
           if (
             isAutoSnapshot &&
             !isForcedSnapshot &&
-            lastEncodedDataUrlByCanvas.get(canvas) === encodedCanvas.dataUrl
+            isLastEncodedDataUrl(canvas, encodedCanvas.dataUrl)
           ) {
+            markSnapshotReplayCurrent(canvas, snapshotSequence)
             return createSnapshotFailureResult('unchanged')
           }
 
@@ -279,21 +419,23 @@ export function createCanvasObserver(options) {
             encodedCanvas.dataUrl
           )
           if (!isValidEncodedCanvasDataUrl(encodedCanvas.dataUrl)) {
-            onMutationDebug({
-              timestamp: timeStampNow(),
-              canvasId: id,
-              trigger:
-                snapshotOptions && snapshotOptions.trigger === 'auto'
-                  ? 'auto'
-                  : 'manual',
-              reason: 'invalid_encoded_payload',
-              width: encodedCanvas.width,
-              height: encodedCanvas.height,
-              encodedBytesCount: encodedBytesCount,
-              diagnostics: getEncodedCanvasDataUrlDiagnostics(
-                encodedCanvas.dataUrl
-              )
-            })
+            if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+              onMutationDebug({
+                timestamp: timeStampNow(),
+                canvasId: id,
+                trigger:
+                  snapshotOptions && snapshotOptions.trigger === 'auto'
+                    ? 'auto'
+                    : 'manual',
+                reason: 'invalid_encoded_payload',
+                width: encodedCanvas.width,
+                height: encodedCanvas.height,
+                encodedBytesCount: encodedBytesCount,
+                diagnostics: getEncodedCanvasDataUrlDiagnostics(
+                  encodedCanvas.dataUrl
+                )
+              })
+            }
             return createSnapshotFailureResult('invalid_encoded_payload')
           }
           if (
@@ -303,22 +445,39 @@ export function createCanvasObserver(options) {
           }
 
           var mutationTimestamp = timeStampNow()
-          if (
+          var shouldIncludeBitmapReplayStateReset =
             shouldResetBitmapReplayState &&
             !hasResetBitmapReplayStateByCanvas.has(canvas)
-          ) {
-            // Keep the state reset separate and emit it once per full-snapshot
-            // generation. Existing players identify an exact
-            // clearRect+drawImage pair as a replaceable self-contained frame.
-            var stateResetAccepted = emit(
-              createCanvasMutationRecord({
-                timestamp: mutationTimestamp,
-                id: id,
-                contextType: '2D',
-                commands: createBitmapReplayStateResetCommands()
-              })
-            )
-            if (stateResetAccepted === false) {
+          var bitmapReplayCommands = createBitmapReplayCommands(
+            buildSerializedCanvasImage(
+              encodedCanvas.dataUrl,
+              configuration.replayCanvasMimeType
+            ),
+            replayTargetWidth,
+            replayTargetHeight
+          )
+          if (shouldIncludeBitmapReplayStateReset) {
+            // The reset is destructive, so it must be admitted atomically with
+            // the replacement bitmap. Otherwise segment backpressure can
+            // publish a reset-only record and leave replay blank until a later
+            // frame. Only this first fallback frame carries the reset; later
+            // clearRect+drawImage frames keep their replaceable shape.
+            bitmapReplayCommands =
+              createBitmapReplayStateResetCommands().concat(
+                bitmapReplayCommands
+              )
+          }
+          var recordAccepted = emit(
+            createEncodedCanvasMutationRecord({
+              timestamp: mutationTimestamp,
+              id: id,
+              contextType: '2D',
+              commands: bitmapReplayCommands,
+              encodedBytesCount: encodedBytesCount
+            })
+          )
+          if (recordAccepted === false) {
+            if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
               onMutationDebug({
                 timestamp: mutationTimestamp,
                 canvasId: id,
@@ -331,40 +490,12 @@ export function createCanvasObserver(options) {
                 width: encodedCanvas.width,
                 height: encodedCanvas.height
               })
-              return createSnapshotFailureResult('record_rejected')
             }
-            hasResetBitmapReplayStateByCanvas.add(canvas)
-          }
-          var recordAccepted = emit(
-            createEncodedCanvasMutationRecord({
-              timestamp: mutationTimestamp,
-              id: id,
-              contextType: '2D',
-              commands: createBitmapReplayCommands(
-                buildSerializedCanvasImage(
-                  encodedCanvas.dataUrl,
-                  configuration.replayCanvasMimeType
-                ),
-                replayTargetWidth,
-                replayTargetHeight
-              ),
-              encodedBytesCount: encodedBytesCount
-            })
-          )
-          if (recordAccepted === false) {
-            onMutationDebug({
-              timestamp: mutationTimestamp,
-              canvasId: id,
-              trigger:
-                snapshotOptions && snapshotOptions.trigger === 'auto'
-                  ? 'auto'
-                  : 'manual',
-              reason: 'record_rejected',
-              encodedBytesCount: encodedBytesCount,
-              width: encodedCanvas.width,
-              height: encodedCanvas.height
-            })
             return createSnapshotFailureResult('record_rejected')
+          }
+          markSnapshotReplayCurrent(canvas, snapshotSequence)
+          if (shouldIncludeBitmapReplayStateReset) {
+            hasResetBitmapReplayStateByCanvas.add(canvas)
           }
           if (
             snapshotOptions &&
@@ -376,7 +507,7 @@ export function createCanvasObserver(options) {
             hasResetBitmapReplayStateByCanvas.add(canvas)
           }
 
-          lastEncodedDataUrlByCanvas.set(canvas, encodedCanvas.dataUrl)
+          setLastEncodedDataUrl(canvas, encodedCanvas.dataUrl)
           if (shouldTrackAutoBaseline) {
             if (autoFrameSignatureResult && autoFrameSignatureResult.nextFrameSignature) {
               lastAutoFrameSignatureByCanvas.set(
@@ -386,25 +517,33 @@ export function createCanvasObserver(options) {
             }
             lastAutoSuccessfulSnapshotAtByCanvas.set(canvas, now())
           }
-          onMutationDebug({
-            timestamp: mutationTimestamp,
-            canvasId: id,
-            trigger:
-              snapshotOptions && snapshotOptions.trigger === 'auto'
-                ? 'auto'
-                : 'manual',
-            encodedBytesCount: encodedBytesCount,
-            width: encodedCanvas.width,
-            height: encodedCanvas.height
-          })
+          if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+            onMutationDebug({
+              timestamp: mutationTimestamp,
+              canvasId: id,
+              trigger:
+                snapshotOptions && snapshotOptions.trigger === 'auto'
+                  ? 'auto'
+                  : 'manual',
+              encodedBytesCount: encodedBytesCount,
+              width: encodedCanvas.width,
+              height: encodedCanvas.height
+            })
+          }
           return createSnapshotSuccessResult()
         })
         .catch(function (error) {
           if (snapshotGeneration !== generation) {
             return createSnapshotFailureResult('reset_during_snapshot')
           }
+          if (isSnapshotCancelled(snapshotOptions)) {
+            return createSnapshotFailureResult('baseline_timeout')
+          }
           if (
-            isSnapshotCompletionSuperseded(canvas, snapshotSequence)
+            isSnapshotSupersededByReplayCurrentFrame(
+              canvas,
+              snapshotSequence
+            )
           ) {
             return createSnapshotFailureResult('superseded')
           }
@@ -416,6 +555,7 @@ export function createCanvasObserver(options) {
     },
     stop: function () {
       stopped = true
+      clearEncodedDataUrlCache()
       encodeBridge.stop()
     },
     reset: function () {

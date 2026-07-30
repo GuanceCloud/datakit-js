@@ -1,0 +1,68 @@
+{
+    "name": "@cloudcare/browser-rum-nextjs",
+    "version": "3.3.6",
+    "main": "cjs/index.js",
+    "module": "esm/index.js",
+    "types": "types/index.d.ts",
+    "files": [
+        "cjs",
+        "esm",
+        "types",
+        "README.md"
+    ],
+    "sideEffects": false,
+    "description": "Guance Browser SDK RUM Next.js integration",
+    "scripts": {
+        "build": "run-p build:cjs build:esm",
+        "build:cjs": "rm -rf cjs && babel --config-file ./babel.cjs.json --out-dir cjs ./src",
+        "build:esm": "rm -rf esm && babel --config-file ./babel.esm.json --out-dir esm ./src",
+        "predemo:build": "npm run build",
+        "demo:build": "next build demo --webpack",
+        "predemo:dev": "npm run build",
+        "demo:dev": "next dev demo --webpack --port 8083",
+        "prepack": "npm run build"
+    },
+    "dependencies": {
+        "@cloudcare/browser-core": "3.3.6",
+        "@cloudcare/browser-rum-react": "3.3.6"
+    },
+    "peerDependencies": {
+        "@cloudcare/browser-rum": ">=3.3.6",
+        "@cloudcare/browser-rum-slim": ">=3.3.6",
+        "next": ">=13",
+        "react": ">=18"
+    },
+    "peerDependenciesMeta": {
+        "@cloudcare/browser-rum": {
+            "optional": true
+        },
+        "@cloudcare/browser-rum-slim": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "@types/react": "19.2.17",
+        "next": "16.2.10",
+        "react": "19.2.7",
+        "react-dom": "19.2.7",
+        "react-test-renderer": "19.2.7"
+    },
+    "keywords": [
+        "dataflux",
+        "rum",
+        "nextjs",
+        "next.js",
+        "sdk"
+    ],
+    "repository": {
+        "url": "https://github.com/GuanceCloud/datakit-js",
+        "type": "git",
+        "directory": "packages/rum-nextjs"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "author": "dataflux",
+    "license": "MIT",
+    "homepage": "https://github.com/GuanceCloud/datakit-js/README.md"
+}

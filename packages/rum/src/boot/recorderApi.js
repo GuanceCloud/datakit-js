@@ -49,6 +49,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     $rStatus: RecorderStatus.Stopped
   }
   var nextRecordingToken = 0
+  var unloadRecoveryGeneration = 0
   var replayDeflateWorkerController = createDeflateWorkerController()
   var getReplayWorkerStatus = function () {
     return replayDeflateWorkerController.getStatus()
@@ -64,10 +65,14 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     }
   }
 
-  var startStrategy = function () {
-    state = { $rStatus: RecorderStatus.IntentToStart }
+  var startStrategy = function (options) {
+    state = {
+      $rStatus: RecorderStatus.IntentToStart,
+      $rOptions: options
+    }
   }
   var stopStrategy = function () {
+    unloadRecoveryGeneration += 1
     state = { $rStatus: RecorderStatus.Stopped }
   }
   return {
@@ -90,23 +95,63 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
           state.$rStatus === RecorderStatus.Starting ||
           state.$rStatus === RecorderStatus.Started
         ) {
+          var options = state.$rOptions
           stopStrategy()
-          state = { $rStatus: RecorderStatus.IntentToStart }
+          state = {
+            $rStatus: RecorderStatus.IntentToStart,
+            $rOptions: options
+          }
         }
       })
       lifeCycle.subscribe(
         LifeCycleEventType.PAGE_EXITED,
         function (pageExitEvent) {
           if (pageExitEvent.reason === PageExitReason.UNLOADING) {
+            var shouldRecoverCanceledUnload =
+              state.$rStatus === RecorderStatus.IntentToStart ||
+              state.$rStatus === RecorderStatus.Starting ||
+              state.$rStatus === RecorderStatus.Started
+            var recoveryOptions =
+              state.$rOptions && state.$rOptions.force
+                ? undefined
+                : state.$rOptions
             stopStrategy(pageExitEvent.reason)
+            if (
+              shouldRecoverCanceledUnload &&
+              typeof pageExitEvent.$rOnCancel === 'function'
+            ) {
+              var recoveryGeneration = unloadRecoveryGeneration
+              pageExitEvent.$rOnCancel(function () {
+                if (
+                  recoveryGeneration === unloadRecoveryGeneration &&
+                  state.$rStatus === RecorderStatus.Stopped
+                ) {
+                  startStrategy(recoveryOptions)
+                }
+              })
+            }
           }
         }
       )
       lifeCycle.subscribe(LifeCycleEventType.SESSION_RENEWED, function () {
         if (state.$rStatus === RecorderStatus.IntentToStart) {
-          startStrategy()
+          startStrategy(state.$rOptions)
         }
       })
+      if (sessionManager.sessionStateUpdateObservable) {
+        sessionManager.sessionStateUpdateObservable.subscribe(function ({
+          previousState,
+          newState
+        }) {
+          if (
+            state.$rStatus === RecorderStatus.IntentToStart &&
+            !previousState.forcedSession &&
+            newState.forcedSession
+          ) {
+            startStrategy(state.$rOptions)
+          }
+        })
+      }
       var cachedDeflateEncoder
       var replayWorker = compressionWorker
       var replayWorkerOwnership = compressionWorker ? 'shared' : 'none'
@@ -162,23 +207,36 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       }
       startStrategy = function (options) {
         reconcileStoppedRecordingState()
-        var session = sessionManager.findTrackedSession()
-        if (!session || !session.sessionReplayAllowed) {
-          state = { $rStatus: RecorderStatus.IntentToStart }
-          return
-        }
-
         if (
           state.$rStatus === RecorderStatus.Starting ||
           state.$rStatus === RecorderStatus.Started
         ) {
+          if (options && options.force) {
+            sessionManager.setForcedSession()
+          }
+          return
+        }
+
+        if (options && options.force) {
+          // A forced session renewal emits SESSION_RENEWED synchronously. Leave
+          // the intent state temporarily to avoid starting the recorder twice.
+          state = { $rStatus: RecorderStatus.Stopped }
+          sessionManager.setForcedSession()
+        }
+        var session = sessionManager.findTrackedSession()
+        if (!session || !session.sessionReplayAllowed) {
+          state = {
+            $rStatus: RecorderStatus.IntentToStart,
+            $rOptions: options
+          }
           return
         }
 
         var recordingToken = ++nextRecordingToken
         state = {
           $rStatus: RecorderStatus.Starting,
-          $rToken: recordingToken
+          $rToken: recordingToken,
+          $rOptions: options
         }
 
         runOnReadyState('interactive', function () {
@@ -229,6 +287,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
             state = {
               $rStatus: RecorderStatus.Started,
               $rToken: recordingToken,
+              $rOptions: options,
               $rStop: recordingImpl.stop,
               $rIsStopped: recordingImpl.isStopped,
               $rFullSnapshot:
@@ -238,26 +297,23 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
                 createNotRecordingCanvasResult,
               $rNode:
                 recordingImpl.getSerializedNodeIdForDebug || noop,
-              $rLastAutoCanvas:
-                recordingImpl.getLastAutoCanvasSnapshotResultForDebug || noop,
-              $rAutoCanvasHistory:
-                recordingImpl.getAutoCanvasSnapshotDebugHistoryForDebug || noop,
-              $rLastCanvasMutation:
-                recordingImpl.getLastCanvasMutationForDebug || noop,
-              $rCanvasMutationHistory:
-                recordingImpl.getCanvasMutationHistoryForDebug || noop,
-              $rLastDomMutation:
-                recordingImpl.getLastDomMutationForDebug || noop,
-              $rDomMutationHistory:
-                recordingImpl.getDomMutationHistoryForDebug || noop,
-              $rLastSegmentFlush:
-                recordingImpl.getLastReplaySegmentFlushForDebug || noop,
-              $rSegmentFlushHistory:
-                recordingImpl.getReplaySegmentFlushHistoryForDebug || noop,
-              $rPerformance:
-                recordingImpl.getReplayPerformanceForDebug || noop,
               $rFlushMutations:
                 recordingImpl.flushReplayMutationsForDebug || noop
+            }
+            if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+              state.$rDebug = [
+                recordingImpl.getLastAutoCanvasSnapshotResultForDebug ||
+                  noop,
+                recordingImpl.getAutoCanvasSnapshotDebugHistoryForDebug ||
+                  noop,
+                recordingImpl.getLastCanvasMutationForDebug || noop,
+                recordingImpl.getCanvasMutationHistoryForDebug || noop,
+                recordingImpl.getLastDomMutationForDebug || noop,
+                recordingImpl.getDomMutationHistoryForDebug || noop,
+                recordingImpl.getLastReplaySegmentFlushForDebug || noop,
+                recordingImpl.getReplaySegmentFlushHistoryForDebug || noop,
+                recordingImpl.getReplayPerformanceForDebug || noop
+              ]
             }
           } catch (error) {
             if (
@@ -283,6 +339,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       }
 
       stopStrategy = function (flushReason) {
+        unloadRecoveryGeneration += 1
         if (state.$rStatus === RecorderStatus.Stopped) {
           return
         }
@@ -299,7 +356,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
         }
       }
       if (state.$rStatus === RecorderStatus.IntentToStart) {
-        startStrategy()
+        startStrategy(state.$rOptions)
       }
     },
     takeSubsequentFullSnapshot() {
@@ -317,49 +374,17 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
         return state.$rNode(node)
       }
     },
-    getLastReplaySegmentFlushForDebug: function () {
+    $rGetDebug: function (debugIndex) {
       if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rLastSegmentFlush()
-      }
-    },
-    getLastAutoCanvasSnapshotResultForDebug: function () {
-      if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rLastAutoCanvas()
-      }
-    },
-    getAutoCanvasSnapshotDebugHistoryForDebug: function () {
-      if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rAutoCanvasHistory()
-      }
-    },
-    getLastCanvasMutationForDebug: function () {
-      if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rLastCanvasMutation()
-      }
-    },
-    getCanvasMutationHistoryForDebug: function () {
-      if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rCanvasMutationHistory()
-      }
-    },
-    getLastDomMutationForDebug: function () {
-      if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rLastDomMutation()
-      }
-    },
-    getDomMutationHistoryForDebug: function () {
-      if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rDomMutationHistory()
-      }
-    },
-    getReplaySegmentFlushHistoryForDebug: function () {
-      if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rSegmentFlushHistory()
-      }
-    },
-    getReplayPerformanceForDebug: function () {
-      if (state.$rStatus === RecorderStatus.Started) {
-        return state.$rPerformance()
+        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          return state.$rDebug[debugIndex]()
+        }
+        // The odd indexes are the four history getters. In production their
+        // backing history is intentionally disabled, but a running recorder
+        // still exposes an empty history just as the previous methods did.
+        if (debugIndex < 8 && debugIndex % 2 === 1) {
+          return []
+        }
       }
     },
     flushReplayMutationsForDebug: function () {

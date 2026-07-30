@@ -55,6 +55,19 @@ export function startResourceCollection(
     })
   }
   var requestResourceEntryMatcher = createRequestResourceEntryMatcher()
+  var webSocketSubscription = lifeCycle.subscribe(
+    LifeCycleEventType.WEBSOCKET_COMPLETED,
+    function (event) {
+      try {
+        lifeCycle.notify(
+          LifeCycleEventType.RAW_RUM_EVENT_COLLECTED,
+          processWebSocket(event)
+        )
+      } catch (error) {
+        addTelemetryError(error)
+      }
+    }
+  )
   lifeCycle.subscribe(LifeCycleEventType.REQUEST_COMPLETED, function (request) {
     handleResource(function () {
       return processRequest(request, pageStateHistory, requestResourceEntryMatcher)
@@ -113,6 +126,7 @@ export function startResourceCollection(
   }
   return {
     stop: function () {
+      webSocketSubscription.unsubscribe()
       performanceResourceSubscription.unsubscribe()
     },
     addResource: (resource, savedCommonContext) => {
@@ -122,6 +136,62 @@ export function startResourceCollection(
           processCustomResource(resource)
         )
       })
+    }
+  }
+}
+
+export function processWebSocket(event) {
+  var duration = event.endClocks.timeStamp - event.startClocks.timeStamp
+  var urlObj = urlParse(event.url).getParse()
+  return {
+    startTime: event.startClocks.relative,
+    rawRumEvent: {
+      date: event.startClocks.timeStamp,
+      type: RumEventType.RESOURCE,
+      resource: {
+        id: UUID(),
+        type: ResourceType.WEBSOCKET,
+        url: event.url,
+        urlHost: urlObj.Host,
+        urlPath: urlObj.Path,
+        urlPathGroup: replaceNumberCharByPath(urlObj.Path),
+        urlQuery: getQueryParamsFromUrl(event.url),
+        duration: toServerDuration(duration),
+        websocket: {
+          connectionId: event.connectionId,
+          handshakeSucceeded: event.handshakeSucceeded,
+          startTime: event.startClocks.timeStamp,
+          endTime: event.endClocks.timeStamp,
+          startViewId: event.startViewId,
+          endViewId: event.endViewId,
+          trackingEndReason: event.trackingEndReason,
+          closeCode: event.closeCode,
+          closeReason: event.closeReason,
+          wasClean: event.wasClean,
+          messagesIn: event.messagesIn,
+          messagesOut: event.messagesOut,
+          timeToFirstMessageIn: toServerDuration(
+            event.firstMessageInOffset
+          ),
+          timeToFirstMessageOut: toServerDuration(
+            event.firstMessageOutOffset
+          ),
+          lastMessageInAt: event.lastMessageInAt,
+          longestInboundSilence: toServerDuration(
+            event.longestInboundSilence
+          ),
+          inboundIdleDurationBeforeClose: toServerDuration(
+            event.inboundIdleDurationBeforeClose
+          ),
+          bufferedAmountMax: event.bufferedAmountMax,
+          protocol: event.protocol,
+          setupDuration: toServerDuration(event.setupDuration)
+        }
+      }
+    },
+    domainContext: {
+      isWebSocket: true,
+      webSocket: event.webSocket
     }
   }
 }

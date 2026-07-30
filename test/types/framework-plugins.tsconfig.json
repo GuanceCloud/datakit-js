@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": "../..",
+    "lib": ["DOM", "ES2020"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "paths": {
+      "@angular/router": ["packages/rum-angular/node_modules/@angular/router"]
+    },
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2020"
+  },
+  "files": ["./framework-plugins.ts"]
+}

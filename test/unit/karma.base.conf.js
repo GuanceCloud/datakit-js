@@ -63,9 +63,21 @@ module.exports = {
           __dirname,
           '../../packages/core/src/worker.js'
         ),
+        '@cloudcare/browser-rum-react$': path.resolve(
+          __dirname,
+          '../../packages/rum-react/src/index.js'
+        ),
         '@cloudcare/browser-worker$': path.resolve(
           __dirname,
           '../../packages/worker/src/index.js'
+        ),
+        'next/navigation$': path.resolve(
+          __dirname,
+          './mocks/nextNavigation.js'
+        ),
+        'next/router$': path.resolve(
+          __dirname,
+          './mocks/nextRouter.js'
         )
       }
     },
