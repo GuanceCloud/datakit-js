@@ -8,6 +8,67 @@ import {
 
 function noop() {}
 
+// WebGL snapshots synchronously read the drawing buffer. Keep their legacy
+// safety cadence separate from the cheaper Canvas 2D snapshot scheduler.
+var WEBGL_AUTO_SNAPSHOT_PRESETS = {
+  low: [1500, 3000],
+  medium: [1000, 2000],
+  high: [700, 1400]
+}
+var DEFAULT_WEBGL_AUTO_SNAPSHOT_POLICY = [1000, 1000]
+var webGLReplayRuntimeFactories = new WeakSet()
+
+export function createWebGLReplaySnapshotPolicy(initConfiguration) {
+  initConfiguration = initConfiguration || {}
+  var preset =
+    typeof initConfiguration.replayCanvasQuality === 'string'
+      ? WEBGL_AUTO_SNAPSHOT_PRESETS[
+          initConfiguration.replayCanvasQuality
+        ]
+      : undefined
+  var fallback = preset || DEFAULT_WEBGL_AUTO_SNAPSHOT_POLICY
+  return [
+    typeof initConfiguration.replayCanvasAutoInterval === 'number'
+      ? initConfiguration.replayCanvasAutoInterval
+      : fallback[0],
+    typeof initConfiguration.replayCanvasAutoCooldown === 'number'
+      ? initConfiguration.replayCanvasAutoCooldown
+      : fallback[1]
+  ]
+}
+
+export function createWebGLReplayConfiguration(
+  configuration,
+  snapshotPolicy
+) {
+  var webGLConfiguration = Object.create(configuration || null)
+  webGLConfiguration.replayCanvasAutoInterval = snapshotPolicy[0]
+  webGLConfiguration.replayCanvasAutoCooldown = snapshotPolicy[1]
+  return webGLConfiguration
+}
+
+export function createWebGLReplayRuntimeFactory(snapshotPolicy) {
+  var runtimeFactory = function (
+    configuration,
+    baseEncodeBridge,
+    hostMarkInternalCanvas,
+    report
+  ) {
+    return createWebGLReplayRuntime(
+      createWebGLReplayConfiguration(configuration, snapshotPolicy),
+      baseEncodeBridge,
+      hostMarkInternalCanvas,
+      report
+    )
+  }
+  webGLReplayRuntimeFactories.add(runtimeFactory)
+  return runtimeFactory
+}
+
+export function isWebGLReplayRuntimeFactory(runtimeFactory) {
+  return webGLReplayRuntimeFactories.has(runtimeFactory)
+}
+
 function reportFailure(report, phase, error) {
   try {
     report(phase, error)

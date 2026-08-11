@@ -22,7 +22,10 @@ import { SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT } from './shadowRootsController'
 import { createCanvas2DCommandRecorder } from './canvasCommandCapture'
 import { startCanvasCommandCapture as startRealCanvasCommandCapture } from './canvasCommandObserver'
 import { createCanvasObserver as createRealCanvasObserver } from './canvasObserver'
-import { MAX_QUEUED_MUTATION_RECORDS } from './mutationBatch'
+import {
+  MAX_PENDING_MUTATION_NODES,
+  MAX_QUEUED_MUTATION_RECORDS
+} from './mutationBatch'
 
 describe('replay/record/record', () => {
   let container
@@ -6803,6 +6806,10 @@ describe('replay/record/record', () => {
   })
 
   it('should publish both sides of a final chunked cross-root move atomically', () => {
+    // This assertion covers structural atomicity, not teardown wall time. Keep
+    // stop()'s 12 ms boundary deterministic so a busy test host cannot abandon
+    // the still-correct transaction before its final normalization chunk.
+    spyOn(performance, 'now').and.returnValue(0)
     const destinationHost = document.createElement('div')
     const destinationRoot = destinationHost.attachShadow({ mode: 'open' })
     const child = document.createElement('span')
@@ -7239,6 +7246,81 @@ describe('replay/record/record', () => {
     ).toBe(1)
     recorder.stop()
     jasmine.clock().uninstall()
+  })
+
+  it('should keep recording after atomically admitting a structural replacement at the raw node watermark', () => {
+    spyOn(performance, 'now').and.returnValue(0)
+    let currentNodes = Array.from(
+      { length: MAX_PENDING_MUTATION_NODES / 2 },
+      () => {
+        const node = document.createElement('span')
+        container.appendChild(node)
+        return node
+      }
+    )
+    const emittedRecords = []
+    const onMandatoryFullSnapshotStarted = jasmine.createSpy(
+      'onMandatoryFullSnapshotStarted'
+    )
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      $rOnMandatoryFullSnapshotStarted: onMandatoryFullSnapshotStarted
+    })
+    for (let generation = 0; generation < 2; generation += 1) {
+      const removedNodeIds = currentNodes.map((node) =>
+        recorder.getSerializedNodeIdForDebug(node)
+      )
+      emittedRecords.length = 0
+      const addedNodes = Array.from(
+        { length: MAX_PENDING_MUTATION_NODES / 2 },
+        () => document.createElement('i')
+      )
+
+      container.replaceChildren(...addedNodes)
+      expect(recorder.flushMutations()).toBeTrue()
+
+      const structuralMutations = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation
+      )
+      expect(structuralMutations.length).toBe(1)
+      expect(structuralMutations[0].data.adds.length).toBe(addedNodes.length)
+      expect(
+        structuralMutations[0].data.removes.map((remove) => remove.id)
+      ).toEqual(removedNodeIds)
+      expect(
+        emittedRecords.some((event) => event.type === RecordType.FullSnapshot)
+      ).toBeFalse()
+      expect(onMandatoryFullSnapshotStarted).not.toHaveBeenCalled()
+      currentNodes = addedNodes
+    }
+
+    emittedRecords.length = 0
+    const laterNode = document.createElement('strong')
+    laterNode.setAttribute('data-after-structural-replacement', 'captured')
+    container.appendChild(laterNode)
+    expect(recorder.flushMutations()).toBeTrue()
+    expect(
+      emittedRecords.some(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          event.data.adds.some(
+            (add) =>
+              add.node &&
+              add.node.attributes &&
+              add.node.attributes['data-after-structural-replacement'] ===
+                'captured'
+          )
+      )
+    ).toBeTrue()
+
+    recorder.stop()
   })
 
   it('should treat mutation overflow metadata as mandatory recovery', () => {
@@ -8606,6 +8688,12 @@ describe('replay/record/record', () => {
   })
 
   it('should split independent large adds without separating a text replacement', () => {
+    // This case asserts payload splitting and replacement atomicity, not the
+    // scheduler's 4 ms wall-clock boundary. Full-suite instrumentation can
+    // legitimately leave these four large serializer tasks pending, so keep
+    // the serializer clock deterministic and require the explicit flush to
+    // complete before inspecting the payloads.
+    spyOn(performance, 'now').and.returnValue(0)
     const statusElement = document.createElement('span')
     statusElement.textContent = 'initial'
     container.appendChild(statusElement)
@@ -8627,7 +8715,7 @@ describe('replay/record/record', () => {
     })
     statusElement.textContent = 'updated'
 
-    recorder.flushMutations()
+    expect(recorder.flushMutations()).toBeTrue()
 
     const mutationSnapshots = emittedRecords.filter(
       (event) =>
@@ -8660,7 +8748,7 @@ describe('replay/record/record', () => {
     const lastChildId = recorder.getSerializedNodeIdForDebug(lastChild)
     expect(lastChildId).toEqual(jasmine.any(Number))
     lastChild.setAttribute('data-after-large-add', 'captured')
-    recorder.flushMutations()
+    expect(recorder.flushMutations()).toBeTrue()
     expect(
       emittedRecords.some(
         (event) =>

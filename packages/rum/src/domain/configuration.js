@@ -24,8 +24,8 @@ var REPLAY_CANVAS_QUALITY_PRESETS = {
   low: {
     quality: 0.25,
     sampling: 1,
-    autoInterval: 1500,
-    autoCooldown: 3000,
+    autoInterval: 500,
+    autoCooldown: 500,
     autoUnchangedBackoff: 5000,
     autoFailureBackoff: 7000,
     autoMaxPerRun: 1
@@ -33,8 +33,8 @@ var REPLAY_CANVAS_QUALITY_PRESETS = {
   medium: {
     quality: 0.4,
     sampling: 2,
-    autoInterval: 1000,
-    autoCooldown: 2000,
+    autoInterval: 250,
+    autoCooldown: 250,
     autoUnchangedBackoff: 3000,
     autoFailureBackoff: 5000,
     autoMaxPerRun: 2
@@ -42,8 +42,8 @@ var REPLAY_CANVAS_QUALITY_PRESETS = {
   high: {
     quality: 0.5,
     sampling: 4,
-    autoInterval: 700,
-    autoCooldown: 1400,
+    autoInterval: 125,
+    autoCooldown: 125,
     autoUnchangedBackoff: 2000,
     autoFailureBackoff: 4000,
     autoMaxPerRun: 4
@@ -214,6 +214,18 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
       ? replayCanvasQualityPreset.sampling
       : 2
   }
+  var replayCanvasAutoInterval = isNullUndefinedDefaultValue(
+    initConfiguration.replayCanvasAutoInterval,
+    replayCanvasQualityPreset
+      ? replayCanvasQualityPreset.autoInterval
+      : REPLAY_CANVAS_QUALITY_PRESETS.medium.autoInterval
+  )
+  var replayCanvasAutoCooldown = isNullUndefinedDefaultValue(
+    initConfiguration.replayCanvasAutoCooldown,
+    replayCanvasQualityPreset
+      ? replayCanvasQualityPreset.autoCooldown
+      : replayCanvasAutoInterval
+  )
   return assign(
     {
       applicationId: initConfiguration.applicationId,
@@ -289,18 +301,8 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         initConfiguration.replayCanvasMaxConcurrentEncodes,
         1
       ),
-      replayCanvasAutoInterval: isNullUndefinedDefaultValue(
-        initConfiguration.replayCanvasAutoInterval,
-        replayCanvasQualityPreset
-          ? replayCanvasQualityPreset.autoInterval
-          : 1000
-      ),
-      replayCanvasAutoCooldown: isNullUndefinedDefaultValue(
-        initConfiguration.replayCanvasAutoCooldown,
-        replayCanvasQualityPreset
-          ? replayCanvasQualityPreset.autoCooldown
-          : 1000
-      ),
+      replayCanvasAutoInterval: replayCanvasAutoInterval,
+      replayCanvasAutoCooldown: replayCanvasAutoCooldown,
       replayCanvasAutoUnchangedBackoff: isNullUndefinedDefaultValue(
         initConfiguration.replayCanvasAutoUnchangedBackoff,
         replayCanvasQualityPreset

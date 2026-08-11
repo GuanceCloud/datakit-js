@@ -1509,6 +1509,155 @@ describe('replay/record/canvasObserver', () => {
     expect(emit.calls.count()).toBe(2)
   })
 
+  it('should return to cheap probes after an exact unchanged validation', async () => {
+    let nowTime = 1000
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValues(
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        }),
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      now: () => nowTime,
+      emit,
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValue(new Uint8Array([0, 255])),
+      encodeBridge: {
+        encode,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    nowTime = 5000
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: false,
+      reason: 'unchanged'
+    })
+    nowTime = 5250
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: false,
+      reason: 'below_threshold'
+    })
+    expect(encode).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledTimes(1)
+  })
+
+  it('should encode a localized signature change before the unchanged backoff expires', async () => {
+    let nowTime = 1000
+    const firstSignature = new Array(128).fill(0)
+    const localizedChangeSignature = firstSignature.slice()
+    localizedChangeSignature[0] = 255
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValues(
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        }),
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,REVG',
+          width: 20,
+          height: 10
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      now: () => nowTime,
+      emit,
+      frameSignatureExtractor: jasmine
+        .createSpy('frameSignatureExtractor')
+        .and.returnValues(firstSignature, localizedChangeSignature),
+      encodeBridge: {
+        encode,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    nowTime = 1250
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    expect(encode).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledTimes(2)
+  })
+
+  it('should encode an alpha-only clear instead of treating it as unchanged', async () => {
+    let nowTime = 1000
+    const context = canvas.getContext('2d')
+    context.fillStyle = '#000'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    const encode = jasmine
+      .createSpy('encode')
+      .and.returnValues(
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,QUJD',
+          width: 20,
+          height: 10
+        }),
+        Promise.resolve({
+          dataUrl: 'data:image/webp;base64,REVG',
+          width: 20,
+          height: 10
+        })
+      )
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000,
+        replayCanvasAutoUnchangedBackoff: 3000
+      },
+      now: () => nowTime,
+      emit,
+      encodeBridge: {
+        encode,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+
+    context.clearRect(0, 0, canvas.width, canvas.height)
+    nowTime = 1100
+    expect(await observer.snapshot(canvas, { trigger: 'auto' })).toEqual({
+      ok: true
+    })
+    expect(encode).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledTimes(2)
+  })
+
   it('should not advance the auto signature baseline when encoding fails', async () => {
     let nowTime = 1000
     const observer = createCanvasObserver({

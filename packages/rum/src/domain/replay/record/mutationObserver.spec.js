@@ -1537,15 +1537,22 @@ describe('replay/record/mutationObserver', () => {
     parent.remove()
   })
 
-  it('should recover before chunking an oversized structural replacement', () => {
+  it('should slice and atomically admit a structural replacement at the pending-node watermark', () => {
     spyOn(performance, 'now').and.returnValue(0)
     const parent = document.createElement('div')
-    const removedNode = document.createElement('span')
-    parent.appendChild(removedNode)
+    const removedNodes = Array.from(
+      { length: MAX_PENDING_MUTATION_NODES / 2 },
+      (_, index) => {
+        const node = document.createElement('span')
+        parent.appendChild(node)
+        setSerializedNodeId(node, 171000 + index)
+        return node
+      }
+    )
     document.body.appendChild(parent)
-    markSerializedAncestors(removedNode, 171)
+    markSerializedAncestors(parent, 171)
     const addedNodes = Array.from(
-      { length: MAX_PENDING_MUTATION_NODES },
+      { length: MAX_PENDING_MUTATION_NODES / 2 },
       () => document.createElement('i')
     )
     parent.replaceChildren(...addedNodes)
@@ -1567,16 +1574,83 @@ describe('replay/record/mutationObserver', () => {
         type: 'childList',
         target: parent,
         addedNodes,
-        removedNodes: [removedNode]
+        removedNodes
+      }
+    ])
+    expect(observer.flush()).toBeTrue()
+
+    expect(mutationCallback).toHaveBeenCalledTimes(1)
+    expect(mutationCallback.calls.mostRecent().args[0].adds.length).toBe(
+      addedNodes.length
+    )
+    expect(mutationCallback.calls.mostRecent().args[0].removes).toEqual(
+      removedNodes.map((node) => ({
+        parentId: getSerializedNodeId(parent),
+        id: getSerializedNodeId(node)
+      }))
+    )
+    expect(mutationOverflowCallback).not.toHaveBeenCalled()
+
+    observer.stop()
+    parent.remove()
+  })
+
+  it('should fail closed without publishing a structural prefix when a sliced replacement add is lost', () => {
+    spyOn(performance, 'now').and.returnValue(0)
+    const parent = document.createElement('div')
+    const removedNodes = Array.from(
+      { length: MAX_PENDING_MUTATION_NODES / 2 },
+      () => {
+        const node = document.createElement('span')
+        parent.appendChild(node)
+        return node
+      }
+    )
+    document.body.appendChild(parent)
+    markSerializedAncestors(parent, 172)
+    // Only the final removal slice reaches a published node. The following add
+    // slices must still inherit that structural dependency and fail closed.
+    setSerializedNodeId(removedNodes[removedNodes.length - 1], 172500)
+    const addedNodes = Array.from(
+      { length: MAX_PENDING_MUTATION_NODES / 2 },
+      () => document.createElement('i')
+    )
+    let deepNode = addedNodes[Math.floor(addedNodes.length / 2)]
+    for (let depth = 0; depth < 1500; depth += 1) {
+      const nested = document.createElement('b')
+      deepNode.appendChild(nested)
+      deepNode = nested
+    }
+    parent.replaceChildren(...addedNodes)
+    const mutationCallback = jasmine.createSpy('mutationCallback')
+    const mutationOverflowCallback = jasmine.createSpy(
+      'mutationOverflowCallback'
+    )
+    const observer = startMutationObserver(
+      mutationCallback,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      { removeShadowRoot: jasmine.createSpy('removeShadowRoot') },
+      parent,
+      undefined,
+      mutationOverflowCallback
+    )
+
+    observedCallback([
+      {
+        type: 'childList',
+        target: parent,
+        addedNodes,
+        removedNodes
       }
     ])
     expect(observer.flush()).toBeFalse()
 
     expect(mutationCallback).not.toHaveBeenCalled()
-    expect(mutationOverflowCallback).toHaveBeenCalledOnceWith({
-      reason: 'mutation_normalization_budget',
-      mutationRecordCount: 1
-    })
+    expect(mutationOverflowCallback).toHaveBeenCalledOnceWith(
+      jasmine.objectContaining({
+        reason: 'published_move_serialization_watermark'
+      })
+    )
 
     observer.stop()
     parent.remove()

@@ -315,15 +315,19 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    */
   replayCanvasFlushImmediately?: boolean | undefined
   /**
-   * Auto snapshot interval in milliseconds when `replayCanvasMode` is `auto`.
+   * Per-canvas auto snapshot target interval in milliseconds when
+   * `replayCanvasMode` is `auto`. Actual cadence can be lower when multiple
+   * canvases share the global capture budget.
    */
   replayCanvasAutoInterval?: number | undefined
   /**
-   * Minimum cooldown in milliseconds after a successful auto snapshot.
+   * Minimum per-canvas cooldown in milliseconds after a successful auto snapshot.
    */
   replayCanvasAutoCooldown?: number | undefined
   /**
-   * Backoff in milliseconds after an auto snapshot is skipped as unchanged.
+   * Time in milliseconds before unchanged lightweight signatures are
+   * revalidated with a full encode. Lightweight probes continue at a bounded,
+   * adaptive cadence during this window.
    */
   replayCanvasAutoUnchangedBackoff?: number | undefined
   /**

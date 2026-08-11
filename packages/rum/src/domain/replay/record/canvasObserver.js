@@ -355,18 +355,17 @@ export function createCanvasObserver(options) {
       var snapshotGeneration = generation
       nextSnapshotSequence += 1
       var snapshotSequence = nextSnapshotSequence
-      var autoFrameSignatureResult = getAutoFrameSignatureResult({
-        canvas: canvas,
-        configuration: configuration,
-        now: now,
-        frameSignatureExtractor: frameSignatureExtractor,
-        lastAutoFrameSignatureByCanvas: lastAutoFrameSignatureByCanvas,
-        lastAutoSuccessfulSnapshotAtByCanvas:
-          lastAutoSuccessfulSnapshotAtByCanvas,
-        isAutoSnapshot: isAutoSnapshot,
-        isForcedSnapshot: isForcedSnapshot,
-        shouldTrackAutoBaseline: shouldTrackAutoBaseline
-      })
+      var autoFrameSignatureResult = getAutoFrameSignatureResult(
+        canvas,
+        configuration,
+        now,
+        frameSignatureExtractor,
+        lastAutoFrameSignatureByCanvas,
+        lastAutoSuccessfulSnapshotAtByCanvas,
+        isAutoSnapshot,
+        isForcedSnapshot,
+        shouldTrackAutoBaseline
+      )
       if (autoFrameSignatureResult && autoFrameSignatureResult.result) {
         markSnapshotReplayCurrent(canvas, snapshotSequence)
         return Promise.resolve(autoFrameSignatureResult.result)
@@ -420,6 +419,14 @@ export function createCanvasObserver(options) {
             isLastEncodedDataUrl(canvas, encodedCanvas.dataUrl)
           ) {
             markSnapshotReplayCurrent(canvas, snapshotSequence)
+            updateAutoFrameValidationBaseline(
+              canvas,
+              autoFrameSignatureResult,
+              shouldTrackAutoBaseline,
+              lastAutoFrameSignatureByCanvas,
+              lastAutoSuccessfulSnapshotAtByCanvas,
+              now
+            )
             return createSnapshotFailureResult('unchanged')
           }
 
@@ -516,15 +523,14 @@ export function createCanvasObserver(options) {
           }
 
           setLastEncodedDataUrl(canvas, encodedCanvas.dataUrl)
-          if (shouldTrackAutoBaseline) {
-            if (autoFrameSignatureResult && autoFrameSignatureResult.nextFrameSignature) {
-              lastAutoFrameSignatureByCanvas.set(
-                canvas,
-                autoFrameSignatureResult.nextFrameSignature
-              )
-            }
-            lastAutoSuccessfulSnapshotAtByCanvas.set(canvas, now())
-          }
+          updateAutoFrameValidationBaseline(
+            canvas,
+            autoFrameSignatureResult,
+            shouldTrackAutoBaseline,
+            lastAutoFrameSignatureByCanvas,
+            lastAutoSuccessfulSnapshotAtByCanvas,
+            now
+          )
           if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
             onMutationDebug({
               timestamp: mutationTimestamp,
@@ -572,28 +578,62 @@ export function createCanvasObserver(options) {
   }
 }
 
-function getAutoFrameSignatureResult(options) {
+function updateAutoFrameValidationBaseline(
+  canvas,
+  autoFrameSignatureResult,
+  shouldTrackAutoBaseline,
+  lastAutoFrameSignatureByCanvas,
+  lastAutoSuccessfulSnapshotAtByCanvas,
+  now
+) {
+  if (!shouldTrackAutoBaseline) {
+    return
+  }
   if (
-    !options.shouldTrackAutoBaseline ||
-    options.configuration.replayCanvasMode !== 'auto'
+    autoFrameSignatureResult &&
+    autoFrameSignatureResult.nextFrameSignature
+  ) {
+    lastAutoFrameSignatureByCanvas.set(
+      canvas,
+      autoFrameSignatureResult.nextFrameSignature
+    )
+  }
+  // An exact encoded-data match is still an authoritative validation of the
+  // current frame.  Refreshing this timestamp lets later target-interval runs
+  // return to the cheap signature probe until the next validation window.
+  lastAutoSuccessfulSnapshotAtByCanvas.set(canvas, now())
+}
+
+function getAutoFrameSignatureResult(
+  canvas,
+  configuration,
+  now,
+  frameSignatureExtractor,
+  lastAutoFrameSignatureByCanvas,
+  lastAutoSuccessfulSnapshotAtByCanvas,
+  isAutoSnapshot,
+  isForcedSnapshot,
+  shouldTrackAutoBaseline
+) {
+  if (
+    !shouldTrackAutoBaseline ||
+    configuration.replayCanvasMode !== 'auto'
   ) {
     return undefined
   }
 
-  var nextFrameSignature = options.frameSignatureExtractor(options.canvas)
-  var previousFrameSignature = options.lastAutoFrameSignatureByCanvas.get(
-    options.canvas
-  )
+  var nextFrameSignature = frameSignatureExtractor(canvas)
+  var previousFrameSignature = lastAutoFrameSignatureByCanvas.get(canvas)
   var lastAutoSuccessfulSnapshotAt =
-    options.lastAutoSuccessfulSnapshotAtByCanvas.get(options.canvas)
+    lastAutoSuccessfulSnapshotAtByCanvas.get(canvas)
   var canSkipBelowThreshold =
     typeof lastAutoSuccessfulSnapshotAt === 'number' &&
-    options.now() - lastAutoSuccessfulSnapshotAt <
-      options.configuration.replayCanvasAutoUnchangedBackoff
+    now() - lastAutoSuccessfulSnapshotAt <
+      configuration.replayCanvasAutoUnchangedBackoff
 
   if (
-    options.isAutoSnapshot &&
-    !options.isForcedSnapshot &&
+    isAutoSnapshot &&
+    !isForcedSnapshot &&
     canSkipBelowThreshold &&
     previousFrameSignature &&
     nextFrameSignature &&

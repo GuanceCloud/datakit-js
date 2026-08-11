@@ -1,5 +1,10 @@
 import { installCanvasWebGLSnapshotBootstrap } from './canvasWebGLSnapshotObserver'
-import { createWebGLReplayRuntime } from './webglReplayRuntime'
+import {
+  createWebGLReplayRuntime,
+  createWebGLReplayRuntimeFactory,
+  createWebGLReplaySnapshotPolicy,
+  isWebGLReplayRuntimeFactory
+} from './webglReplayRuntime'
 
 export function webglReplayPlugin() {
   return {
@@ -10,11 +15,17 @@ export function webglReplayPlugin() {
         return
       }
       var registeredRuntime = initConfiguration.sessionReplayWebGL
-      initConfiguration.sessionReplayWebGL =
+      if (
         registeredRuntime === undefined ||
         registeredRuntime === createWebGLReplayRuntime
-          ? createWebGLReplayRuntime
-          : null
+      ) {
+        initConfiguration.sessionReplayWebGL =
+          createWebGLReplayRuntimeFactory(
+            createWebGLReplaySnapshotPolicy(initConfiguration)
+          )
+      } else if (!isWebGLReplayRuntimeFactory(registeredRuntime)) {
+        initConfiguration.sessionReplayWebGL = null
+      }
       if (
         initConfiguration.replayCanvasEnabled !== true ||
         initConfiguration.replayCanvasMode === 'manual'

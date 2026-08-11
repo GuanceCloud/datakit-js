@@ -362,10 +362,7 @@ function initializeChunkedWork(work) {
     work.nativeCallbackCount === 1 &&
     isReverseChunkableSiblingAddWork(work.$rMutations)
   work.$rTransaction = {
-    $rPureAdd: isPureAdd,
-    $rHasUnchunkableStructuralMutation:
-      !isPureAdd && hasUnchunkableStructuralMutation(work.$rMutations),
-    $rMutationRecordCount: work.$rMeasurement.mutationRecordCount
+    $rPureAdd: isPureAdd
   }
   work.recordIndex = isPureAdd ? work.$rMutations.length - 1 : 0
   work.addedIndex = isPureAdd
@@ -388,22 +385,6 @@ function hasStructuralRemoval(mutations) {
     if (
       mutations[index].type === 'childList' &&
       getNodeListLength(mutations[index].removedNodes)
-    ) {
-      return true
-    }
-  }
-  return false
-}
-
-function hasUnchunkableStructuralMutation(mutations) {
-  for (var index = 0; index < mutations.length; index += 1) {
-    var mutation = mutations[index]
-    if (
-      mutation.type === 'childList' &&
-      getNodeListLength(mutation.removedNodes) &&
-      getNodeListLength(mutation.addedNodes) +
-        getNodeListLength(mutation.removedNodes) >=
-        MAX_PENDING_MUTATION_NODES
     ) {
       return true
     }
@@ -548,6 +529,15 @@ function takeChunk(work) {
         nextRemovedIndex = removedNodeCount
         completesChildList = true
       } else {
+        // A large native remove+add record is normalized in bounded slices but
+        // admitted as one mutation group by mutationObserver. Consume removals
+        // first so every later add slice can inherit whether the native record
+        // removed a published node. This preserves the fail-closed replacement
+        // dependency without synchronously scanning the whole NodeList.
+        var structuralState =
+          removedNodeCount > 0
+            ? getStructuralMutationState(work, work.recordIndex)
+            : undefined
         var remainingNodes = Math.max(
           Math.min(
             MUTATION_CHUNK_MAX_NODES - nodeCount - 1,
@@ -560,24 +550,35 @@ function takeChunk(work) {
           ),
           1
         )
+        var removedNodes = structuralState
+          ? Array.prototype.slice.call(
+              mutation.removedNodes,
+              work.removedIndex,
+              work.removedIndex + remainingNodes
+            )
+          : []
+        remainingNodes -= removedNodes.length
         var addedNodes = Array.prototype.slice.call(
           mutation.addedNodes,
           work.addedIndex,
           work.addedIndex + remainingNodes
         )
         remainingNodes -= addedNodes.length
-        var removedNodes = Array.prototype.slice.call(
-          mutation.removedNodes,
-          work.removedIndex,
-          work.removedIndex + remainingNodes
-        )
+        if (!structuralState) {
+          removedNodes = Array.prototype.slice.call(
+            mutation.removedNodes,
+            work.removedIndex,
+            work.removedIndex + remainingNodes
+          )
+        }
         synthetic = {
           type: 'childList',
           target: mutation.target,
           addedNodes: addedNodes,
           removedNodes: removedNodes,
           previousSibling: mutation.previousSibling,
-          nextSibling: mutation.nextSibling
+          nextSibling: mutation.nextSibling,
+          $rStructuralState: structuralState
         }
         nextAddedIndex += addedNodes.length
         nextRemovedIndex += removedNodes.length
@@ -625,6 +626,18 @@ function takeChunk(work) {
     }
   }
   return chunk
+}
+
+function getStructuralMutationState(work, recordIndex) {
+  if (!work.$rStructuralStateByRecordIndex) {
+    work.$rStructuralStateByRecordIndex = []
+  }
+  var structuralState = work.$rStructuralStateByRecordIndex[recordIndex]
+  if (!structuralState) {
+    structuralState = { $rHasPublishedRemoval: false }
+    work.$rStructuralStateByRecordIndex[recordIndex] = structuralState
+  }
+  return structuralState
 }
 
 function takePureAddChunk(work) {

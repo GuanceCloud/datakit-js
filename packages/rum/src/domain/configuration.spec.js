@@ -50,8 +50,8 @@ describe('rum configuration', () => {
     expect(configuration.replayCanvasMaxCanvasSize).toBe(1280)
     expect(configuration.replayCanvasMaxEncodedBytes).toBe(40000)
     expect(configuration.replayCanvasMaxConcurrentEncodes).toBe(1)
-    expect(configuration.replayCanvasAutoInterval).toBe(1000)
-    expect(configuration.replayCanvasAutoCooldown).toBe(1000)
+    expect(configuration.replayCanvasAutoInterval).toBe(250)
+    expect(configuration.replayCanvasAutoCooldown).toBe(250)
     expect(configuration.replayCanvasAutoUnchangedBackoff).toBe(3000)
     expect(configuration.replayCanvasAutoFailureBackoff).toBe(5000)
     expect(configuration.replayCanvasAutoMaxPerRun).toBe(2)
@@ -186,24 +186,24 @@ describe('rum configuration', () => {
 
     expect(lowConfiguration.replayCanvasQuality).toBe(0.25)
     expect(lowConfiguration.replayCanvasSampling).toBe(1)
-    expect(lowConfiguration.replayCanvasAutoInterval).toBe(1500)
-    expect(lowConfiguration.replayCanvasAutoCooldown).toBe(3000)
+    expect(lowConfiguration.replayCanvasAutoInterval).toBe(500)
+    expect(lowConfiguration.replayCanvasAutoCooldown).toBe(500)
     expect(lowConfiguration.replayCanvasAutoUnchangedBackoff).toBe(5000)
     expect(lowConfiguration.replayCanvasAutoFailureBackoff).toBe(7000)
     expect(lowConfiguration.replayCanvasAutoMaxPerRun).toBe(1)
     expect(lowConfiguration.replayCanvasFlushImmediately).toBeFalse()
     expect(mediumConfiguration.replayCanvasQuality).toBe(0.4)
     expect(mediumConfiguration.replayCanvasSampling).toBe(2)
-    expect(mediumConfiguration.replayCanvasAutoInterval).toBe(1000)
-    expect(mediumConfiguration.replayCanvasAutoCooldown).toBe(2000)
+    expect(mediumConfiguration.replayCanvasAutoInterval).toBe(250)
+    expect(mediumConfiguration.replayCanvasAutoCooldown).toBe(250)
     expect(mediumConfiguration.replayCanvasAutoUnchangedBackoff).toBe(3000)
     expect(mediumConfiguration.replayCanvasAutoFailureBackoff).toBe(5000)
     expect(mediumConfiguration.replayCanvasAutoMaxPerRun).toBe(2)
     expect(mediumConfiguration.replayCanvasFlushImmediately).toBeFalse()
     expect(highConfiguration.replayCanvasQuality).toBe(0.5)
     expect(highConfiguration.replayCanvasSampling).toBe(4)
-    expect(highConfiguration.replayCanvasAutoInterval).toBe(700)
-    expect(highConfiguration.replayCanvasAutoCooldown).toBe(1400)
+    expect(highConfiguration.replayCanvasAutoInterval).toBe(125)
+    expect(highConfiguration.replayCanvasAutoCooldown).toBe(125)
     expect(highConfiguration.replayCanvasAutoUnchangedBackoff).toBe(2000)
     expect(highConfiguration.replayCanvasAutoFailureBackoff).toBe(4000)
     expect(highConfiguration.replayCanvasAutoMaxPerRun).toBe(4)
@@ -220,11 +220,24 @@ describe('rum configuration', () => {
     })
 
     expect(configuration.replayCanvasSampling).toBe(2)
-    expect(configuration.replayCanvasAutoInterval).toBe(1000)
-    expect(configuration.replayCanvasAutoCooldown).toBe(1000)
+    expect(configuration.replayCanvasAutoInterval).toBe(250)
+    expect(configuration.replayCanvasAutoCooldown).toBe(250)
     expect(configuration.replayCanvasAutoUnchangedBackoff).toBe(3000)
     expect(configuration.replayCanvasAutoFailureBackoff).toBe(5000)
     expect(configuration.replayCanvasAutoMaxPerRun).toBe(2)
+  })
+
+  it('should use an explicit auto interval as the default success cooldown', () => {
+    const configuration = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      replayCanvasEnabled: true,
+      replayCanvasMode: 'auto',
+      replayCanvasAutoInterval: 125
+    })
+
+    expect(configuration.replayCanvasAutoInterval).toBe(125)
+    expect(configuration.replayCanvasAutoCooldown).toBe(125)
   })
 
   it('should preserve an explicit canvas encoded byte budget', () => {

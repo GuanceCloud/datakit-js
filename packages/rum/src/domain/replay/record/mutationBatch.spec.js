@@ -192,23 +192,29 @@ describe('replay/record/mutationBatch', () => {
     expect(emittedStructuralMutation.removedNodes).toEqual([
       removedNode
     ])
-    expect(
-      structuralChunks[0][1].transaction
-        .$rHasUnchunkableStructuralMutation
-    ).toBeFalse()
+    expect(emittedStructuralMutation.$rStructuralState).toBeUndefined()
     expect(onOverflow).not.toHaveBeenCalled()
   })
 
-  it('should mark only a structural record at the pending-node watermark as unchunkable', () => {
+  it('should slice one structural record at the pending-node watermark as one atomic transaction', () => {
     const processMutationBatch = jasmine
       .createSpy('processMutationBatch')
       .and.returnValue(true)
-    const batch = createMutationBatch(processMutationBatch)
+    const onOverflow = jasmine.createSpy('onOverflow')
+    const batch = createMutationBatch(processMutationBatch, onOverflow)
     const target = document.createElement('div')
-    const removedNode = document.createElement('i')
+    const removedNodes = Array.from({ length: 3 }, (_, index) => {
+      const node = document.createElement('i')
+      node.id = 'removed-' + index
+      return node
+    })
     const addedNodes = Array.from(
-      { length: MAX_PENDING_MUTATION_NODES - 1 },
-      () => document.createElement('span')
+      { length: MAX_PENDING_MUTATION_NODES - removedNodes.length },
+      (_, index) => {
+        const node = document.createElement('span')
+        node.id = 'added-' + index
+        return node
+      }
     )
 
     expect(
@@ -217,16 +223,32 @@ describe('replay/record/mutationBatch', () => {
           type: 'childList',
           target,
           addedNodes,
-          removedNodes: [removedNode]
+          removedNodes
         }
       ])
     ).toBeTrue()
     while (batch.flush() === 'pending') {}
 
+    const calls = processMutationBatch.calls.allArgs()
+    const structuralStates = calls
+      .flatMap((args) => args[0])
+      .map((mutation) => mutation.$rStructuralState)
+    const transaction = calls[0][1].transaction
+    expect(calls.length).toBeGreaterThan(1)
     expect(
-      processMutationBatch.calls.first().args[1].transaction
-        .$rHasUnchunkableStructuralMutation
-    ).toBeTrue()
+      calls.flatMap((args) => args[0]).flatMap((mutation) => mutation.removedNodes)
+    ).toEqual(removedNodes)
+    expect(
+      calls.flatMap((args) => args[0]).flatMap((mutation) => mutation.addedNodes)
+    ).toEqual(addedNodes)
+    structuralStates.forEach((state) => {
+      expect(state).toBe(structuralStates[0])
+    })
+    calls.forEach((args) => {
+      expect(args[1].transaction).toBe(transaction)
+    })
+    expect(calls.filter((args) => args[1].isLast).length).toBe(1)
+    expect(onOverflow).not.toHaveBeenCalled()
   })
 
   it('should transaction-slice one sibling-add callback from its tail', () => {

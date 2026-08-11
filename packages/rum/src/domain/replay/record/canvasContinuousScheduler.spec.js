@@ -97,8 +97,10 @@ describe('replay/record/canvasContinuousScheduler', () => {
   })
 
   it('should avoid overlapping continuous snapshot runs', async () => {
+    var nowTime = 0
     var firstFrameCallback
     var secondFrameCallback
+    var scheduledTimeoutCallback
     var frameCount = 0
     var releaseSnapshot
     var snapshotDone = new Promise(function (resolve) {
@@ -110,6 +112,9 @@ describe('replay/record/canvasContinuousScheduler', () => {
 
     startContinuousCanvasSnapshotLoop({
       configuration: createConfiguration(),
+      now: function () {
+        return nowTime
+      },
       getCanvases: function () {
         return [document.createElement('canvas')]
       },
@@ -123,7 +128,12 @@ describe('replay/record/canvasContinuousScheduler', () => {
         }
         return frameCount
       },
-      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame')
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback) {
+        scheduledTimeoutCallback = callback
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
     })
 
     firstFrameCallback()
@@ -136,6 +146,11 @@ describe('replay/record/canvasContinuousScheduler', () => {
     await snapshotDone
     await flushContinuousLoop()
 
+    expect(secondFrameCallback).toBeUndefined()
+    expect(scheduledTimeoutCallback).toEqual(jasmine.any(Function))
+
+    nowTime = 250
+    scheduledTimeoutCallback()
     expect(secondFrameCallback).toEqual(jasmine.any(Function))
   })
 
@@ -414,14 +429,14 @@ describe('replay/record/canvasContinuousScheduler', () => {
     expect(secondFrameCallback).toEqual(jasmine.any(Function))
   })
 
-  it('should not snapshot the same canvas again before the minimum success interval', async () => {
+  it('should use the per-canvas target interval for successful snapshots', async () => {
     var nowTime = 0
     var frameCallbacks = []
+    var scheduledTimeout
     var canvas = document.createElement('canvas')
     var snapshotCanvas = jasmine
       .createSpy('snapshotCanvas')
       .and.returnValue(Promise.resolve({ ok: true }))
-    var onDebug = jasmine.createSpy('onDebug')
 
     startContinuousCanvasSnapshotLoop({
       configuration: createConfiguration(),
@@ -432,31 +447,371 @@ describe('replay/record/canvasContinuousScheduler', () => {
         return [canvas]
       },
       snapshotCanvas: snapshotCanvas,
-      onDebug: onDebug,
       requestAnimationFrameImpl: function (callback) {
         frameCallbacks.push(callback)
         return frameCallbacks.length
       },
-      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame')
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback, delay) {
+        scheduledTimeout = { callback: callback, delay: delay }
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
     })
 
     frameCallbacks.shift()()
     await flushContinuousLoop()
     expect(snapshotCanvas).toHaveBeenCalledTimes(1)
 
-    nowTime = 50
+    expect(scheduledTimeout.delay).toBe(250)
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+
+    nowTime = 250
+    scheduledTimeout.callback()
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(2)
+  })
+
+  it('should keep probing an unchanged canvas at the target cadence', async () => {
+    var nowTime = 0
+    var frameCallbacks = []
+    var scheduledTimeout
+    var canvas = document.createElement('canvas')
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(
+        Promise.resolve({ ok: false, reason: 'below_threshold' })
+      )
+
+    startContinuousCanvasSnapshotLoop({
+      configuration: createConfiguration({
+        replayCanvasAutoInterval: 250,
+        replayCanvasAutoCooldown: 250,
+        replayCanvasAutoUnchangedBackoff: 3000
+      }),
+      now: function () {
+        return nowTime
+      },
+      getCanvases: function () {
+        return [canvas]
+      },
+      snapshotCanvas: snapshotCanvas,
+      requestAnimationFrameImpl: function (callback) {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      },
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback, delay) {
+        scheduledTimeout = { callback: callback, delay: delay }
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
+    })
+
     frameCallbacks.shift()()
     await flushContinuousLoop()
     expect(snapshotCanvas).toHaveBeenCalledTimes(1)
-    expect(onDebug).toHaveBeenCalledWith(
-      jasmine.objectContaining({
-        scheduler: 'continuous_snapshot',
-        status: 'skipped_no_candidates',
-        selectedCanvasCount: 0
+    // Unchanged backoff limits full validation in canvasObserver.  It must not
+    // stop this lightweight signature probe from seeing a later changed frame.
+    expect(scheduledTimeout.delay).toBe(250)
+
+    nowTime = 250
+    scheduledTimeout.callback()
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(2)
+  })
+
+  it('should progressively back off static probes and reset after a change', async () => {
+    var nowTime = 0
+    var frameCallbacks = []
+    var scheduledTimeout
+    var canvas = document.createElement('canvas')
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValues(
+        Promise.resolve({ ok: false, reason: 'below_threshold' }),
+        Promise.resolve({ ok: false, reason: 'below_threshold' }),
+        Promise.resolve({ ok: true }),
+        Promise.resolve({ ok: true })
+      )
+
+    startContinuousCanvasSnapshotLoop({
+      configuration: createConfiguration({
+        replayCanvasAutoInterval: 250,
+        replayCanvasAutoCooldown: 250,
+        replayCanvasAutoUnchangedBackoff: 3000
+      }),
+      now: function () {
+        return nowTime
+      },
+      getCanvases: function () {
+        return [canvas]
+      },
+      snapshotCanvas: snapshotCanvas,
+      requestAnimationFrameImpl: function (callback) {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      },
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback, delay) {
+        scheduledTimeout = { callback: callback, delay: delay }
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
+    })
+
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(scheduledTimeout.delay).toBe(250)
+
+    nowTime = 250
+    scheduledTimeout.callback()
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(scheduledTimeout.delay).toBe(500)
+
+    nowTime = 750
+    scheduledTimeout.callback()
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(3)
+    expect(scheduledTimeout.delay).toBe(250)
+
+    nowTime = 1000
+    scheduledTimeout.callback()
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(4)
+  })
+
+  it('should fairly spread ten canvases across the global throughput budget', async () => {
+    var nowTime = 0
+    var canvases = []
+    for (var canvasIndex = 0; canvasIndex < 10; canvasIndex += 1) {
+      canvases.push(document.createElement('canvas'))
+    }
+    var frameCallbacks = []
+    var scheduledTimeout
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(Promise.resolve({ ok: true }))
+
+    var loop = startContinuousCanvasSnapshotLoop({
+      configuration: createConfiguration({
+        replayCanvasAutoInterval: 250,
+        replayCanvasAutoCooldown: 250,
+        replayCanvasAutoMaxPerRun: 2,
+        replayCanvasMaxConcurrentEncodes: 1
+      }),
+      now: function () {
+        return nowTime
+      },
+      getCanvases: function () {
+        return canvases
+      },
+      snapshotCanvas: snapshotCanvas,
+      requestAnimationFrameImpl: function (callback) {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      },
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback, delay) {
+        scheduledTimeout = { callback: callback, delay: delay }
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
+    })
+
+    async function runNextBatch(at) {
+      expect(scheduledTimeout.delay).toBe(120)
+      nowTime = at
+      scheduledTimeout.callback()
+      frameCallbacks.shift()()
+      await flushContinuousLoop()
+    }
+
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    await runNextBatch(120)
+    await runNextBatch(240)
+    await runNextBatch(360)
+    await runNextBatch(480)
+
+    expect(snapshotCanvas.calls.allArgs()).toEqual(
+      canvases.map(function (canvas) {
+        return [canvas]
       })
     )
 
-    nowTime = 140
+    // The next fair round starts after 600 ms instead of waiting for five
+    // one-second global scans, while the aggregate rate remains bounded.
+    await runNextBatch(600)
+    expect(snapshotCanvas.calls.argsFor(10)).toEqual([canvases[0]])
+    expect(snapshotCanvas.calls.argsFor(11)).toEqual([canvases[1]])
+    loop.stop()
+  })
+
+  it('should let cooldown override a faster per-canvas target interval', async () => {
+    var nowTime = 0
+    var frameCallbacks = []
+    var scheduledTimeout
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(Promise.resolve({ ok: true }))
+
+    startContinuousCanvasSnapshotLoop({
+      configuration: createConfiguration({
+        replayCanvasAutoInterval: 125,
+        replayCanvasAutoCooldown: 500
+      }),
+      now: function () {
+        return nowTime
+      },
+      getCanvases: function () {
+        return [document.createElement('canvas')]
+      },
+      snapshotCanvas: snapshotCanvas,
+      requestAnimationFrameImpl: function (callback) {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      },
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback, delay) {
+        scheduledTimeout = { callback: callback, delay: delay }
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
+    })
+
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+    expect(scheduledTimeout.delay).toBe(500)
+  })
+
+  it('should measure cooldown and failure backoff from encode completion', async () => {
+    var nowTime = 0
+    var frameCallbacks = []
+    var scheduledTimeout
+    var resolveSnapshot
+    var canvas = document.createElement('canvas')
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(
+        new Promise(function (resolve) {
+          resolveSnapshot = resolve
+        })
+      )
+
+    startContinuousCanvasSnapshotLoop({
+      configuration: createConfiguration({
+        replayCanvasAutoInterval: 250,
+        replayCanvasAutoCooldown: 250,
+        replayCanvasAutoFailureBackoff: 1000
+      }),
+      now: function () {
+        return nowTime
+      },
+      getCanvases: function () {
+        return [canvas]
+      },
+      snapshotCanvas: snapshotCanvas,
+      requestAnimationFrameImpl: function (callback) {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      },
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback, delay) {
+        scheduledTimeout = { callback: callback, delay: delay }
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
+    })
+
+    frameCallbacks.shift()()
+    await Promise.resolve()
+    nowTime = 200
+    resolveSnapshot({ ok: true })
+    await flushContinuousLoop()
+    expect(scheduledTimeout.delay).toBe(250)
+
+    nowTime = 450
+    var resolveFailedSnapshot
+    snapshotCanvas.and.returnValue(
+      new Promise(function (resolve) {
+        resolveFailedSnapshot = resolve
+      })
+    )
+    scheduledTimeout.callback()
+    frameCallbacks.shift()()
+    await Promise.resolve()
+    nowTime = 650
+    resolveFailedSnapshot({ ok: false, reason: 'record_rejected' })
+    await flushContinuousLoop()
+    // Discovery is still bounded from the run start, but the canvas itself
+    // cannot become eligible until 1,000 ms after the failed encode completed.
+    expect(scheduledTimeout.delay).toBe(300)
+    nowTime = 1150
+    scheduledTimeout.callback()
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(2)
+    expect(scheduledTimeout.delay).toBe(500)
+  })
+
+  it('should retain failure backoff when replay admission is backpressured', async () => {
+    var nowTime = 0
+    var frameCallbacks = []
+    var scheduledTimeout
+    var canvas = document.createElement('canvas')
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(
+        Promise.resolve({ ok: false, reason: 'record_rejected' })
+      )
+
+    startContinuousCanvasSnapshotLoop({
+      configuration: createConfiguration({
+        replayCanvasAutoInterval: 250,
+        replayCanvasAutoCooldown: 250,
+        replayCanvasAutoFailureBackoff: 1000
+      }),
+      now: function () {
+        return nowTime
+      },
+      getCanvases: function () {
+        return [canvas]
+      },
+      snapshotCanvas: snapshotCanvas,
+      requestAnimationFrameImpl: function (callback) {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      },
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback, delay) {
+        scheduledTimeout = { callback: callback, delay: delay }
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
+    })
+
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+    expect(scheduledTimeout.delay).toBe(500)
+
+    nowTime = 500
+    scheduledTimeout.callback()
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+    expect(scheduledTimeout.delay).toBe(500)
+
+    nowTime = 1000
+    scheduledTimeout.callback()
     frameCallbacks.shift()()
     await flushContinuousLoop()
     expect(snapshotCanvas).toHaveBeenCalledTimes(2)
@@ -509,7 +864,7 @@ describe('replay/record/canvasContinuousScheduler', () => {
     expect(snapshotCanvas).toHaveBeenCalledTimes(2)
   })
 
-  it('should sleep until the next scan deadline before requesting another frame', async () => {
+  it('should bound discovery scans while preserving the per-canvas deadline', async () => {
     var nowTime = 0
     var frameCallbacks = []
     var timeoutCallback
@@ -529,6 +884,9 @@ describe('replay/record/canvasContinuousScheduler', () => {
         timeoutCallback = callback
         return 91
       })
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(Promise.resolve({ ok: true }))
 
     var loop = startContinuousCanvasSnapshotLoop({
       configuration: createConfiguration({
@@ -539,9 +897,7 @@ describe('replay/record/canvasContinuousScheduler', () => {
         return nowTime
       },
       getCanvases: getCanvases,
-      snapshotCanvas: jasmine
-        .createSpy('snapshotCanvas')
-        .and.returnValue(Promise.resolve({ ok: true })),
+      snapshotCanvas: snapshotCanvas,
       requestAnimationFrameImpl: requestAnimationFrameImpl,
       cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
       setTimeoutImpl: setTimeoutImpl,
@@ -552,15 +908,24 @@ describe('replay/record/canvasContinuousScheduler', () => {
     await flushContinuousLoop()
     expect(getCanvases).toHaveBeenCalledTimes(1)
     expect(requestAnimationFrameImpl).toHaveBeenCalledTimes(1)
-    expect(setTimeoutImpl).toHaveBeenCalledWith(jasmine.any(Function), 1000)
+    expect(setTimeoutImpl).toHaveBeenCalledWith(jasmine.any(Function), 500)
 
-    nowTime = 1000
+    nowTime = 500
     timeoutCallback()
     expect(requestAnimationFrameImpl).toHaveBeenCalledTimes(2)
 
     frameCallbacks.shift()()
     await flushContinuousLoop()
     expect(getCanvases).toHaveBeenCalledTimes(2)
+    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+    expect(setTimeoutImpl).toHaveBeenCalledWith(jasmine.any(Function), 500)
+
+    nowTime = 1000
+    timeoutCallback()
+    frameCallbacks.shift()()
+    await flushContinuousLoop()
+
+    expect(snapshotCanvas).toHaveBeenCalledTimes(2)
 
     loop.stop()
   })
@@ -715,13 +1080,14 @@ describe('replay/record/canvasContinuousScheduler', () => {
     var mediumPriorityCanvas = document.createElement('canvas')
     var nowTime = 100
     var frameCallbacks = []
+    var timeoutCallback
     var snapshotCanvas = jasmine
       .createSpy('snapshotCanvas')
       .and.returnValue(Promise.resolve({ ok: true }))
 
     var loop = startContinuousCanvasSnapshotLoop({
       configuration: createConfiguration({
-        replayCanvasAutoInterval: 0,
+        replayCanvasAutoInterval: 1,
         replayCanvasAutoCooldown: 1,
         replayCanvasAutoMaxPerRun: 1,
         shouldRecordCanvas: function (canvas) {
@@ -746,18 +1112,26 @@ describe('replay/record/canvasContinuousScheduler', () => {
         frameCallbacks.push(callback)
         return frameCallbacks.length
       },
-      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame')
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback) {
+        timeoutCallback = callback
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
     })
 
     frameCallbacks.shift()()
     await flushContinuousLoop()
-    nowTime = 101
+    nowTime = 160
+    timeoutCallback()
     frameCallbacks.shift()()
     await flushContinuousLoop()
-    nowTime = 102
+    nowTime = 220
+    timeoutCallback()
     frameCallbacks.shift()()
     await flushContinuousLoop()
-    nowTime = 103
+    nowTime = 280
+    timeoutCallback()
     frameCallbacks.shift()()
     await flushContinuousLoop()
 
@@ -778,12 +1152,13 @@ describe('replay/record/canvasContinuousScheduler', () => {
     ]
     var nowTime = 100
     var frameCallbacks = []
+    var timeoutCallback
     var snapshotCanvas = jasmine
       .createSpy('snapshotCanvas')
       .and.returnValue(Promise.resolve({ ok: false, reason: 'unchanged' }))
     var loop = startContinuousCanvasSnapshotLoop({
       configuration: createConfiguration({
-        replayCanvasAutoInterval: 0,
+        replayCanvasAutoInterval: 1,
         replayCanvasAutoMaxPerRun: 1,
         replayCanvasAutoUnchangedBackoff: 2000
       }),
@@ -798,15 +1173,22 @@ describe('replay/record/canvasContinuousScheduler', () => {
         frameCallbacks.push(callback)
         return frameCallbacks.length
       },
-      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame')
+      cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame'),
+      setTimeoutImpl: function (callback) {
+        timeoutCallback = callback
+        return 91
+      },
+      clearTimeoutImpl: jasmine.createSpy('clearTimeout')
     })
 
     frameCallbacks.shift()()
     await flushContinuousLoop()
-    nowTime = 1100
+    nowTime = 160
+    timeoutCallback()
     frameCallbacks.shift()()
     await flushContinuousLoop()
-    nowTime = 2100
+    nowTime = 220
+    timeoutCallback()
     frameCallbacks.shift()()
     await flushContinuousLoop()
 

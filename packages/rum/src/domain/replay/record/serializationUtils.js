@@ -421,11 +421,10 @@ export function getCssRulesString(cssStyleSheet) {
     cssStyleSheet.href,
     rootRules
   )
-  if (!completed && serializationState.parts.length) {
-    serializationState.parts.push(
-      '/* session-replay:stylesheet-truncated */'
-    )
-  } else if (!completed) {
+  // `_cssText` replaces the stylesheet in the player, so a rule prefix cannot
+  // safely represent the source sheet. Let linked stylesheets fall back to
+  // their href and inline styles fall back to their bounded text child.
+  if (!completed) {
     return null
   }
   var styleSheetCssText = fixBrowserCompatibilityIssuesInCSS(

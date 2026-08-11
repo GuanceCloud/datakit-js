@@ -443,17 +443,6 @@ export function processMutations(
   }
   var transactionState =
     mutationBatchContext && mutationBatchContext.transaction
-  if (
-    transactionState &&
-    transactionState.$rHasUnchunkableStructuralMutation
-  ) {
-    transactionState.$rFailed = true
-    mutationTasksController.handleOverflow({
-      reason: 'mutation_normalization_budget',
-      mutationRecordCount: transactionState.$rMutationRecordCount
-    })
-    return false
-  }
   var nodePrivacyLevelCache = new Map()
   var pendingRootTasksToRefresh = new Set()
   var childListMutations = []
@@ -1064,6 +1053,10 @@ function processChildListMutations(
         break
       }
     }
+    var structuralState = mutation.$rStructuralState
+    if (structuralState && hasPublishedRemoval) {
+      structuralState.$rHasPublishedRemoval = true
+    }
     for (
       var addedIndex = 0;
       addedIndex < mutation.addedNodes.length;
@@ -1079,7 +1072,10 @@ function processChildListMutations(
       }
       var addedNode = mutation.addedNodes[addedIndex]
       addedAndMovedNodes.add(addedNode)
-      if (hasPublishedRemoval) {
+      if (
+        hasPublishedRemoval ||
+        (structuralState && structuralState.$rHasPublishedRemoval)
+      ) {
         replacementNodes.add(addedNode)
       }
     }

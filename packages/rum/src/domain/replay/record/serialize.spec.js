@@ -1129,7 +1129,7 @@ describe('replay/record/serialize', () => {
     )
   })
 
-  it('should keep a bounded complete-rule prefix and href for a large linked stylesheet', () => {
+  it('should keep the href fallback for an incomplete linked stylesheet', () => {
     const link = document.createElement('link')
     link.href = 'https://example.com/large.css'
     Object.defineProperty(document, 'styleSheets', {
@@ -1160,13 +1160,7 @@ describe('replay/record/serialize', () => {
     expect(serializedNode.attributes.href).toBe(
       'https://example.com/large.css'
     )
-    expect(serializedNode.attributes._cssText).toContain('color: red')
-    expect(serializedNode.attributes._cssText).toContain(
-      'session-replay:stylesheet-truncated'
-    )
-    expect(serializedNode.attributes._cssText.length).toBeLessThanOrEqual(
-      SERIALIZATION_MAX_STRING_LENGTH
-    )
+    expect(serializedNode.attributes._cssText).toBeUndefined()
   })
 
   it('should serialize css text from style element sheets', () => {
@@ -1254,6 +1248,40 @@ describe('replay/record/serialize', () => {
       SERIALIZATION_MAX_NODE_SOURCE_LENGTH
     )
     expect(serializedNode.childNodes[0].textContent.endsWith('…')).toBeTrue()
+  })
+
+  it('should retain inline style text when CSSOM serialization is incomplete', () => {
+    const style = document.createElement('style')
+    style.textContent = 'body { color: green; }'
+    Object.defineProperty(style, 'sheet', {
+      configurable: true,
+      value: {
+        cssRules: [
+          { cssText: 'body { color: red; }' },
+          { cssText: 'x'.repeat(SERIALIZATION_MAX_STRING_LENGTH) }
+        ]
+      }
+    })
+
+    const serializedNode = serializeNodeWithId(style, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(serializedNode.attributes._cssText).toBeUndefined()
+    expect(serializedNode.childNodes).toEqual([
+      jasmine.objectContaining({
+        type: NodeType.Text,
+        textContent: 'body { color: green; }'
+      })
+    ])
   })
 
   it('should serialize media playback state for video elements', () => {

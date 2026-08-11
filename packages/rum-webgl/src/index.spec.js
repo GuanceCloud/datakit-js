@@ -23,12 +23,38 @@ describe('webglReplayPlugin', () => {
     expect(first).not.toBe(second)
     first.onInit({ initConfiguration: initConfiguration })
     var registeredRuntime = initConfiguration.sessionReplayWebGL
+    initConfiguration.replayCanvasQuality = 'high'
     second.onInit({ initConfiguration: initConfiguration })
     expect(initConfiguration.sessionReplayWebGL).toBe(registeredRuntime)
 
     initConfiguration.sessionReplayWebGL = function () {}
     first.onInit({ initConfiguration: initConfiguration })
     expect(initConfiguration.sessionReplayWebGL).toBeNull()
+  })
+
+  it('creates an isolated runtime wrapper for each init configuration', () => {
+    var firstConfiguration = { replayCanvasEnabled: false }
+    var secondConfiguration = {
+      replayCanvasEnabled: false,
+      replayCanvasQuality: 'high'
+    }
+
+    webglReplayPlugin().onInit({
+      initConfiguration: firstConfiguration
+    })
+    webglReplayPlugin().onInit({
+      initConfiguration: secondConfiguration
+    })
+
+    expect(firstConfiguration.sessionReplayWebGL).toEqual(
+      jasmine.any(Function)
+    )
+    expect(secondConfiguration.sessionReplayWebGL).toEqual(
+      jasmine.any(Function)
+    )
+    expect(firstConfiguration.sessionReplayWebGL).not.toBe(
+      secondConfiguration.sessionReplayWebGL
+    )
   })
 
   it('does not install bootstrap hooks when WebGL replay is disabled or manual', () => {

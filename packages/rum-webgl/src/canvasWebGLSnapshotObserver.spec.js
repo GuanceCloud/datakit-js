@@ -714,6 +714,42 @@ describe('canvas WebGL snapshot observer addon', () => {
     observer.stop()
   })
 
+  it('enforces the private WebGL interval instead of the faster 2d default', async () => {
+    var timers = createTimerHarness()
+    var fixture = createObserverOptions({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 20,
+        replayCanvasAutoInterval: 1000,
+        replayCanvasAutoCooldown: 1000,
+        replayCanvasAutoMaxPerRun: 1,
+        replayCanvasMaxConcurrentEncodes: 1
+      },
+      now: timers.now,
+      setTimeoutImpl: timers.setTimeoutImpl,
+      clearTimeoutImpl: timers.clearTimeoutImpl
+    })
+    var context = Object.create(fixture.contextPrototype)
+    context.canvas = document.createElement('canvas')
+    var observer = startCanvasWebGLSnapshotObserver(fixture.options)
+
+    context.drawArrays()
+    await flushMicrotasks()
+    expect(fixture.options.hostSnapshotCanvas).toHaveBeenCalledTimes(1)
+
+    timers.advanceBy(999)
+    context.drawArrays()
+    await flushMicrotasks()
+    expect(fixture.options.hostSnapshotCanvas).toHaveBeenCalledTimes(1)
+
+    timers.advanceBy(1)
+    context.drawArrays()
+    await flushMicrotasks()
+    expect(fixture.options.hostSnapshotCanvas).toHaveBeenCalledTimes(2)
+    observer.stop()
+  })
+
   it('does not stage an in-flight draw from encode completion', async () => {
     var timers = createTimerHarness()
     var resolveFirstSnapshot

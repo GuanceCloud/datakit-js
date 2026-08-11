@@ -231,11 +231,11 @@ describe('replay/record/serializationUtils', () => {
     expect(task.isMaxApproxBytesReached).toBeFalse()
   })
 
-  it('should abandon CSSOM inlining when it exceeds the active time budget', () => {
+  it('should discard a partial CSSOM result when it exceeds the active time budget', () => {
     const rules = Array.from({ length: 96 }, (_, index) => ({
       cssText: `.rule-${index} { color: red; }`
     }))
-    const nowSpy = spyOn(performance, 'now').and.returnValues(0, 5, 10, 15)
+    const nowSpy = spyOn(performance, 'now').and.returnValues(0, 0, 0, 5)
 
     const cssText = getCssRulesString({
       href: 'https://example.com/app.css',
@@ -246,7 +246,7 @@ describe('replay/record/serializationUtils', () => {
     expect(nowSpy).toHaveBeenCalled()
   })
 
-  it('should bound CSSOM inlining by characters and complete rules', () => {
+  it('should discard CSSOM inlining that exceeds character or rule limits', () => {
     const oversizedCssText = 'x'.repeat(
       STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT + 1
     )
@@ -261,17 +261,12 @@ describe('replay/record/serializationUtils', () => {
         cssRules: [{ cssText: oversizedCssText }]
       })
     ).toBeNull()
-    const boundedRulePrefix = getCssRulesString({
-      href: 'https://example.com/too-many-rules.css',
-      cssRules: tooManyRules
-    })
-    expect(boundedRulePrefix).toContain('a{}')
-    expect(boundedRulePrefix).toContain(
-      'session-replay:stylesheet-truncated'
-    )
-    expect(boundedRulePrefix.length).toBeLessThanOrEqual(
-      STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT
-    )
+    expect(
+      getCssRulesString({
+        href: 'https://example.com/too-many-rules.css',
+        cssRules: tooManyRules
+      })
+    ).toBeNull()
   })
 
   it('should convert relative urls and srcset entries against the document', () => {

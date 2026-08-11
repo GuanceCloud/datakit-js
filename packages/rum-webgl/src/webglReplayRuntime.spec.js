@@ -1,4 +1,8 @@
-import { createWebGLReplayRuntime } from './webglReplayRuntime'
+import {
+  createWebGLReplayConfiguration,
+  createWebGLReplayRuntime,
+  createWebGLReplaySnapshotPolicy
+} from './webglReplayRuntime'
 
 describe('WebGL replay runtime', () => {
   function createBaseBridge() {
@@ -16,6 +20,54 @@ describe('WebGL replay runtime', () => {
       stop: jasmine.createSpy('stop')
     }
   }
+
+  it('keeps legacy WebGL cadence defaults private from the faster 2d cadence', () => {
+    var hostConfiguration = {
+      replayCanvasAutoInterval: 250,
+      replayCanvasAutoCooldown: 250
+    }
+    var webGLConfiguration = createWebGLReplayConfiguration(
+      hostConfiguration,
+      createWebGLReplaySnapshotPolicy({})
+    )
+
+    expect(webGLConfiguration.replayCanvasAutoInterval).toBe(1000)
+    expect(webGLConfiguration.replayCanvasAutoCooldown).toBe(1000)
+    expect(hostConfiguration.replayCanvasAutoInterval).toBe(250)
+    expect(hostConfiguration.replayCanvasAutoCooldown).toBe(250)
+    expect(Object.getPrototypeOf(webGLConfiguration)).toBe(
+      hostConfiguration
+    )
+  })
+
+  it('preserves legacy named-preset cadence for WebGL snapshots', () => {
+    expect(
+      createWebGLReplaySnapshotPolicy({ replayCanvasQuality: 'low' })
+    ).toEqual([1500, 3000])
+    expect(
+      createWebGLReplaySnapshotPolicy({
+        replayCanvasQuality: 'medium'
+      })
+    ).toEqual([1000, 2000])
+    expect(
+      createWebGLReplaySnapshotPolicy({ replayCanvasQuality: 'high' })
+    ).toEqual([700, 1400])
+  })
+
+  it('honors explicit WebGL interval and cooldown independently', () => {
+    expect(
+      createWebGLReplaySnapshotPolicy({
+        replayCanvasQuality: 'high',
+        replayCanvasAutoInterval: 333
+      })
+    ).toEqual([333, 1400])
+    expect(
+      createWebGLReplaySnapshotPolicy({
+        replayCanvasQuality: 'low',
+        replayCanvasAutoCooldown: 444
+      })
+    ).toEqual([1500, 444])
+  })
 
   it('keeps ordinary 2d encoding and lifecycle on the base bridge', async () => {
     var baseBridge = createBaseBridge()

@@ -4,7 +4,20 @@ import {
   isWebGLReplayCanvas
 } from './canvasContext'
 
+var CONTINUOUS_CANVAS_DEFAULT_TARGET_INTERVAL = 250
 var CONTINUOUS_CANVAS_MIN_SUCCESS_INTERVAL = 120
+// Spread a bounded canvas batch over time instead of starting the next batch
+// immediately. At 60 ms per snapshot attempt, one busy page is capped at
+// roughly 16 attempts/second regardless of how many canvases it contains.
+var CONTINUOUS_CANVAS_GLOBAL_SNAPSHOT_INTERVAL = 60
+// Static canvases progressively reduce their cheap signature-probe cadence,
+// while a changed canvas resets immediately to its configured target cadence.
+// This leaves room for active charts without reintroducing multi-second blind
+// spots after one below-threshold frame.
+var CONTINUOUS_CANVAS_MAX_UNCHANGED_PROBE_INTERVAL = 1000
+// Continue discovering newly serialized canvases while every known canvas is
+// in cooldown/backoff, without returning to an always-on rAF scan.
+var CONTINUOUS_CANVAS_DISCOVERY_INTERVAL = 500
 var MAX_CONTINUOUS_CANVAS_SNAPSHOTS_PER_RUN = 8
 var MAX_CONTINUOUS_CANVAS_CONCURRENCY = 4
 var MAX_CONTINUOUS_CANVAS_SCAN_PER_RUN = 64
@@ -22,36 +35,6 @@ function clampInteger(value, fallback, minimum, maximum) {
     return fallback
   }
   return Math.min(Math.max(Math.floor(value), minimum), maximum)
-}
-
-function scanContinuousSnapshotCanvases(getCanvases, scanCursor) {
-  var canvasCollection = getCanvases(MAX_CONTINUOUS_CANVAS_SCAN_PER_RUN)
-  var canvasCount =
-    canvasCollection && typeof canvasCollection.length === 'number'
-      ? canvasCollection.length
-      : 0
-  if (!canvasCount) {
-    return {
-      canvases: [],
-      nextScanCursor: 0
-    }
-  }
-
-  var scannedCanvasCount = Math.min(
-    canvasCount,
-    MAX_CONTINUOUS_CANVAS_SCAN_PER_RUN
-  )
-  var canvases = []
-  for (var offset = 0; offset < scannedCanvasCount; offset += 1) {
-    var canvas = canvasCollection[(scanCursor + offset) % canvasCount]
-    if (canvas && !isWebGLReplayCanvas(canvas)) {
-      canvases.push(canvas)
-    }
-  }
-  return {
-    canvases: canvases,
-    nextScanCursor: (scanCursor + scannedCanvasCount) % canvasCount
-  }
 }
 
 function runWithConcurrency(items, maxConcurrency, task) {
@@ -92,30 +75,17 @@ function runWithConcurrency(items, maxConcurrency, task) {
   })
 }
 
-function getSnapshotBackoff(configuration, result) {
-  if (!result || result.ok !== false) {
-    return (
-      configuration.replayCanvasAutoCooldown ||
-      CONTINUOUS_CANVAS_MIN_SUCCESS_INTERVAL
-    )
-  }
-  if (result.reason === 'unchanged' || result.reason === 'below_threshold') {
-    return (
-      configuration.replayCanvasAutoUnchangedBackoff ||
-      configuration.replayCanvasAutoCooldown ||
-      CONTINUOUS_CANVAS_MIN_SUCCESS_INTERVAL
-    )
-  }
-  return (
-    configuration.replayCanvasAutoFailureBackoff ||
-    configuration.replayCanvasAutoCooldown ||
-    CONTINUOUS_CANVAS_MIN_SUCCESS_INTERVAL
-  )
-}
-
 export function startContinuousCanvasSnapshotLoop(options) {
   var configuration = options.configuration
   var snapshotCanvas = options.snapshotCanvas
+  var targetInterval =
+    configuration.replayCanvasAutoInterval ||
+    CONTINUOUS_CANVAS_DEFAULT_TARGET_INTERVAL
+  var successCooldown =
+    configuration.replayCanvasAutoCooldown ||
+    CONTINUOUS_CANVAS_MIN_SUCCESS_INTERVAL
+  var failureCooldown =
+    configuration.replayCanvasAutoFailureBackoff || successCooldown
   var now = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
     ? options.now || Date.now
     : Date.now
@@ -167,6 +137,7 @@ export function startContinuousCanvasSnapshotLoop(options) {
   var lastSnapshotAttemptOrderByCanvas = new WeakMap()
   var snapshotAttemptOrder = 0
   var nextEligibleAtByCanvas = new WeakMap()
+  var unchangedProbeCountByCanvas = new WeakMap()
   var nextCanvasScanAt = 0
   var continuousCanvasScanCursor = 0
   var maxSnapshotsPerRun = clampInteger(
@@ -185,27 +156,15 @@ export function startContinuousCanvasSnapshotLoop(options) {
     )
   )
 
-  function notifyDebug(summary) {
-    onDebug(summary)
-  }
-
-  function clearScheduledFrame() {
+  function clearScheduledWork() {
     if (frameId !== undefined) {
       cancelAnimationFrameImpl(frameId)
       frameId = undefined
     }
-  }
-
-  function clearScheduledTimeout() {
     if (timeoutId !== undefined) {
       clearTimeoutImpl(timeoutId)
       timeoutId = undefined
     }
-  }
-
-  function clearScheduledWork() {
-    clearScheduledFrame()
-    clearScheduledTimeout()
   }
 
   function scheduleNextFrame() {
@@ -244,17 +203,22 @@ export function startContinuousCanvasSnapshotLoop(options) {
     clearScheduledWork()
   }
 
-  function reset() {
-    if (!isContinuousCanvasRecordingEnabled(configuration)) {
-      return
-    }
+  function resetSchedulingState() {
     generation += 1
     lastSnapshotAttemptOrderByCanvas = new WeakMap()
     snapshotAttemptOrder = 0
     nextEligibleAtByCanvas = new WeakMap()
+    unchangedProbeCountByCanvas = new WeakMap()
     nextCanvasScanAt = 0
     continuousCanvasScanCursor = 0
     clearScheduledWork()
+  }
+
+  function reset() {
+    if (!isContinuousCanvasRecordingEnabled(configuration)) {
+      return
+    }
+    resetSchedulingState()
     pendingImmediateRunAfterReset = !stopped && getVisibilityState() !== 'hidden'
     if (pendingImmediateRunAfterReset && !snapshotInProgress) {
       scheduleNextFrame()
@@ -278,7 +242,7 @@ export function startContinuousCanvasSnapshotLoop(options) {
     }
     if (getVisibilityState() === 'hidden') {
       if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        notifyDebug({
+        onDebug({
           scheduler: 'continuous_snapshot',
           status: 'skipped_hidden',
           startedAt: now(),
@@ -298,32 +262,43 @@ export function startContinuousCanvasSnapshotLoop(options) {
       scheduleNextFrame()
       return
     }
-    nextCanvasScanAt =
-      startedAt + (configuration.replayCanvasAutoInterval || 0)
-
-    var scanResult = scanContinuousSnapshotCanvases(
-      getCanvases,
-      continuousCanvasScanCursor
+    var canvasCollection = getCanvases(MAX_CONTINUOUS_CANVAS_SCAN_PER_RUN)
+    var canvasCount =
+      canvasCollection && typeof canvasCollection.length === 'number'
+        ? canvasCollection.length
+        : 0
+    var scannedCanvasCount = Math.min(
+      canvasCount,
+      MAX_CONTINUOUS_CANVAS_SCAN_PER_RUN
     )
-    continuousCanvasScanCursor = scanResult.nextScanCursor
     var priorityByCanvas = new Map()
-    var canvases = scanResult.canvases.filter(function (canvas) {
-      var result = getReplayCanvasRecordingDecision(
-        configuration,
-        canvas
-      )
-      if (result === false) {
-        return false
+    var canvases = []
+    for (var offset = 0; offset < scannedCanvasCount; offset += 1) {
+      var canvas =
+        canvasCollection[
+          (continuousCanvasScanCursor + offset) % canvasCount
+        ]
+      if (canvas && !isWebGLReplayCanvas(canvas)) {
+        var decision = getReplayCanvasRecordingDecision(
+          configuration,
+          canvas
+        )
+        if (decision !== false) {
+          priorityByCanvas.set(
+            canvas,
+            typeof decision === 'number' ? decision : 0
+          )
+          canvases.push(canvas)
+        }
       }
-      priorityByCanvas.set(
-        canvas,
-        typeof result === 'number' ? result : 0
-      )
-      return true
-    })
+    }
+    continuousCanvasScanCursor = canvasCount
+      ? (continuousCanvasScanCursor + scannedCanvasCount) % canvasCount
+      : 0
     if (!canvases.length) {
+      nextCanvasScanAt = startedAt + CONTINUOUS_CANVAS_DISCOVERY_INTERVAL
       if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        notifyDebug({
+        onDebug({
           scheduler: 'continuous_snapshot',
           status: 'skipped_no_candidates',
           startedAt: now(),
@@ -339,9 +314,18 @@ export function startContinuousCanvasSnapshotLoop(options) {
       return
     }
 
+    var nextKnownEligibility = Infinity
     var eligibleCanvases = canvases
       .filter(function (canvas) {
-        return (nextEligibleAtByCanvas.get(canvas) || 0) <= startedAt
+        var nextEligibility = nextEligibleAtByCanvas.get(canvas) || 0
+        if (nextEligibility <= startedAt) {
+          return true
+        }
+        nextKnownEligibility = Math.min(
+          nextKnownEligibility,
+          nextEligibility
+        )
+        return false
       })
       .sort(function (a, b) {
         // Complete a bounded round across every eligible canvas before a
@@ -361,8 +345,12 @@ export function startContinuousCanvasSnapshotLoop(options) {
       })
     var selectedCanvases = eligibleCanvases.slice(0, maxSnapshotsPerRun)
     if (!selectedCanvases.length) {
+      nextCanvasScanAt = Math.min(
+        nextKnownEligibility,
+        startedAt + CONTINUOUS_CANVAS_DISCOVERY_INTERVAL
+      )
       if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-        notifyDebug({
+        onDebug({
           scheduler: 'continuous_snapshot',
           status: 'skipped_no_candidates',
           startedAt: startedAt,
@@ -382,6 +370,9 @@ export function startContinuousCanvasSnapshotLoop(options) {
       snapshotAttemptOrder += 1
       lastSnapshotAttemptOrderByCanvas.set(canvas, snapshotAttemptOrder)
     })
+    if (eligibleCanvases.length > selectedCanvases.length) {
+      nextKnownEligibility = 0
+    }
     var summary = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
       ? {
           scheduler: 'continuous_snapshot',
@@ -404,6 +395,33 @@ export function startContinuousCanvasSnapshotLoop(options) {
     var runGeneration = generation
     snapshotInProgress = true
 
+    function finishRun() {
+      snapshotInProgress = false
+      if (runGeneration !== generation) {
+        if (pendingImmediateRunAfterReset) {
+          pendingImmediateRunAfterReset = false
+          scheduleNextFrame()
+        }
+        return
+      }
+      pendingImmediateRunAfterReset = false
+      nextCanvasScanAt = Math.max(
+        startedAt +
+          selectedCanvases.length *
+            CONTINUOUS_CANVAS_GLOBAL_SNAPSHOT_INTERVAL,
+        Math.min(
+          nextKnownEligibility,
+          startedAt + CONTINUOUS_CANVAS_DISCOVERY_INTERVAL
+        )
+      )
+      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+        summary.completedAt = now()
+        summary.timestamp = summary.completedAt
+      }
+      onDebug(summary)
+      scheduleNextFrame()
+    }
+
     runWithConcurrency(
       selectedCanvases,
       maxConcurrentSnapshots,
@@ -418,100 +436,69 @@ export function startContinuousCanvasSnapshotLoop(options) {
           __BUILD_ENV__REPLAY_DEBUG_ENABLED__ && getSerializedNodeId
             ? getSerializedNodeId(canvas)
             : undefined
-        return Promise.resolve(snapshotCanvas(canvas))
-          .then(function (result) {
-            if (runGeneration !== generation || getVisibilityState() === 'hidden') {
-              return result
-            }
-            nextEligibleAtByCanvas.set(
-              canvas,
-              now() + getSnapshotBackoff(configuration, result)
-            )
-            summary.results.push(
-              __BUILD_ENV__REPLAY_DEBUG_ENABLED__
-                ? {
-                    canvasId: serializedNodeId,
-                    ok: !result || result.ok !== false,
-                    reason:
-                      result && result.ok === false
-                        ? result.reason
-                        : undefined,
-                    priority: priorityByCanvas.get(canvas)
-                  }
-                : {
-                    ok: !result || result.ok !== false,
-                    reason:
-                      result && result.ok === false
-                        ? result.reason
-                        : undefined
-                  }
-            )
+        var snapshotStartedAt = now()
+        function completeSnapshot(result) {
+          if (runGeneration !== generation || getVisibilityState() === 'hidden') {
             return result
-          })
+          }
+          var failed = result && result.ok === false
+          var unchanged =
+            failed &&
+            (result.reason === 'unchanged' ||
+              result.reason === 'below_threshold')
+          var unchangedProbeCount = 0
+          if (unchanged) {
+            unchangedProbeCount =
+              (unchangedProbeCountByCanvas.get(canvas) || 0) + 1
+            unchangedProbeCountByCanvas.set(canvas, unchangedProbeCount)
+          } else {
+            unchangedProbeCountByCanvas.delete(canvas)
+          }
+          var cooldown = unchanged
+            ? Math.max(
+                successCooldown,
+                Math.min(
+                  CONTINUOUS_CANVAS_MAX_UNCHANGED_PROBE_INTERVAL,
+                  targetInterval * unchangedProbeCount
+                )
+              )
+            : failed
+              ? failureCooldown
+              : successCooldown
+          var nextEligibility = Math.max(
+            snapshotStartedAt + targetInterval,
+            now() + cooldown
+          )
+          nextEligibleAtByCanvas.set(canvas, nextEligibility)
+          nextKnownEligibility = Math.min(
+            nextKnownEligibility,
+            nextEligibility
+          )
+          summary.results.push(
+            __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+              ? {
+                  canvasId: serializedNodeId,
+                  ok: !failed,
+                  reason: failed ? result.reason : undefined,
+                  priority: priorityByCanvas.get(canvas)
+                }
+              : {
+                  ok: !failed,
+                  reason: failed ? result.reason : undefined
+                }
+          )
+          return result
+        }
+        return Promise.resolve(snapshotCanvas(canvas))
+          .then(completeSnapshot)
           .catch(function () {
-            var result = {
+            return completeSnapshot({
               ok: false,
               reason: 'encode_failed'
-            }
-            if (runGeneration !== generation || getVisibilityState() === 'hidden') {
-              return result
-            }
-            nextEligibleAtByCanvas.set(
-              canvas,
-              now() + getSnapshotBackoff(configuration, result)
-            )
-            summary.results.push(
-              __BUILD_ENV__REPLAY_DEBUG_ENABLED__
-                ? {
-                    canvasId: serializedNodeId,
-                    ok: false,
-                    reason: result.reason,
-                    priority: priorityByCanvas.get(canvas)
-                  }
-                : {
-                    ok: false,
-                    reason: result.reason
-                  }
-            )
-            return result
+            })
           })
       }
-    ).then(
-      function () {
-        snapshotInProgress = false
-        if (runGeneration !== generation) {
-          if (pendingImmediateRunAfterReset) {
-            pendingImmediateRunAfterReset = false
-            scheduleNextFrame()
-          }
-          return
-        }
-        pendingImmediateRunAfterReset = false
-        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-          summary.completedAt = now()
-          summary.timestamp = summary.completedAt
-        }
-        notifyDebug(summary)
-        scheduleNextFrame()
-      },
-      function () {
-        snapshotInProgress = false
-        if (runGeneration !== generation) {
-          if (pendingImmediateRunAfterReset) {
-            pendingImmediateRunAfterReset = false
-            scheduleNextFrame()
-          }
-          return
-        }
-        pendingImmediateRunAfterReset = false
-        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
-          summary.completedAt = now()
-          summary.timestamp = summary.completedAt
-        }
-        notifyDebug(summary)
-        scheduleNextFrame()
-      }
-    )
+    ).then(finishRun, finishRun)
   }
 
   if (!isContinuousCanvasRecordingEnabled(configuration)) {
@@ -530,14 +517,8 @@ export function startContinuousCanvasSnapshotLoop(options) {
       if (getVisibilityState() !== 'hidden') {
         requestResumeAfterPause()
       } else {
-        generation += 1
-        lastSnapshotAttemptOrderByCanvas = new WeakMap()
-        snapshotAttemptOrder = 0
-        nextEligibleAtByCanvas = new WeakMap()
-        nextCanvasScanAt = 0
-        continuousCanvasScanCursor = 0
+        resetSchedulingState()
         pendingImmediateRunAfterReset = false
-        clearScheduledWork()
       }
     },
     { capture: true }
