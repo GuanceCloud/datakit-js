@@ -3473,6 +3473,15 @@
         const benchmarkOwner = 'benchmark:' + benchmarkEpoch
         largeDomBenchmarkResult = 'running'
         refreshLargeDomStatus()
+        // `benchmark off` intentionally leaves its final 2,500-row tree in
+        // place for comparison. Clear that tree before restarting replay so
+        // the recorder never has to build an impossible initial baseline from
+        // the previous run.
+        await clearLargeDom({ preserveBenchmark: true })
+        await wait(50)
+        if (benchmarkEpoch !== largeDomBenchmarkEpoch) {
+          return
+        }
         setLargeDomReplayRecording(replayEnabled)
         await wait(100)
         if (benchmarkEpoch !== largeDomBenchmarkEpoch) {

@@ -10,6 +10,7 @@ import {
   startMutationObserver
 } from './mutationObserver'
 import { initInputObserver } from './observers'
+import { MUTATION_RESOURCE_FLUSH } from './mutationResourceBudget'
 
 export var SHADOW_ROOT_CLEANUP_BATCH_SIZE = 32
 export var SHADOW_ROOT_CLEANUP_BUDGET_MS = 4
@@ -723,7 +724,7 @@ export var initShadowRootsController = function (configuration, data) {
     if (mutationResourceBudget) {
       if (!flushState.eventBudgetReservation) {
         flushState.eventBudgetReservation =
-          mutationResourceBudget.reserve('flush', {
+          mutationResourceBudget.reserve(MUTATION_RESOURCE_FLUSH, {
             eventCount: nextEventCount,
             approxBytes: nextEventApproxBytes
           })

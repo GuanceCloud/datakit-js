@@ -31,6 +31,10 @@ const stableMemberKeys = [
   'trigger',
   'scheduler',
   'contextType',
+  // Auto-snapshot summaries cross back into the main RUM bundle.
+  'status',
+  'results',
+  'selectedCanvasCount',
   // The normalized configuration object is produced by the main bundle and
   // consumed by the addon.
   'replayCanvasEnabled',

@@ -1,6 +1,7 @@
 import {
   createMutationResourceBudget,
-  MAX_GLOBAL_MUTATION_APPROX_BYTES
+  MAX_GLOBAL_MUTATION_APPROX_BYTES,
+  MUTATION_RESOURCE_RAW
 } from './mutationResourceBudget'
 
 describe('replay/record/mutationResourceBudget', () => {
@@ -10,7 +11,7 @@ describe('replay/record/mutationResourceBudget', () => {
     let recoveryCount = 0
 
     for (let rootIndex = 0; rootIndex < 1024; rootIndex += 1) {
-      const reservation = budget.reserve('raw', {
+      const reservation = budget.reserve(MUTATION_RESOURCE_RAW, {
         approxBytes: 32769
       })
       if (reservation) {
@@ -19,7 +20,7 @@ describe('replay/record/mutationResourceBudget', () => {
         recoveryCount += 1
       }
     }
-    if (!budget.reserve('raw', { approxBytes: 32769 })) {
+    if (!budget.reserve(MUTATION_RESOURCE_RAW, { approxBytes: 32769 })) {
       if (budget.failOnce()) {
         recoveryCount += 1
       }
@@ -32,7 +33,9 @@ describe('replay/record/mutationResourceBudget', () => {
 
     reservations.forEach((release) => release())
     budget.reset()
-    expect(budget.reserve('raw', { approxBytes: 32769 })).toEqual(
+    expect(
+      budget.reserve(MUTATION_RESOURCE_RAW, { approxBytes: 32769 })
+    ).toEqual(
       jasmine.any(Function)
     )
   })

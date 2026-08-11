@@ -40,6 +40,11 @@ const stableContractKeys = [
   'trigger',
   'scheduler',
   'contextType',
+  // Auto-snapshot summaries are produced by the addon and consumed by the
+  // host for replay keep-alive and debug reporting.
+  'status',
+  'results',
+  'selectedCanvasCount',
   // The normalized configuration object is produced by the main bundle and
   // consumed by the addon.
   'replayCanvasEnabled',

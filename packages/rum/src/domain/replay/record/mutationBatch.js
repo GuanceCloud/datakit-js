@@ -1,4 +1,5 @@
 import { noop, throttle, requestIdleCallback } from '@cloudcare/browser-core'
+import { MUTATION_RESOURCE_RAW } from './mutationResourceBudget'
 
 var MUTATION_PROCESS_MAX_DELAY = 120
 export var MUTATION_PROCESS_MIN_DELAY = 48
@@ -265,7 +266,7 @@ export function createMutationBatch(
       var mutationResourceReservation
       if (mutationResourceBudget) {
         mutationResourceReservation = mutationResourceBudget.reserve(
-          'raw',
+          MUTATION_RESOURCE_RAW,
           {
             recordCount: mutations.length,
             nodeCount: queuedMeasurement.nodeCount,

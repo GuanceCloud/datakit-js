@@ -28,6 +28,7 @@ import {
   createMutationBatch,
   MAX_QUEUED_MUTATION_NODES
 } from './mutationBatch'
+import { MUTATION_RESOURCE_RETAINED } from './mutationResourceBudget'
 
 var MUTATION_SERIALIZATION_SLICE_MS = 4
 var MUTATION_SERIALIZATION_FLUSH_BUDGET_MS = 4
@@ -3240,7 +3241,7 @@ export function createMutationTasksController(
     }
     if (!retainedMutationBudgetReservation) {
       retainedMutationBudgetReservation = mutationResourceBudget.reserve(
-        'retained',
+        MUTATION_RESOURCE_RETAINED,
         { approxBytes: approxBytes }
       )
       return Boolean(retainedMutationBudgetReservation)

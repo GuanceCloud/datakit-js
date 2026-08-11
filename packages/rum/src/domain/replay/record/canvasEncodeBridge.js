@@ -18,35 +18,20 @@ var sharedCanvasEncodeQueue = []
 
 function drainSharedCanvasEncodeQueue() {
   while (sharedCanvasEncodeQueue.length) {
-    for (
-      var cancelledIndex = sharedCanvasEncodeQueue.length - 1;
-      cancelledIndex >= 0;
-      cancelledIndex -= 1
-    ) {
-      if (sharedCanvasEncodeQueue[cancelledIndex].$rCancelled) {
-        sharedCanvasEncodeQueue.splice(cancelledIndex, 1)
-      }
-    }
-    if (!sharedCanvasEncodeQueue.length) {
-      return
-    }
-
-    var entryIndex = 0
-    var entry = sharedCanvasEncodeQueue[entryIndex]
+    var entry = sharedCanvasEncodeQueue[0]
     if (sharedCanvasEncodeInFlightCount >= entry.$rMaxConcurrency) {
       // Do not let a higher-concurrency bridge bypass the oldest lower-limit
       // entry forever. Pausing admission here lets the shared count drain
       // until the FIFO head becomes eligible.
       return
     }
-    entry = sharedCanvasEncodeQueue.splice(entryIndex, 1)[0]
+    sharedCanvasEncodeQueue.shift()
     entry.$rStarted = true
     sharedCanvasEncodeInFlightCount += 1
     var taskResult
     try {
       taskResult = entry.$rTask()
     } catch (error) {
-      settleSharedCanvasEncodePhysicalWork(entry)
       finishSharedCanvasEncodeEntry(entry, entry.$rReject, error)
       continue
     }
@@ -57,16 +42,16 @@ function drainSharedCanvasEncodeQueue() {
 function observeSharedCanvasEncodeEntry(entry, taskResult) {
   Promise.resolve(taskResult).then(
     function (result) {
-      settleSharedCanvasEncodePhysicalWork(entry)
       if (entry.$rQuarantined) {
+        settleSharedCanvasEncodePhysicalWork(entry)
         releaseQuarantinedSharedCanvasEncodeEntry(entry)
         return
       }
       finishSharedCanvasEncodeEntry(entry, entry.$rResolve, result)
     },
     function (error) {
-      settleSharedCanvasEncodePhysicalWork(entry)
       if (entry.$rQuarantined) {
+        settleSharedCanvasEncodePhysicalWork(entry)
         releaseQuarantinedSharedCanvasEncodeEntry(entry)
         return
       }
@@ -109,6 +94,7 @@ function finishSharedCanvasEncodeEntry(entry, settle, value) {
     return
   }
   entry.$rSettled = true
+  settleSharedCanvasEncodePhysicalWork(entry)
   sharedCanvasEncodeInFlightCount = Math.max(
     sharedCanvasEncodeInFlightCount - 1,
     0
@@ -128,15 +114,10 @@ function createSharedCanvasEncodeAdmission(
   })
   var promise = new Promise(function (resolve, reject) {
     entry = {
-      $rCancelled: false,
       $rMaxConcurrency: maxConcurrency,
-      $rPhysicalSettled: false,
-      $rQuarantined: false,
       $rReject: reject,
       $rResolve: resolve,
       $rResolvePhysicalSettled: resolvePhysicalSettled,
-      $rSettled: false,
-      $rStarted: false,
       $rTask: task
     }
     if (sharedCanvasEncodeQueue.length >= MAX_SHARED_CANVAS_ENCODE_QUEUE) {
@@ -156,7 +137,6 @@ function createSharedCanvasEncodeAdmission(
       if (!entry || entry.$rStarted || entry.$rSettled) {
         return false
       }
-      entry.$rCancelled = true
       entry.$rSettled = true
       var entryIndex = sharedCanvasEncodeQueue.indexOf(entry)
       if (entryIndex !== -1) {

@@ -12,6 +12,9 @@ var RECORD_COUNT = 0
 var NODE_COUNT = 1
 var EVENT_COUNT = 2
 var APPROX_BYTES = 3
+export var MUTATION_RESOURCE_RAW = 0
+export var MUTATION_RESOURCE_RETAINED = 1
+export var MUTATION_RESOURCE_FLUSH = 2
 
 export function createMutationResourceBudget() {
   var generation = 0
@@ -43,9 +46,11 @@ export function createMutationResourceBudget() {
       return {
         failed: failed,
         totalApproxBytes: totalApproxBytes,
-        raw: toDebugMeasurement(usageByKind.raw),
-        retained: toDebugMeasurement(usageByKind.retained),
-        flush: toDebugMeasurement(usageByKind.flush)
+        raw: toDebugMeasurement(usageByKind[MUTATION_RESOURCE_RAW]),
+        retained: toDebugMeasurement(
+          usageByKind[MUTATION_RESOURCE_RETAINED]
+        ),
+        flush: toDebugMeasurement(usageByKind[MUTATION_RESOURCE_FLUSH])
       }
     }
   }
@@ -104,7 +109,7 @@ export function createMutationResourceBudget() {
       return false
     }
     if (
-      kind === 'raw' &&
+      kind === MUTATION_RESOURCE_RAW &&
       (usage[RECORD_COUNT] + measurement[RECORD_COUNT] >
         MAX_GLOBAL_MUTATION_RECORDS ||
         usage[NODE_COUNT] + measurement[NODE_COUNT] >
@@ -113,14 +118,14 @@ export function createMutationResourceBudget() {
       return false
     }
     if (
-      kind === 'retained' &&
+      kind === MUTATION_RESOURCE_RETAINED &&
       usage[APPROX_BYTES] + measurement[APPROX_BYTES] >
         MAX_GLOBAL_MUTATION_RETAINED_APPROX_BYTES
     ) {
       return false
     }
     if (
-      kind === 'flush' &&
+      kind === MUTATION_RESOURCE_FLUSH &&
       (usage[EVENT_COUNT] + measurement[EVENT_COUNT] >
         MAX_GLOBAL_MUTATION_FLUSH_EVENTS ||
         usage[APPROX_BYTES] + measurement[APPROX_BYTES] >
@@ -148,11 +153,11 @@ export function createMutationResourceBudget() {
 }
 
 function createEmptyUsageByKind() {
-  return {
-    raw: [0, 0, 0, 0],
-    retained: [0, 0, 0, 0],
-    flush: [0, 0, 0, 0]
-  }
+  return [
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0]
+  ]
 }
 
 function normalizeMeasurement(measurement) {
