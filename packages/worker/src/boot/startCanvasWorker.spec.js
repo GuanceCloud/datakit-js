@@ -55,12 +55,14 @@ describe('worker/startCanvasWorker', () => {
 
   it('should close transferred bitmaps when encoding fails', async () => {
     var bitmap = { close: jasmine.createSpy('close') }
+    var failedCanvas
     globalThis.OffscreenCanvas = function () {
-      return {
+      failedCanvas = {
         getContext: function () {
           return null
         }
       }
+      return failedCanvas
     }
     var workerScope = createWorkerScope()
 
@@ -80,6 +82,8 @@ describe('worker/startCanvasWorker', () => {
     })
 
     expect(bitmap.close).toHaveBeenCalledTimes(1)
+    expect(failedCanvas.width).toBe(0)
+    expect(failedCanvas.height).toBe(0)
     expect(workerScope.postMessage).toHaveBeenCalledWith(
       jasmine.objectContaining({
         action: 'errored',
@@ -152,11 +156,12 @@ describe('worker/startCanvasWorker', () => {
     )
   })
 
-  it('should reject a target above the pixel-byte budget before allocating it', async () => {
+  it('should encode a target above the pool budget without retaining it', async () => {
+    var oversizedCanvas
     var createOffscreenCanvas = jasmine
       .createSpy('OffscreenCanvas')
       .and.callFake(function (width, height) {
-        return {
+        oversizedCanvas = {
           width: width,
           height: height,
           getContext: function () {
@@ -174,6 +179,7 @@ describe('worker/startCanvasWorker', () => {
             })
           }
         }
+        return oversizedCanvas
       })
     globalThis.OffscreenCanvas = createOffscreenCanvas
     var workerScope = createWorkerScope()
@@ -197,13 +203,13 @@ describe('worker/startCanvasWorker', () => {
       setTimeout(resolve, 0)
     })
 
-    expect(createOffscreenCanvas).not.toHaveBeenCalled()
+    expect(createOffscreenCanvas).toHaveBeenCalledTimes(1)
     expect(oversizedBitmap.close).toHaveBeenCalledTimes(1)
-    expect(workerScope.postMessage).toHaveBeenCalledWith({
-      action: 'errored',
-      id: 1,
-      error: 'Canvas worker target memory budget exceeded'
-    })
+    expect(workerScope.postMessage).toHaveBeenCalledWith(
+      jasmine.objectContaining({ action: 'encoded', id: 1 })
+    )
+    expect(oversizedCanvas.width).toBe(0)
+    expect(oversizedCanvas.height).toBe(0)
 
     workerScope.listener({
       data: {
@@ -220,7 +226,7 @@ describe('worker/startCanvasWorker', () => {
       setTimeout(resolve, 0)
     })
 
-    expect(createOffscreenCanvas).toHaveBeenCalledTimes(1)
+    expect(createOffscreenCanvas).toHaveBeenCalledTimes(2)
   })
 
   it('should drop an oversized blob before reading its ArrayBuffer', async () => {

@@ -7,6 +7,7 @@ Re-read these files from the current `release` branch for every task because the
 - `README.md`: authoring rules and collaboration workflow
 - `docs/zh/real-user-monitoring/web/.pages`: Web RUM navigation
 - `docs/zh/real-user-monitoring/web/custom-sdk/.pages`: custom SDK navigation
+- `docs/zh/real-user-monitoring/session-replay/web/.pages`: Web Session Replay navigation
 - `mkdocs.zh.yml`: Guance template keys
 - neighboring documents: current structure, terminology, code style, admonitions, and tabs
 
@@ -22,6 +23,8 @@ Do not copy rules from an old branch when current `release` differs.
 | Electron integration | `electron-access.md` |
 | Event fields and collected data | `app-data-collection.md` |
 | Sampling | `sampling.md` |
+| Session Replay configuration and capability boundaries | `../session-replay/web/replay.md` |
+| Canvas 2D and WebGL Session Replay | `../session-replay/web/canvas-replay.md` |
 | Resource hooks | `hook-resource.md` |
 | Action tracking | `tracking-user-actions.md` |
 | Custom View | `custom-view.md` |

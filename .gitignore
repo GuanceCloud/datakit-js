@@ -9,6 +9,7 @@ coverage
 lerna-debug.log
 .npmrc
 .tw-npmrc
+.tmp-session-replay-*.json*
 demo/node_modules
 config
 demo/*

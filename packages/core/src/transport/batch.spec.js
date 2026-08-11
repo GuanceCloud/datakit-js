@@ -901,4 +901,215 @@ describe('batch', () => {
     )
     expect(send.calls.argsFor(0)[0].bytesCount).toBeGreaterThan(bytesLimit)
   })
+
+  it('should drain an unfinished raw batch on page exit when the current batch is empty', () => {
+    const flushObservable = new Observable()
+    const finishCallbacks = []
+    const regularSend = jasmine.createSpy('send')
+    const sendOnExit = jasmine.createSpy('sendOnExit')
+    const encoder = {
+      isAsync: true,
+      isEmpty: () => false,
+      estimateEncodedBytesCount: () => 1,
+      write: jasmine.createSpy('write').and.callFake((text, callback) => {
+        if (callback) {
+          callback(1)
+        }
+      }),
+      finish: jasmine.createSpy('finish').and.callFake((callback) => {
+        finishCallbacks.push(callback)
+      }),
+      finishSync: jasmine.createSpy('finishSync').and.returnValue({
+        output: new Uint8Array(0),
+        outputBytesCount: 0,
+        pendingData: []
+      })
+    }
+    const message = {
+      type: 'telemetry',
+      date: 1,
+      telemetry: { status: 'debug', message: 'pending-on-exit' }
+    }
+    const serializedMessage = processedMessageByDataMap(message).rowStr
+    const batch = createBatch({
+      encoder,
+      request: { send: regularSend, sendOnExit },
+      bytesLimit: 1000,
+      messageBytesLimit: 1000,
+      sendContentTypeByJson: false,
+      flushController: {
+        flushObservable,
+        notifyBeforeAddMessage: jasmine.createSpy('notifyBeforeAddMessage'),
+        notifyAfterAddMessage: jasmine.createSpy('notifyAfterAddMessage'),
+        notifyAfterRemoveMessage: jasmine.createSpy('notifyAfterRemoveMessage')
+      }
+    })
+
+    batch.add(message)
+    flushObservable.notify({ reason: 'duration_limit', messagesCount: 1 })
+    flushObservable.notify({ reason: 'before_unload', messagesCount: 0 })
+
+    expect(sendOnExit).toHaveBeenCalledOnceWith(
+      jasmine.objectContaining({ data: serializedMessage })
+    )
+    expect(regularSend).not.toHaveBeenCalled()
+
+    finishCallbacks[0]({
+      output: 'late-compressed-payload',
+      outputBytesCount: 23,
+      encoding: 'deflate'
+    })
+    expect(regularSend).not.toHaveBeenCalled()
+    expect(sendOnExit).toHaveBeenCalledTimes(1)
+  })
+
+  it('should fall back and drain bounded raw journals without duplicate late sends', () => {
+    spyOn(display, 'warn')
+    const flushObservable = new Observable()
+    const finishCallbacks = []
+    const send = jasmine.createSpy('send')
+    const failedEncoder = {
+      isAsync: true,
+      isEmpty: () => false,
+      estimateEncodedBytesCount: () => 1,
+      write: jasmine.createSpy('write').and.callFake((text, callback) => {
+        if (callback) {
+          callback(1)
+        }
+      }),
+      finish: jasmine.createSpy('finish').and.callFake((callback) => {
+        finishCallbacks.push(callback)
+      }),
+      stop: jasmine.createSpy('stop')
+    }
+    const messages = [1, 2].map((date) => ({
+      type: 'telemetry',
+      date,
+      telemetry: { status: 'debug', message: `raw-journal-${date}` }
+    }))
+    const serializedMessages = messages.map(
+      (message) => processedMessageByDataMap(message).rowStr
+    )
+    const batch = createBatch({
+      encoder: failedEncoder,
+      encoderFallback: createIdentityEncoder,
+      request: { send, sendOnExit: jasmine.createSpy('sendOnExit') },
+      bytesLimit: 1000,
+      messageBytesLimit: 1000,
+      maxPendingRawBytes: computeBytesCount(serializedMessages[0]) + 1,
+      sendContentTypeByJson: false,
+      flushController: {
+        flushObservable,
+        notifyBeforeAddMessage: jasmine.createSpy('notifyBeforeAddMessage'),
+        notifyAfterAddMessage: jasmine.createSpy('notifyAfterAddMessage'),
+        notifyAfterRemoveMessage: jasmine.createSpy('notifyAfterRemoveMessage')
+      }
+    })
+
+    batch.add(messages[0])
+    flushObservable.notify({ reason: 'duration_limit', messagesCount: 1 })
+    batch.add(messages[1])
+
+    expect(failedEncoder.stop).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledOnceWith(
+      jasmine.objectContaining({ data: serializedMessages[0] })
+    )
+
+    flushObservable.notify({ reason: 'duration_limit', messagesCount: 1 })
+    expect(send.calls.allArgs().map((args) => args[0].data)).toEqual(
+      serializedMessages
+    )
+
+    finishCallbacks[0]({
+      output: 'late-compressed-payload',
+      outputBytesCount: 23,
+      encoding: 'deflate'
+    })
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it('should not count repeated upserts for the same key twice in the raw journal', () => {
+    const flushObservable = new Observable()
+    const failedEncoder = {
+      isAsync: true,
+      isEmpty: () => false,
+      estimateEncodedBytesCount: () => 1,
+      write: jasmine.createSpy('write'),
+      finish: jasmine.createSpy('finish'),
+      stop: jasmine.createSpy('stop')
+    }
+    const message = {
+      type: 'telemetry',
+      date: 1,
+      telemetry: { status: 'debug', message: 'same-upsert' }
+    }
+    const serializedMessage = processedMessageByDataMap(message).rowStr
+    const batch = createBatch({
+      encoder: failedEncoder,
+      encoderFallback: createIdentityEncoder,
+      request: {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      bytesLimit: 1000,
+      messageBytesLimit: 1000,
+      maxPendingRawBytes: computeBytesCount(serializedMessage) + 1,
+      sendContentTypeByJson: false,
+      flushController: {
+        flushObservable,
+        notifyBeforeAddMessage: jasmine.createSpy('notifyBeforeAddMessage'),
+        notifyAfterAddMessage: jasmine.createSpy('notifyAfterAddMessage'),
+        notifyAfterRemoveMessage: jasmine.createSpy('notifyAfterRemoveMessage')
+      }
+    })
+
+    for (let index = 0; index < 10; index += 1) {
+      batch.upsert(message, 'view-1')
+    }
+
+    expect(failedEncoder.stop).not.toHaveBeenCalled()
+  })
+
+  it('should ignore late encoder byte corrections from an already flushed batch', () => {
+    const flushObservable = new Observable()
+    const writeCallbacks = []
+    const notifyAfterAddMessage = jasmine.createSpy(
+      'notifyAfterAddMessage'
+    )
+    const encoder = {
+      isAsync: true,
+      isEmpty: () => false,
+      estimateEncodedBytesCount: () => 1,
+      write: jasmine.createSpy('write').and.callFake((text, callback) => {
+        writeCallbacks.push(callback)
+      }),
+      finish: jasmine.createSpy('finish')
+    }
+    const batch = createBatch({
+      encoder,
+      request: {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      bytesLimit: 1000,
+      messageBytesLimit: 1000,
+      sendContentTypeByJson: false,
+      flushController: {
+        flushObservable,
+        notifyBeforeAddMessage: jasmine.createSpy('notifyBeforeAddMessage'),
+        notifyAfterAddMessage,
+        notifyAfterRemoveMessage: jasmine.createSpy('notifyAfterRemoveMessage')
+      }
+    })
+
+    batch.add({
+      type: 'telemetry',
+      date: 1,
+      telemetry: { status: 'debug', message: 'late-byte-correction' }
+    })
+    flushObservable.notify({ reason: 'duration_limit', messagesCount: 1 })
+    writeCallbacks[0](20)
+
+    expect(notifyAfterAddMessage).not.toHaveBeenCalled()
+  })
 })

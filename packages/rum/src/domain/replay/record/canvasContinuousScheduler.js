@@ -116,11 +116,13 @@ function getSnapshotBackoff(configuration, result) {
 export function startContinuousCanvasSnapshotLoop(options) {
   var configuration = options.configuration
   var snapshotCanvas = options.snapshotCanvas
-  var now = options.now || Date.now
+  var now = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.now || Date.now
+    : Date.now
   var getSerializedNodeId = options.getSerializedNodeId
   var onDebug = options.onDebug || function () {}
   var getVisibilityState =
-    options.getVisibilityState ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.getVisibilityState) ||
     function () {
       return document.visibilityState
     }
@@ -129,24 +131,28 @@ export function startContinuousCanvasSnapshotLoop(options) {
     function () {
       return document.querySelectorAll('canvas')
     }
-  var addEventListenerImpl = options.addEventListenerImpl || addEventListener
+  var addEventListenerImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.addEventListenerImpl || addEventListener
+    : addEventListener
   var requestAnimationFrameImpl =
-    options.requestAnimationFrameImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+      options.requestAnimationFrameImpl) ||
     function (callback) {
       return window.requestAnimationFrame(callback)
     }
   var cancelAnimationFrameImpl =
-    options.cancelAnimationFrameImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+      options.cancelAnimationFrameImpl) ||
     function (frameId) {
       return window.cancelAnimationFrame(frameId)
     }
   var setTimeoutImpl =
-    options.setTimeoutImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.setTimeoutImpl) ||
     function (callback, delay) {
       return window.setTimeout(callback, delay)
     }
   var clearTimeoutImpl =
-    options.clearTimeoutImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.clearTimeoutImpl) ||
     function (timeoutId) {
       return window.clearTimeout(timeoutId)
     }
@@ -271,17 +277,19 @@ export function startContinuousCanvasSnapshotLoop(options) {
       return
     }
     if (getVisibilityState() === 'hidden') {
-      notifyDebug({
-        scheduler: 'continuous_snapshot',
-        status: 'skipped_hidden',
-        startedAt: now(),
-        completedAt: now(),
-        timestamp: now(),
-        eligibleCanvasCount: 0,
-        selectedCanvasCount: 0,
-        skippedBudgetCount: 0,
-        results: []
-      })
+      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+        notifyDebug({
+          scheduler: 'continuous_snapshot',
+          status: 'skipped_hidden',
+          startedAt: now(),
+          completedAt: now(),
+          timestamp: now(),
+          eligibleCanvasCount: 0,
+          selectedCanvasCount: 0,
+          skippedBudgetCount: 0,
+          results: []
+        })
+      }
       return
     }
 
@@ -314,17 +322,19 @@ export function startContinuousCanvasSnapshotLoop(options) {
       return true
     })
     if (!canvases.length) {
-      notifyDebug({
-        scheduler: 'continuous_snapshot',
-        status: 'skipped_no_candidates',
-        startedAt: now(),
-        completedAt: now(),
-        timestamp: now(),
-        eligibleCanvasCount: 0,
-        selectedCanvasCount: 0,
-        skippedBudgetCount: 0,
-        results: []
-      })
+      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+        notifyDebug({
+          scheduler: 'continuous_snapshot',
+          status: 'skipped_no_candidates',
+          startedAt: now(),
+          completedAt: now(),
+          timestamp: now(),
+          eligibleCanvasCount: 0,
+          selectedCanvasCount: 0,
+          skippedBudgetCount: 0,
+          results: []
+        })
+      }
       scheduleNextFrame()
       return
     }
@@ -351,18 +361,20 @@ export function startContinuousCanvasSnapshotLoop(options) {
       })
     var selectedCanvases = eligibleCanvases.slice(0, maxSnapshotsPerRun)
     if (!selectedCanvases.length) {
-      notifyDebug({
-        scheduler: 'continuous_snapshot',
-        status: 'skipped_no_candidates',
-        startedAt: startedAt,
-        completedAt: now(),
-        timestamp: now(),
-        eligibleCanvasCount: canvases.length,
-        selectedCanvasCount: 0,
-        skippedBudgetCount: 0,
-        keepSessionAliveTriggered: false,
-        results: []
-      })
+      if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+        notifyDebug({
+          scheduler: 'continuous_snapshot',
+          status: 'skipped_no_candidates',
+          startedAt: startedAt,
+          completedAt: now(),
+          timestamp: now(),
+          eligibleCanvasCount: canvases.length,
+          selectedCanvasCount: 0,
+          skippedBudgetCount: 0,
+          keepSessionAliveTriggered: false,
+          results: []
+        })
+      }
       scheduleNextFrame()
       return
     }
@@ -370,19 +382,25 @@ export function startContinuousCanvasSnapshotLoop(options) {
       snapshotAttemptOrder += 1
       lastSnapshotAttemptOrderByCanvas.set(canvas, snapshotAttemptOrder)
     })
-    var summary = {
-      scheduler: 'continuous_snapshot',
-      status: 'completed',
-      startedAt: startedAt,
-      eligibleCanvasCount: canvases.length,
-      selectedCanvasCount: selectedCanvases.length,
-      skippedBudgetCount: Math.max(
-        eligibleCanvases.length - selectedCanvases.length,
-        0
-      ),
-      keepSessionAliveTriggered: false,
-      results: []
-    }
+    var summary = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? {
+          scheduler: 'continuous_snapshot',
+          status: 'completed',
+          startedAt: startedAt,
+          eligibleCanvasCount: canvases.length,
+          selectedCanvasCount: selectedCanvases.length,
+          skippedBudgetCount: Math.max(
+            eligibleCanvases.length - selectedCanvases.length,
+            0
+          ),
+          keepSessionAliveTriggered: false,
+          results: []
+        }
+      : {
+          status: 'completed',
+          selectedCanvasCount: selectedCanvases.length,
+          results: []
+        }
     var runGeneration = generation
     snapshotInProgress = true
 
@@ -396,9 +414,10 @@ export function startContinuousCanvasSnapshotLoop(options) {
             reason: 'skipped_hidden'
           }
         }
-        var serializedNodeId = getSerializedNodeId
-          ? getSerializedNodeId(canvas)
-          : undefined
+        var serializedNodeId =
+          __BUILD_ENV__REPLAY_DEBUG_ENABLED__ && getSerializedNodeId
+            ? getSerializedNodeId(canvas)
+            : undefined
         return Promise.resolve(snapshotCanvas(canvas))
           .then(function (result) {
             if (runGeneration !== generation || getVisibilityState() === 'hidden') {
@@ -408,12 +427,25 @@ export function startContinuousCanvasSnapshotLoop(options) {
               canvas,
               now() + getSnapshotBackoff(configuration, result)
             )
-            summary.results.push({
-              canvasId: serializedNodeId,
-              ok: !result || result.ok !== false,
-              reason: result && result.ok === false ? result.reason : undefined,
-              priority: priorityByCanvas.get(canvas)
-            })
+            summary.results.push(
+              __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+                ? {
+                    canvasId: serializedNodeId,
+                    ok: !result || result.ok !== false,
+                    reason:
+                      result && result.ok === false
+                        ? result.reason
+                        : undefined,
+                    priority: priorityByCanvas.get(canvas)
+                  }
+                : {
+                    ok: !result || result.ok !== false,
+                    reason:
+                      result && result.ok === false
+                        ? result.reason
+                        : undefined
+                  }
+            )
             return result
           })
           .catch(function () {
@@ -428,12 +460,19 @@ export function startContinuousCanvasSnapshotLoop(options) {
               canvas,
               now() + getSnapshotBackoff(configuration, result)
             )
-            summary.results.push({
-              canvasId: serializedNodeId,
-              ok: false,
-              reason: result.reason,
-              priority: priorityByCanvas.get(canvas)
-            })
+            summary.results.push(
+              __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+                ? {
+                    canvasId: serializedNodeId,
+                    ok: false,
+                    reason: result.reason,
+                    priority: priorityByCanvas.get(canvas)
+                  }
+                : {
+                    ok: false,
+                    reason: result.reason
+                  }
+            )
             return result
           })
       }
@@ -448,8 +487,10 @@ export function startContinuousCanvasSnapshotLoop(options) {
           return
         }
         pendingImmediateRunAfterReset = false
-        summary.completedAt = now()
-        summary.timestamp = summary.completedAt
+        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          summary.completedAt = now()
+          summary.timestamp = summary.completedAt
+        }
         notifyDebug(summary)
         scheduleNextFrame()
       },
@@ -463,8 +504,10 @@ export function startContinuousCanvasSnapshotLoop(options) {
           return
         }
         pendingImmediateRunAfterReset = false
-        summary.completedAt = now()
-        summary.timestamp = summary.completedAt
+        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          summary.completedAt = now()
+          summary.timestamp = summary.completedAt
+        }
         notifyDebug(summary)
         scheduleNextFrame()
       }

@@ -1,4 +1,4 @@
-import { noop, arrayFrom, startsWith } from './tools'
+import { assign, noop, arrayFrom, startsWith } from './tools'
 import { setTimeout } from './timer'
 import { callMonitored } from './monitor'
 import { createHandlingStack } from './errorTools'
@@ -168,10 +168,11 @@ function preserveConstructorShape(instrumentation, original) {
     original.prototype,
     'constructor'
   )
-  Object.defineProperty(original.prototype, 'constructor', {
-    ...originalConstructorDescriptor,
-    value: instrumentation
-  })
+  Object.defineProperty(
+    original.prototype,
+    'constructor',
+    assign({}, originalConstructorDescriptor, { value: instrumentation })
+  )
 
   return function () {
     var currentDescriptor = Object.getOwnPropertyDescriptor(

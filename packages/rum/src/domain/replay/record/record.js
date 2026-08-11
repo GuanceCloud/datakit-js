@@ -24,6 +24,12 @@ import { assembleIncrementalSnapshot } from './utils'
 import { createElementsScrollPositions } from './elementsScrollPositions'
 import { initShadowRootsController } from './shadowRootsController'
 import { createCanvasObserver } from './canvasObserver'
+import { createCanvasEncodeBridge } from './canvasEncodeBridge'
+import { isWebGLReplayCanvas } from './canvasContext'
+import {
+  createNoopObserver,
+  createSessionReplayWebGLRuntime
+} from './canvasWebGLPluginHost'
 import { startCanvasCommandCapture } from './canvasCommandObserver'
 import {
   getSerializedCanvasNodes,
@@ -42,13 +48,16 @@ import {
   publishMutationAddPublicationToken,
   registerMutationAddPublicationToken
 } from './mutationObserver'
+import { createMutationResourceBudget } from './mutationResourceBudget'
 import { getNodePrivacyLevel } from './privacy'
 import { startContinuousCanvasSnapshotLoop } from './canvasContinuousScheduler'
-import { startCanvasWebGLSnapshotObserver } from './canvasWebGLSnapshotObserver'
 
 var MUTATION_EMIT_DELAY_MS = 16
 var MAX_MUTATION_EMIT_APPROX_BYTES = 200000
 var MUTATION_ADMISSION_RETRY_DELAY_MS = 32
+var MUTATION_ADMISSION_DRAIN_SLICE_MS = 4
+var MUTATION_ADMISSION_DRAIN_SLICE_APPROX_BYTES = 256 * 1024
+var MUTATION_SOURCE_BOUNDARY_FLUSH_BUDGET_MS = 12
 var MAX_PENDING_MUTATION_ADMISSION_PAYLOADS = 512
 var MAX_PENDING_MUTATION_ADMISSION_APPROX_BYTES = 32 * 1024 * 1024
 var DYNAMIC_SHADOW_ROOT_SERIALIZATION_MAX_NODE_COUNT = 5000
@@ -67,6 +76,7 @@ var FULL_SNAPSHOT_SERIALIZATION_MAX_APPROX_BYTES =
   SERIALIZATION_MAX_APPROX_BYTES * 4 - 64 * 1024
 var FULL_SNAPSHOT_MAX_RESTART_COUNT = 3
 var FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS = 1000
+var FULL_SNAPSHOT_MAX_WALL_DURATION_MS = 30000
 var FULL_SNAPSHOT_MUTATION_QUIET_DELAY_MS = 250
 export var MAX_FULL_SNAPSHOT_CANVAS_BASELINE_COUNT = 64
 var FULL_SNAPSHOT_CANVAS_BASELINE_TOTAL_TIMEOUT_MS = 2000
@@ -105,11 +115,21 @@ function isDomMutationRecord(record) {
 function isStatefulDeferredRecord(record) {
   return (
     record &&
-    record.type === RecordType.IncrementalSnapshot &&
-    record.data &&
-    (record.data.source === IncrementalSource.CanvasMutation ||
-      record.data.source === IncrementalSource.StyleSheetRule)
+    (record.type === RecordType.Focus ||
+      record.type === RecordType.VisualViewport ||
+      (record.type === RecordType.IncrementalSnapshot &&
+        record.data &&
+        (record.data.source === IncrementalSource.CanvasMutation ||
+          record.data.source === IncrementalSource.StyleSheetRule ||
+          record.data.source === IncrementalSource.Input ||
+          record.data.source === IncrementalSource.Scroll ||
+          record.data.source === IncrementalSource.MediaInteraction ||
+          record.data.source === IncrementalSource.ViewportResize)))
   )
+}
+
+function reportWebGLReplayFailure(phase, error) {
+  addTelemetryDebug(phase, { error: String(error) })
 }
 
 export function record(options) {
@@ -119,6 +139,7 @@ export function record(options) {
   if (!rawEmit) {
     throw new Error('emit function is required')
   }
+  var configuration = options.configuration
   var initializationCleanupTasks = []
   var recordStopping = false
   var recordStopped = false
@@ -169,8 +190,8 @@ export function record(options) {
   var stopSerializedCanvasTracking
   try {
     stopSerializedCanvasTracking =
-      shouldUseCommandCapture(options.configuration) ||
-      shouldUseContinuousCanvasSnapshot(options.configuration)
+      shouldUseCommandCapture(configuration) ||
+      shouldUseContinuousCanvasSnapshot(configuration)
         ? startSerializedCanvasTracking()
         : function () {}
   } catch (error) {
@@ -183,16 +204,259 @@ export function record(options) {
   var suppressRecordsUntilFullSnapshot = false
   var deferredRecords = []
   var deferredRecordsApproxBytes = 0
+  var previousReplayTreeRecords = []
+  var previousReplayTreeRecordsApproxBytes = 0
+  var previousReplayTreeLastRecordTimestamp
+  var previousReplayTreeAdmissionActive = false
+  var captureRecordsAgainstPreviousReplayTree = false
   var deferredRecordAdmissionTimeout
+  var mutationAdmissionEmitInProgress = false
+  var mutationPublicationBarrier
   var lastEmitWasLocallyBackpressured = false
+
+  function deferNonDomRecord(
+    record,
+    mutationAdmissionBarrier,
+    insertBeforeLaterBarrier
+  ) {
+    var recordApproxBytes = estimateJsonValueBytes(
+      record,
+      MAX_DEFERRED_RECORD_APPROX_BYTES
+    )
+    if (recordApproxBytes > MAX_DEFERRED_RECORD_APPROX_BYTES) {
+      handleDeferredRecordLoss(record)
+      return false
+    }
+    var evictedStatefulRecord
+    while (
+      deferredRecords.length &&
+      (deferredRecords.length >= MAX_DEFERRED_RECORDS ||
+        deferredRecordsApproxBytes + recordApproxBytes >
+          MAX_DEFERRED_RECORD_APPROX_BYTES)
+    ) {
+      var removedEntry = deferredRecords.shift()
+      deferredRecordsApproxBytes -= removedEntry.$rApproxBytes
+      if (
+        !evictedStatefulRecord &&
+        isStatefulDeferredRecord(removedEntry.$rRecord)
+      ) {
+        evictedStatefulRecord = removedEntry.$rRecord
+      }
+    }
+    if (evictedStatefulRecord) {
+      handleDeferredRecordLoss(evictedStatefulRecord)
+      return false
+    }
+    if (mutationAdmissionBarrier) {
+      // Once a non-DOM record observes this exact boundary, later pure adds
+      // must not be folded into it and move ahead of the observed state.
+      mutationAdmissionBarrier.$rReferencedByDeferredRecord = true
+    }
+    var deferredEntry = {
+      $rRecord: record,
+      $rApproxBytes: recordApproxBytes,
+      // Keep the exact structural boundary that was pending when this
+      // record was observed. The drain uses it to interleave input/CSSOM
+      // and other node-dependent state after its add, but before later DOM
+      // mutations.
+      $rMutationAdmissionBarrier: mutationAdmissionBarrier
+    }
+    if (insertBeforeLaterBarrier && mutationAdmissionBarrier) {
+      var insertionIndex = deferredRecords.length
+      for (
+        var deferredIndex = 0;
+        deferredIndex < deferredRecords.length;
+        deferredIndex += 1
+      ) {
+        var queuedBarrier =
+          deferredRecords[deferredIndex].$rMutationAdmissionBarrier
+        if (queuedBarrier && queuedBarrier !== mutationAdmissionBarrier) {
+          insertionIndex = deferredIndex
+          break
+        }
+      }
+      deferredRecords.splice(insertionIndex, 0, deferredEntry)
+    } else {
+      deferredRecords.push(deferredEntry)
+    }
+    deferredRecordsApproxBytes += recordApproxBytes
+    return true
+  }
+
+  function clearPreviousReplayTreeRecords() {
+    previousReplayTreeRecords = []
+    previousReplayTreeRecordsApproxBytes = 0
+  }
+
+  function resetPreviousReplayTreeRecords() {
+    clearPreviousReplayTreeRecords()
+    previousReplayTreeLastRecordTimestamp = undefined
+  }
+
+  function updatePendingFullSnapshotTimestampFromRecord(record) {
+    if (
+      !record ||
+      typeof record.timestamp !== 'number' ||
+      !isFinite(record.timestamp) ||
+      typeof pendingFullSnapshotTimestamp !== 'number' ||
+      record.timestamp <= pendingFullSnapshotTimestamp
+    ) {
+      return
+    }
+    pendingFullSnapshotTimestamp = record.timestamp
+    previousReplayTreeLastRecordTimestamp = Math.max(
+      typeof previousReplayTreeLastRecordTimestamp === 'number'
+        ? previousReplayTreeLastRecordTimestamp
+        : 0,
+      record.timestamp
+    )
+    if (
+      pendingFullSnapshotBaselineRecords &&
+      isStatefulDeferredRecord(record)
+    ) {
+      // The replacement baseline belongs after every event admitted against
+      // the previous replay tree. Stateful changes also invalidate the
+      // serialized DOM/CSSOM state; stateless events only need fresh immutable
+      // baseline record wrappers, rebuilt immediately before admission.
+      pendingFullSnapshotRestartRequested = true
+    }
+  }
+
+  function queuePreviousReplayTreeRecord(record) {
+    var recordApproxBytes = estimateJsonValueBytes(
+      record,
+      MAX_DEFERRED_RECORD_APPROX_BYTES
+    )
+    if (recordApproxBytes > MAX_DEFERRED_RECORD_APPROX_BYTES) {
+      if (isStatefulDeferredRecord(record)) {
+        pendingFullSnapshotCanBeDiscarded = false
+        pendingFullSnapshotRestartRequested = true
+        return true
+      }
+      return false
+    }
+    while (
+      previousReplayTreeRecords.length &&
+      (previousReplayTreeRecords.length >= MAX_DEFERRED_RECORDS ||
+        previousReplayTreeRecordsApproxBytes + recordApproxBytes >
+          MAX_DEFERRED_RECORD_APPROX_BYTES)
+    ) {
+      var removedEntry = previousReplayTreeRecords.shift()
+      previousReplayTreeRecordsApproxBytes -= removedEntry.$rApproxBytes
+      if (isStatefulDeferredRecord(removedEntry.$rRecord)) {
+        // A state gap makes restoring the old tail unsafe. The candidate
+        // baseline must complete and supersede it.
+        pendingFullSnapshotCanBeDiscarded = false
+        pendingFullSnapshotRestartRequested = true
+      }
+    }
+    previousReplayTreeRecords.push({
+      $rRecord: record,
+      $rApproxBytes: recordApproxBytes
+    })
+    previousReplayTreeRecordsApproxBytes += recordApproxBytes
+    updatePendingFullSnapshotTimestampFromRecord(record)
+    return true
+  }
+
+  function emitAgainstPreviousReplayTree(record) {
+    if (previousReplayTreeRecords.length) {
+      return queuePreviousReplayTreeRecord(record)
+    }
+    if (rawEmit(record) !== false) {
+      updatePendingFullSnapshotTimestampFromRecord(record)
+      return true
+    }
+    if (wasLastEmitBackpressured()) {
+      return queuePreviousReplayTreeRecord(record)
+    }
+    if (isStatefulDeferredRecord(record)) {
+      pendingFullSnapshotCanBeDiscarded = false
+      pendingFullSnapshotRestartRequested = true
+      return true
+    }
+    return false
+  }
+
+  function drainPreviousReplayTreeRecords() {
+    while (previousReplayTreeRecords.length) {
+      var entry = previousReplayTreeRecords[0]
+      if (rawEmit(entry.$rRecord) !== false) {
+        previousReplayTreeRecords.shift()
+        previousReplayTreeRecordsApproxBytes -= entry.$rApproxBytes
+        continue
+      }
+      if (wasLastEmitBackpressured()) {
+        return false
+      }
+      previousReplayTreeRecords.shift()
+      previousReplayTreeRecordsApproxBytes -= entry.$rApproxBytes
+      if (isStatefulDeferredRecord(entry.$rRecord)) {
+        pendingFullSnapshotCanBeDiscarded = false
+        pendingFullSnapshotRestartRequested = true
+      }
+    }
+    return true
+  }
+
+  function restorePreviousReplayTreeRecords() {
+    var records = previousReplayTreeRecords
+    clearPreviousReplayTreeRecords()
+    records.forEach(function (entry) {
+      deferNonDomRecord(entry.$rRecord)
+    })
+    flushDeferredRecords()
+  }
+
   var emit = function (record) {
     lastEmitWasLocallyBackpressured = false
     if (
-      !suppressRecordsUntilFullSnapshot &&
-      !deferredRecords.length &&
-      deferredRecordAdmissionTimeout === undefined
+      suppressRecordsUntilFullSnapshot &&
+      previousReplayTreeAdmissionActive &&
+      !isDomMutationRecord(record)
     ) {
-      return rawEmit(record) !== false
+      return emitAgainstPreviousReplayTree(record)
+    }
+    if (
+      suppressRecordsUntilFullSnapshot &&
+      isDomMutationRecord(record)
+    ) {
+      // The mutation activity callback already invalidated this mixed-time
+      // candidate. Retire the serialized payload locally and let the rebuilt
+      // FullSnapshot absorb it; reporting a rejection here would incorrectly
+      // classify an intentional suppression as an admission gap.
+      return true
+    }
+    if (
+      !suppressRecordsUntilFullSnapshot &&
+      !mutationPublicationBarrier &&
+      (!deferredRecords.length ||
+        (mutationAdmissionEmitInProgress &&
+          deferredRecords[0].$rMutationAdmissionBarrier &&
+          deferredRecords[0].$rMutationAdmissionBarrier
+            .$rPendingAdmission)) &&
+      deferredRecordAdmissionTimeout === undefined &&
+      (mutationAdmissionEmitInProgress ||
+        !pendingMutationAdmissionQueue.length)
+    ) {
+      if (rawEmit(record) !== false) {
+        return true
+      }
+      if (isDomMutationRecord(record)) {
+        return false
+      }
+      if (wasLastEmitBackpressured()) {
+        var wasDeferred = deferNonDomRecord(record)
+        if (wasDeferred) {
+          // A direct segment rejection has no DOM dependency to trigger its
+          // retry. Keep the exact record object (and any encoder-side cached
+          // serialization keyed by it) on the shared deferred drain.
+          scheduleDeferredRecordAdmissionRetry()
+        }
+        return wasDeferred
+      }
+      handleDeferredRecordLoss(record)
+      return false
     } else if (
       !suppressRecordsUntilFullSnapshot &&
       isDomMutationRecord(record)
@@ -203,40 +467,19 @@ export function record(options) {
       lastEmitWasLocallyBackpressured = true
       return false
     } else if (!isDomMutationRecord(record)) {
-      var recordApproxBytes = estimateJsonValueBytes(
+      var mutationAdmissionBarrier =
+        mutationPublicationBarrier ||
+        (!suppressRecordsUntilFullSnapshot &&
+        pendingMutationAdmissionQueue.length
+          ? pendingMutationAdmissionQueue[
+              pendingMutationAdmissionQueue.length - 1
+            ]
+          : undefined)
+      return deferNonDomRecord(
         record,
-        MAX_DEFERRED_RECORD_APPROX_BYTES
+        mutationAdmissionBarrier,
+        Boolean(mutationPublicationBarrier)
       )
-      if (recordApproxBytes > MAX_DEFERRED_RECORD_APPROX_BYTES) {
-        handleDeferredRecordLoss(record)
-        return false
-      }
-      var evictedStatefulRecord
-      while (
-        deferredRecords.length &&
-        (deferredRecords.length >= MAX_DEFERRED_RECORDS ||
-          deferredRecordsApproxBytes + recordApproxBytes >
-            MAX_DEFERRED_RECORD_APPROX_BYTES)
-      ) {
-        var removedEntry = deferredRecords.shift()
-        deferredRecordsApproxBytes -= removedEntry.$rApproxBytes
-        if (
-          !evictedStatefulRecord &&
-          isStatefulDeferredRecord(removedEntry.$rRecord)
-        ) {
-          evictedStatefulRecord = removedEntry.$rRecord
-        }
-      }
-      if (evictedStatefulRecord) {
-        handleDeferredRecordLoss(evictedStatefulRecord)
-        return false
-      }
-      deferredRecords.push({
-        $rRecord: record,
-        $rApproxBytes: recordApproxBytes
-      })
-      deferredRecordsApproxBytes += recordApproxBytes
-      return true
     }
     return false
   }
@@ -260,7 +503,10 @@ export function record(options) {
   var pendingFullSnapshotActiveDuration = 0
   var pendingFullSnapshotRestartCount = 0
   var pendingFullSnapshotRestartRequested = false
+  var pendingFullSnapshotSynchronousFallbackAttempted = false
   var pendingFullSnapshotIsInitial = false
+  var pendingFullSnapshotBaselineRecords
+  var pendingFullSnapshotBaselineMutationVersion
   var fullSnapshotWasPublished = false
   var domMutationVersion = 0
   var mutationActivityTargets = new Set()
@@ -456,6 +702,43 @@ export function record(options) {
     return Boolean(node)
   }
 
+  function isNodeInPreviousPublishedReplayTree(node) {
+    if (!node || !previousPublishedReplayTree) {
+      return false
+    }
+    var previousParents =
+      previousPublishedReplayTree.$rPublishedNodeParentByNode
+    var previousTokens =
+      previousPublishedReplayTree.$rPublicationTokenByNode
+    var current = node
+    var depth = 0
+    while (current) {
+      if (
+        depth >= MAX_SERIALIZED_NODE_ANCESTOR_DEPTH ||
+        !previousParents.has(current)
+      ) {
+        return false
+      }
+      var publicationToken = previousTokens.get(current)
+      if (!publicationToken || !publicationToken.$rPublished) {
+        return false
+      }
+      var publishedParent = previousParents.get(current)
+      var currentParent
+      try {
+        currentParent = getParentNode(current)
+      } catch (_) {
+        return false
+      }
+      if (currentParent !== publishedParent) {
+        return false
+      }
+      current = currentParent
+      depth += 1
+    }
+    return true
+  }
+
   function publishMutationMembership(mutationPayload) {
     var acceptedPublicationTokens = new Set()
     var publicationTokens = mutationPayload.adds.map(function (add) {
@@ -517,6 +800,27 @@ export function record(options) {
   }
 
   function trackDomMutationActivity(target) {
+    if (
+      suppressRecordsUntilFullSnapshot &&
+      previousReplayTreeAdmissionActive
+    ) {
+      pendingFullSnapshotTimestamp = Math.max(
+        typeof pendingFullSnapshotTimestamp === 'number'
+          ? pendingFullSnapshotTimestamp
+          : 0,
+        timeStampNow()
+      )
+    }
+    if (
+      suppressRecordsUntilFullSnapshot &&
+      pendingFullSnapshotCanBeDiscarded
+    ) {
+      // DOM mutation payloads are serialized against the pending tree and
+      // cannot also be replayed safely against the previous tree. Promote the
+      // optional transaction so it cannot abandon after retiring that change.
+      pendingFullSnapshotCanBeDiscarded = false
+      pendingFullSnapshotRestartRequested = true
+    }
     domMutationVersion += 1
     if (
       !target ||
@@ -604,7 +908,7 @@ export function record(options) {
 
     var hostPrivacyLevel = getNodePrivacyLevel(
       host,
-      options.configuration.defaultPrivacyLevel
+      configuration.defaultPrivacyLevel
     )
     if (
       hostPrivacyLevel === NodePrivacyLevel.HIDDEN ||
@@ -623,7 +927,7 @@ export function record(options) {
         publicationToken: publicationToken
       },
       parentNodePrivacyLevel: hostPrivacyLevel,
-      configuration: options.configuration,
+      configuration: configuration,
       onSerializedNode: function (node, parentNode) {
         stageMutationNodePublication(
           node,
@@ -645,7 +949,7 @@ export function record(options) {
       serializerTask.isMaxNodeComplexityReached
     ) {
       cancelMutationAddPublicationToken(publicationToken)
-      requestFullSnapshotAfterMutationDrop()
+      beginAdmissionGapRecovery('dynamic_shadow_root_serialization')
       return
     }
 
@@ -668,13 +972,21 @@ export function record(options) {
     flushPendingMutations()
   }
 
-  var updateReplayPerformanceStats = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
-    ? function (delta) {
-        accumulateReplayPerformanceStats(replayPerformanceStats, delta)
-      }
-    : undefined
+  var mutationLocalDropTelemetryReported = false
+  var updateReplayPerformanceStats = function (delta) {
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      accumulateReplayPerformanceStats(replayPerformanceStats, delta)
+    } else if (!mutationLocalDropTelemetryReported) {
+      mutationLocalDropTelemetryReported = true
+      addTelemetryDebug('Session Replay record discarded.', {
+        reason: delta
+      })
+    }
+  }
 
   var mutationSourceFlushInProgress = false
+  var mutationFlushDocumentPending = false
+  var mutationSourceFlushContinuationTimeout
   var mutationCb = function (mutation) {
     var mutationMeasurements = measureMutationPayload(mutation)
     if (hasOversizedMutationEntry(mutationMeasurements)) {
@@ -690,7 +1002,7 @@ export function record(options) {
         discardPendingMutationPayload()
         discardPendingMutationAdmissions()
         discardMutationMembership(mutation)
-        requestFullSnapshotAfterMutationDrop(true)
+        beginAdmissionGapRecovery('oversized_structural_mutation')
         return
       }
       var mutationPartition = partitionMutationPayloadByEntrySize(
@@ -711,7 +1023,9 @@ export function record(options) {
         )
         flushPendingMutations()
       }
-      requestFullSnapshotAfterMutationDrop()
+      requestFullSnapshotAfterMutationDrop({
+        reason: 'oversized_non_structural_mutation'
+      })
       return
     }
     if (
@@ -741,6 +1055,10 @@ export function record(options) {
     }
     pendingMutationTimeout = setTimeout(function () {
       pendingMutationTimeout = undefined
+      if (mutationFlushDocumentPending) {
+        scheduleMutationSourceFlushContinuation()
+        return
+      }
       flushPendingMutations()
     }, MUTATION_EMIT_DELAY_MS)
   }
@@ -754,8 +1072,16 @@ export function record(options) {
   }
 
   function scheduleMutationAdmissionRetry() {
+    scheduleMutationAdmissionDrain(MUTATION_ADMISSION_RETRY_DELAY_MS)
+  }
+
+  function scheduleMutationAdmissionContinuation() {
+    scheduleMutationAdmissionDrain(0)
+  }
+
+  function scheduleMutationAdmissionDrain(delay) {
     if (
-      pendingMutationAdmissionTimeout ||
+      pendingMutationAdmissionTimeout !== undefined ||
       !pendingMutationAdmissionQueue.length ||
       recordStopping ||
       recordStopped
@@ -765,15 +1091,16 @@ export function record(options) {
     pendingMutationAdmissionTimeout = setTimeout(function () {
       pendingMutationAdmissionTimeout = undefined
       drainPendingMutationAdmissions()
-    }, MUTATION_ADMISSION_RETRY_DELAY_MS)
+    }, delay)
   }
 
   function discardPendingMutationAdmissions() {
-    if (pendingMutationAdmissionTimeout) {
+    if (pendingMutationAdmissionTimeout !== undefined) {
       clearTimeout(pendingMutationAdmissionTimeout)
       pendingMutationAdmissionTimeout = undefined
     }
     pendingMutationAdmissionQueue.forEach(function (entry) {
+      entry.$rPendingAdmission = false
       discardMutationMembership(entry[0])
     })
     pendingMutationAdmissionQueue = []
@@ -799,6 +1126,7 @@ export function record(options) {
     if (
       !previousEntry ||
       previousEntry[3] ||
+      previousEntry.$rReferencedByDeferredRecord ||
       !isPureAddMutationPayload(previousEntry[0]) ||
       !isPureAddMutationPayload(mutationPayload) ||
       previousEntry[1] + entry[1] > MAX_MUTATION_EMIT_APPROX_BYTES ||
@@ -851,39 +1179,38 @@ export function record(options) {
           discardMutationMembership(rejectedEntry[0])
         })
         discardPendingMutationAdmissions()
-        requestFullSnapshotAfterMutationDrop()
+        beginAdmissionGapRecovery('mutation_admission_queue_overflow')
         return
       }
       entry[2] = assembleIncrementalSnapshot(
         IncrementalSource.Mutation,
         entry[0]
       )
+      entry.$rPendingAdmission = true
       pendingMutationAdmissionQueue.push(entry)
       pendingMutationAdmissionApproxBytes += entry[1]
-      if (!pendingMutationAdmissionTimeout) {
-        var admissionResult = drainPendingMutationAdmissions()
-        if (
-          admissionResult === false ||
-          suppressRecordsUntilFullSnapshot ||
-          recordStopped
-        ) {
-          mutationEntries
-            .slice(entryIndex + 1)
-            .forEach(function (remainingEntry) {
-              discardMutationMembership(remainingEntry[0])
-            })
-          return
-        }
-      }
+    }
+    // Assemble the complete callback batch before attempting admission. A
+    // per-entry drain would reset the slice budget for every push and could
+    // synchronously consume the full pending-raw window.
+    if (pendingMutationAdmissionTimeout === undefined) {
+      drainPendingMutationAdmissions()
     }
   }
 
   function drainPendingMutationAdmissions() {
-    if (pendingMutationAdmissionTimeout) {
+    if (pendingMutationAdmissionTimeout !== undefined) {
       clearTimeout(pendingMutationAdmissionTimeout)
       pendingMutationAdmissionTimeout = undefined
     }
     if (suppressRecordsUntilFullSnapshot) {
+      if (pendingFullSnapshotBaselineRecords) {
+        // Serialization is complete and the exact baseline transaction is
+        // only waiting for encoder capacity. Keep later DOM records ordered
+        // behind it; once the same baseline objects are admitted they can
+        // drain normally instead of forcing a re-serialization loop.
+        return false
+      }
       // The replacement baseline supersedes every queued mutation. Retrying a
       // formerly backpressured record through emit() while suppression is
       // active would look like a permanent rejection and recursively start a
@@ -897,6 +1224,8 @@ export function record(options) {
     ) {
       return false
     }
+    var drainStartedAt = getPerformanceTime()
+    var drainedApproxBytes = 0
     while (pendingMutationAdmissionQueue.length) {
       var entry = pendingMutationAdmissionQueue[0]
       var mutationPayload = entry[0]
@@ -911,12 +1240,55 @@ export function record(options) {
         )
       }
       entry[3] = true
-      if (
-        emit(entry[2])
-      ) {
+      var wasAdmitted
+      mutationAdmissionEmitInProgress = true
+      try {
+        wasAdmitted = emit(entry[2])
+      } finally {
+        mutationAdmissionEmitInProgress = false
+      }
+      if (wasAdmitted) {
         pendingMutationAdmissionQueue.shift()
+        entry.$rPendingAdmission = false
         pendingMutationAdmissionApproxBytes -= entry[1]
-        publishMutationMembership(mutationPayload)
+        var previousMutationPublicationBarrier =
+          mutationPublicationBarrier
+        mutationPublicationBarrier = entry
+        try {
+          publishMutationMembership(mutationPayload)
+        } finally {
+          mutationPublicationBarrier =
+            previousMutationPublicationBarrier
+        }
+        drainedApproxBytes += entry[1]
+        var mutationDrainState = {
+          $rStartedAt: drainStartedAt,
+          $rApproxBytes: drainedApproxBytes
+        }
+        var deferredBarrierWasDrained = flushDeferredRecords(
+          entry,
+          mutationDrainState
+        )
+        drainedApproxBytes = mutationDrainState.$rApproxBytes
+        if (suppressRecordsUntilFullSnapshot || recordStopped) {
+          return false
+        }
+        if (!deferredBarrierWasDrained) {
+          // The dependent records use the same time/byte slice and retry
+          // scheduler. Mutation admission resumes only after this exact
+          // structural barrier has drained.
+          return true
+        }
+        if (
+          pendingMutationAdmissionQueue.length &&
+          (drainedApproxBytes >=
+            MUTATION_ADMISSION_DRAIN_SLICE_APPROX_BYTES ||
+            getPerformanceTime() - drainStartedAt >=
+              MUTATION_ADMISSION_DRAIN_SLICE_MS)
+        ) {
+          scheduleMutationAdmissionContinuation()
+          return true
+        }
         continue
       }
       if (wasLastEmitBackpressured()) {
@@ -928,7 +1300,7 @@ export function record(options) {
       // structural rejection keeps the conservative baseline recovery; only
       // transient encoder backpressure is retried in place.
       discardPendingMutationAdmissions()
-      requestFullSnapshotAfterMutationDrop()
+      beginAdmissionGapRecovery('mutation_admission_rejected')
       return false
     }
     return true
@@ -984,23 +1356,29 @@ export function record(options) {
     }
     enqueueMutationEntriesForAdmission(mutationEntries)
     if (splitResult.hasOversizedEntry) {
-      requestFullSnapshotAfterMutationDrop()
+      requestFullSnapshotAfterMutationDrop({
+        reason: 'split_oversized_mutation_entry'
+      })
     }
   }
   var inputCb = function (s) {
     emit(assembleIncrementalSnapshot(IncrementalSource.Input, s))
   }
 
+  var mutationResourceBudget = createMutationResourceBudget()
   var shadowRootsController
   try {
-    shadowRootsController = initShadowRootsController(options.configuration, {
+    shadowRootsController = initShadowRootsController(configuration, {
       mutationCb,
+      mutationPerfCb: updateReplayPerformanceStats,
       mutationOverflowCb: requestFullSnapshotAfterMutationDrop,
       mutationActivityCb: trackDomMutationActivity,
       inputCb,
       isNodeIgnored: isObservedNodeIgnored,
+      isInputNodeIgnored: isNodeIgnoredForObserver,
       isNodePublished: isNodeQueuedOrPublished,
       mutationNodeSerializationCb: stageMutationNodePublication,
+      mutationResourceBudget: mutationResourceBudget,
       shadowRootCreatedCb: captureDynamicShadowRoot
     })
   } catch (error) {
@@ -1025,13 +1403,83 @@ export function record(options) {
     var ignored = isNodeIgnored(node, includeQueued)
     if (
       ignored &&
-      pendingFullSnapshotTask &&
+      (pendingFullSnapshotTask || pendingFullSnapshotBaselineRecords) &&
       publishedNodeParentByNode.has(node)
     ) {
-      // Input, media and scroll state are not DOM mutations. If an observer
-      // ignores one after the node was serialized, rebuild the mixed-time
-      // baseline so the state change is represented by the next attempt.
+      // Input, media, scroll and CSSOM state are not DOM mutations. If an
+      // observer ignores one after the node was serialized, rebuild the
+      // mixed-time baseline so the state change is represented by the next
+      // attempt. This
+      // also covers an exact baseline waiting for encoder capacity: the
+      // unpublished tree cannot accept an incremental state record there.
       pendingFullSnapshotRestartRequested = true
+    }
+    return ignored
+  }
+
+  function isNodeIgnoredForObserver(node, mutationAssembly) {
+    if (mutationAssembly) {
+      return isObservedNodeIgnored(node, true)
+    }
+
+    if (
+      captureRecordsAgainstPreviousReplayTree &&
+      !mutationSourceFlushInProgress
+    ) {
+      // Native DOM records queued earlier in the same task must be observed
+      // before admitting this state record against the previous replay tail.
+      // The activity callback promotes an optional baseline when necessary.
+      capturePendingMutationActivityForPreviousReplayTree(false)
+    }
+
+    var ignored = isObservedNodeIgnored(node, true)
+    var pendingPublicationToken =
+      pendingPublicationTokenByNode.get(node)
+    if (
+      pendingPublicationToken &&
+      !pendingPublicationToken.$rPublished &&
+      !pendingPublicationToken.$rCanceled
+    ) {
+      if (!pendingPublicationToken.$rQueued) {
+        // A time-sliced add serializer may already have walked this node while
+        // its root is not publishable yet. Rebuild that root from current DOM
+        // state so input/CSSOM changes between slices are not omitted.
+        flushMutationRootForNode(node)
+      } else if (pendingMutationPayload) {
+        // The add is complete but still waiting in the 16 ms mutation emit
+        // buffer. Move it into admission before the dependent state callback;
+        // the state will then emit after a successful add or bind its barrier.
+        flushPendingMutations()
+      }
+      ignored = isObservedNodeIgnored(node, true)
+    }
+    if (
+      ignored &&
+      captureRecordsAgainstPreviousReplayTree &&
+      isNodeInPreviousPublishedReplayTree(node)
+    ) {
+      // The candidate tree is unpublished, but this node still belongs to the
+      // previous replay tail. Let the shared admission path publish its state
+      // before the replacement baseline (or queue it on encoder backpressure).
+      return false
+    }
+    return ignored
+  }
+
+  function isNodeIgnoredForStatelessObserver(node) {
+    if (
+      captureRecordsAgainstPreviousReplayTree &&
+      !mutationSourceFlushInProgress
+    ) {
+      capturePendingMutationActivityForPreviousReplayTree(false)
+    }
+    var ignored = isNodeIgnored(node)
+    if (
+      ignored &&
+      captureRecordsAgainstPreviousReplayTree &&
+      isNodeInPreviousPublishedReplayTree(node)
+    ) {
+      return false
     }
     return ignored
   }
@@ -1093,15 +1541,50 @@ export function record(options) {
     )
   }
   var shouldUseCanvasCommandCapture = shouldUseCommandCapture(
-    options.configuration
+    configuration
   )
+  var baseCanvasEncodeBridge
+  var webGLReplayRuntime
+  var canvasEncodeBridge
+  try {
+    var createCanvasEncodeBridgeImpl =
+      __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+        ? options.createCanvasEncodeBridge || createCanvasEncodeBridge
+        : createCanvasEncodeBridge
+    var createSessionReplayWebGLRuntimeImpl =
+      __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+        ? options.createSessionReplayWebGLRuntime ||
+          createSessionReplayWebGLRuntime
+        : createSessionReplayWebGLRuntime
+    baseCanvasEncodeBridge = createCanvasEncodeBridgeImpl(
+      configuration
+    )
+    webGLReplayRuntime = createSessionReplayWebGLRuntimeImpl(
+      configuration,
+      baseCanvasEncodeBridge,
+      reportWebGLReplayFailure
+    )
+    canvasEncodeBridge = webGLReplayRuntime[0] || baseCanvasEncodeBridge
+  } catch (error) {
+    if (baseCanvasEncodeBridge && baseCanvasEncodeBridge.stop) {
+      baseCanvasEncodeBridge.stop()
+    }
+    return abortRecorderInitialization(
+      'recorder_initialization_error',
+      error
+    )
+  }
+  registerInitializationCleanup(canvasEncodeBridge.stop)
+
   var canvasObserver
   try {
-    canvasObserver = (
-      options.createCanvasObserver || createCanvasObserver
-    )({
-      configuration: options.configuration,
+    var createCanvasObserverImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? options.createCanvasObserver || createCanvasObserver
+      : createCanvasObserver
+    canvasObserver = createCanvasObserverImpl({
+      configuration: configuration,
       emit: emit,
+      encodeBridge: canvasEncodeBridge,
       isNodeActive: function (node) {
         return !isNodeIgnored(node)
       },
@@ -1119,9 +1602,10 @@ export function record(options) {
     )
   }
   registerInitializationCleanup(canvasObserver.stop)
-  var startCanvasSnapshotLoop =
-    options.startContinuousCanvasSnapshotLoop ||
-    startContinuousCanvasSnapshotLoop
+  var startCanvasSnapshotLoop = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.startContinuousCanvasSnapshotLoop ||
+      startContinuousCanvasSnapshotLoop
+    : startContinuousCanvasSnapshotLoop
   var canvasSnapshotLoop
   try {
     canvasSnapshotLoop = shouldUseCanvasCommandCapture
@@ -1130,9 +1614,13 @@ export function record(options) {
           reset: function () {}
         }
       : startCanvasSnapshotLoop({
-          configuration: options.configuration,
+          configuration: configuration,
           getCanvases: function (maxScanCount) {
-            return getActiveSerializedCanvases(maxScanCount)
+            return getActiveSerializedCanvases(maxScanCount).filter(
+              function (canvas) {
+                return !isDrawDrivenWebGLCanvas(canvas)
+              }
+            )
           },
           getSerializedNodeId: function (canvas) {
             return getActiveSerializedNodeId(canvas)
@@ -1157,10 +1645,12 @@ export function record(options) {
 
   var canvasCommandCapture
   try {
-    canvasCommandCapture = (
-      options.startCanvasCommandCapture || startCanvasCommandCapture
-    )({
-      configuration: options.configuration,
+    var startCanvasCommandCaptureImpl =
+      __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+        ? options.startCanvasCommandCapture || startCanvasCommandCapture
+        : startCanvasCommandCapture
+    canvasCommandCapture = startCanvasCommandCaptureImpl({
+      configuration: configuration,
       emit: emit,
       snapshotCanvas: function (canvas, snapshotOptions) {
         return snapshotCanvasIfActive(canvas, snapshotOptions)
@@ -1186,30 +1676,49 @@ export function record(options) {
       error
     )
   }
-  registerInitializationCleanup(canvasCommandCapture.stop)
-
-  var canvasWebGLSnapshotObserver
+  var canvasWebGLSnapshotObserver = createNoopObserver()
   try {
-    canvasWebGLSnapshotObserver = (
-      options.startCanvasWebGLSnapshotObserver ||
-      startCanvasWebGLSnapshotObserver
-    )({
-      configuration: options.configuration,
-      snapshotCanvas: function (canvas, snapshotOptions) {
-        return snapshotCanvasIfActive(canvas, snapshotOptions)
-      },
-      getSerializedNodeId: function (canvas) {
-        return getActiveSerializedNodeId(canvas)
-      },
-      onDebug: handleAutoCanvasSnapshotDebug
-    })
+    var startCanvasWebGLSnapshotObserver =
+      (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+        options.startCanvasWebGLSnapshotObserver) ||
+      webGLReplayRuntime[1]
+    if (startCanvasWebGLSnapshotObserver) {
+      canvasWebGLSnapshotObserver =
+        startCanvasWebGLSnapshotObserver(
+          function (canvas, snapshotOptions) {
+            return snapshotCanvasIfActive(canvas, snapshotOptions)
+          },
+          function (canvas) {
+            return getActiveSerializedNodeId(canvas)
+          },
+          handleAutoCanvasSnapshotDebug
+        ) || createNoopObserver()
+    }
   } catch (error) {
-    return abortRecorderInitialization(
-      'recorder_initialization_error',
-      error
-    )
+    addTelemetryDebug('Session Replay WebGL observer failed.', {
+      error: String(error)
+    })
+    canvasWebGLSnapshotObserver = createNoopObserver()
   }
   registerInitializationCleanup(canvasWebGLSnapshotObserver.stop)
+  // The optional WebGL plugin installs its bootstrap getContext wrapper from
+  // plugin.onInit(), before command capture wraps the same prototype.  Always
+  // unwind command capture first so the WebGL observer can still recognize
+  // and restore its own wrapper.  Keep initialization rollback in the same
+  // order (cleanup tasks run in reverse registration order).
+  registerInitializationCleanup(canvasCommandCapture.stop)
+
+  function isDrawDrivenWebGLCanvas(canvas) {
+    if (isWebGLReplayCanvas(canvas)) {
+      return true
+    }
+    try {
+      return !!canvasWebGLSnapshotObserver.isWebGLCanvas(canvas)
+    } catch (_) {
+      // A failing optional plugin must not block the ordinary 2D baseline.
+      return false
+    }
+  }
 
   function snapshotCanvasIfActive(canvas, snapshotOptions) {
     if (isNodeIgnored(canvas)) {
@@ -1218,22 +1727,23 @@ export function record(options) {
         reason: 'not_serialized'
       })
     }
-    var baselineToken =
+    var isCommandBaselineSnapshot =
+      snapshotOptions &&
+      (snapshotOptions.scheduler === 'full_snapshot_baseline' ||
+        (snapshotOptions.scheduler === 'command_capture' &&
+          snapshotOptions.force === true))
+    var snapshotConsistencyToken =
+      shouldUseCanvasCommandCapture &&
       canvasCommandCapture &&
       canvasCommandCapture.createCanvasSnapshotBaselineToken
         ? canvasCommandCapture.createCanvasSnapshotBaselineToken(canvas)
         : undefined
-    var effectiveSnapshotOptions =
-      shouldUseCanvasCommandCapture &&
-      snapshotOptions &&
-      snapshotOptions.trigger === 'manual' &&
-      !snapshotOptions.scheduler
-        ? assign({}, snapshotOptions, {
-            scheduler: 'command_capture'
-          })
-        : snapshotOptions
+    var baselineToken = isCommandBaselineSnapshot
+      ? snapshotConsistencyToken
+      : undefined
+    var effectiveSnapshotOptions = snapshotOptions
     if (
-      baselineToken &&
+      snapshotConsistencyToken &&
       canvasCommandCapture &&
       canvasCommandCapture.$rIsSnapshotBaselineCurrent
     ) {
@@ -1254,7 +1764,7 @@ export function record(options) {
           try {
             return !canvasCommandCapture.$rIsSnapshotBaselineCurrent(
               canvas,
-              baselineToken
+              snapshotConsistencyToken
             )
           } catch (_) {
             return true
@@ -1268,13 +1778,14 @@ export function record(options) {
       if (
         result &&
         result.ok === true &&
+        baselineToken &&
         canvasCommandCapture &&
         canvasCommandCapture.markCanvasSnapshotBaseline
       ) {
         canvasCommandCapture.markCanvasSnapshotBaseline(
           canvas,
           baselineToken,
-          effectiveSnapshotOptions &&
+          effectiveSnapshotOptions.reason ||
             effectiveSnapshotOptions.scheduler
         )
       }
@@ -1290,8 +1801,8 @@ export function record(options) {
       createMutationSerializerTask
     return createSerializerTask(document, {
       serializationContext: serializationContext,
-      parentNodePrivacyLevel: options.configuration.defaultPrivacyLevel,
-      configuration: options.configuration,
+      parentNodePrivacyLevel: configuration.defaultPrivacyLevel,
+      configuration: configuration,
       onSerializedNode: function (node, parentNode) {
         stageFullSnapshotNodePublication(
           node,
@@ -1333,11 +1844,11 @@ export function record(options) {
     }
   }
 
-  function emitFullSnapshot(timestamp, serializedDocument, startedAt) {
+  function createFullSnapshotBaselineRecords(timestamp, serializedDocument) {
     var _viewportDimension = getViewportDimension()
     var width = _viewportDimension.width
     var height = _viewportDimension.height
-    var baselineRecords = [
+    return [
       {
         data: {
           height: height,
@@ -1366,6 +1877,14 @@ export function record(options) {
         timestamp: timestamp
       }
     ]
+  }
+
+  function emitFullSnapshot(baselineRecords, startedAt) {
+    // Baseline admission bypasses emit(). Do not inherit a local DOM-barrier
+    // result from an earlier record: only the segment/encoder result for this
+    // exact baseline may classify its rejection as transient backpressure.
+    lastEmitWasLocallyBackpressured = false
+    var timestamp = baselineRecords[0].timestamp
     var fullSnapshotAccepted
     if (rawEmitBaseline) {
       fullSnapshotAccepted = rawEmitBaseline(baselineRecords) !== false
@@ -1417,8 +1936,8 @@ export function record(options) {
 
   function takeFullSnapshotCanvasBaseline() {
     if (
-      !options.configuration.replayCanvasEnabled ||
-      options.configuration.replayCanvasMode !== 'auto'
+      !configuration.replayCanvasEnabled ||
+      configuration.replayCanvasMode !== 'auto'
     ) {
       scanExistingCommandCaptureCanvases()
       return
@@ -1428,16 +1947,19 @@ export function record(options) {
     fullSnapshotCanvasBaselineGeneration = baselineGeneration
     var baselineStartedAt = getPerformanceTime()
     // The registry is already bounded and contains only canvases assigned an id
-    // by the successful full snapshot.  Do not inspect or create a target
-    // context here: a bitmap snapshot also covers contexts created before
-    // replay started, including otherwise unknown WebGL canvases.
+    // by the successful full snapshot. Do not inspect or create a target
+    // context here. Static 2D/unknown canvases get a bitmap baseline, while a
+    // known WebGL canvas must wait for its next real draw: staging it from this
+    // asynchronous baseline task is unsafe with preserveDrawingBuffer=false.
     var canvases
     try {
       canvases = filterActiveSerializedCanvases(
         getSerializedCanvasNodesSnapshot(
           MAX_FULL_SNAPSHOT_CANVAS_BASELINE_COUNT
         )
-      )
+      ).filter(function (canvas) {
+        return !isDrawDrivenWebGLCanvas(canvas)
+      })
     } catch (error) {
       if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
         addTelemetryDebug('Session Replay canvas baseline lookup failed.', {
@@ -1566,14 +2088,24 @@ export function record(options) {
         timestamp: timestamp
       }
     }
+    var baselineRecords = createFullSnapshotBaselineRecords(
+      timestamp,
+      serializerTask.serializedNode
+    )
+    if (emitFullSnapshot(baselineRecords, fullSnapshotStartedAt)) {
+      return { status: 'completed' }
+    }
+    if (wasLastEmitBackpressured()) {
+      pendingFullSnapshotTimestamp = timestamp
+      pendingFullSnapshotStartedAt = fullSnapshotStartedAt
+      pendingFullSnapshotIsInitial = true
+      pendingFullSnapshotBaselineRecords = baselineRecords
+      pendingFullSnapshotBaselineMutationVersion = domMutationVersion
+      suppressRecordsUntilFullSnapshot = true
+      return { status: 'admission_pending', timestamp: timestamp }
+    }
     return {
-      status: emitFullSnapshot(
-        timestamp,
-        serializerTask.serializedNode,
-        fullSnapshotStartedAt
-      )
-        ? 'completed'
-        : 'failed',
+      status: 'failed',
       reason: 'initial_full_snapshot_admission_rejected'
     }
   }
@@ -1593,7 +2125,7 @@ export function record(options) {
     return abortRecorderInitialization(
       initialFullSnapshotResult.reason
     )
-  } else {
+  } else if (initialFullSnapshotResult.status === 'pending') {
     // The first short attempt ran before MutationObservers existed. Restart
     // from a clean tree after observers are attached, so changes made between
     // slices cannot produce a mixed-time initial baseline.
@@ -1601,9 +2133,12 @@ export function record(options) {
   }
   var _initObservers
   try {
-    _initObservers = (options.initObservers || initObservers)({
+    var initObserversImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? options.initObservers || initObservers
+      : initObservers
+    _initObservers = initObserversImpl({
       lifeCycle: options.lifeCycle,
-      configuration: options.configuration,
+      configuration: configuration,
       elementsScrollPositions: elementsScrollPositions,
       inputCb: inputCb,
       mediaInteractionCb: function (p) {
@@ -1618,31 +2153,28 @@ export function record(options) {
         emit(assembleIncrementalSnapshot(source, { positions: positions }))
       },
       mutationCb: mutationCb,
-      mutationPerfCb: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
-        ? updateReplayPerformanceStats
-        : undefined,
+      mutationPerfCb: updateReplayPerformanceStats,
       mutationOverflowCb: requestFullSnapshotAfterMutationDrop,
       mutationActivityCb: trackDomMutationActivity,
       mutationNodeSerializationCb: stageMutationNodePublication,
-      isNodeIgnored: isObservedNodeIgnored,
+      mutationResourceBudget: mutationResourceBudget,
+      isNodeIgnored: isNodeIgnoredForObserver,
+      isNodeIgnoredForStatelessObserver:
+        isNodeIgnoredForStatelessObserver,
       isNodePublished: isNodeQueuedOrPublished,
       scrollCb: function (p) {
         emit(assembleIncrementalSnapshot(IncrementalSource.Scroll, p))
       },
       styleSheetCb: function (r) {
-        if (
-          !emit(
-            assembleIncrementalSnapshot(
-              IncrementalSource.StyleSheetRule,
-              r
-            )
+        // The shared state-record admission path distinguishes transient
+        // backpressure from a permanent CSSOM gap and starts exactly one
+        // replacement baseline for the latter.
+        emit(
+          assembleIncrementalSnapshot(
+            IncrementalSource.StyleSheetRule,
+            r
           )
-        ) {
-          // CSSOM rules are index-addressed. Dropping one insert/delete makes
-          // every later rule operation ambiguous, so replace the DOM/CSS
-          // baseline instead of continuing a permanently divergent chain.
-          requestFullSnapshotAfterMutationDrop()
-        }
+        )
       },
       viewportResizeCb: function (d) {
         emit(
@@ -1688,10 +2220,20 @@ export function record(options) {
   ) {
     return createInactiveRecorder()
   }
+  if (initialFullSnapshotResult.status === 'admission_pending') {
+    schedulePendingFullSnapshotSlice(MUTATION_ADMISSION_RETRY_DELAY_MS)
+  }
 
-  function requestFullSnapshotAfterMutationDrop() {
+  function requestFullSnapshotAfterMutationDrop(overflow) {
     if (recordStopping || recordStopped) {
       return
+    }
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      replayPerformanceStats.mutationDropRecoveryCount += 1
+      replayPerformanceStats.mutationDropRecoveryLastReason =
+        overflow && overflow.reason
+          ? overflow.reason
+          : 'unknown'
     }
     // Any dropped mutation makes the live DOM diverge from the last uploaded
     // baseline, even when the missing record only contains text or attributes.
@@ -1699,28 +2241,82 @@ export function record(options) {
     // bounded serializer/segment budgets, stop and discard the held tail
     // instead of restoring a tree that is known to be stale.
     flushPendingMutations()
+    // Keep a safely admitted prefix, but retire the complete pre-transaction
+    // deferred tail. Even an unbound Scroll/Canvas record can roll state back
+    // if it is replayed after the replacement baseline. Only records produced
+    // after the mandatory transaction starts may follow that baseline.
+    discardPendingMutationPayload()
+    discardPendingMutationAdmissions()
+    clearDeferredRecords()
+    scheduleMandatoryFullSnapshotAfterMutationDrop()
+  }
+
+  function beginAdmissionGapRecovery(reason) {
+    if (recordStopping || recordStopped) {
+      return
+    }
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      replayPerformanceStats.admissionGapRecoveryCount += 1
+      replayPerformanceStats.admissionGapRecoveryLastReason =
+        reason || 'unknown'
+    }
+    // A deferred CSSOM/Canvas state rejection can leave later DOM admissions
+    // queued. Never pre-flush after that gap: the replacement baseline must
+    // supersede the complete local admission window before any tail escapes.
+    discardPendingMutationPayload()
+    discardPendingMutationAdmissions()
+    clearDeferredRecords()
+    scheduleMandatoryFullSnapshotAfterMutationDrop()
+  }
+
+  function scheduleMandatoryFullSnapshotAfterMutationDrop() {
     scheduleSubsequentFullSnapshot(
       timeStampNow(),
       false,
       true
     )
   }
-  function flushMutations() {
+  function flushMutations(forceBoundaryDrain) {
+    var boundaryDeadline = forceBoundaryDrain
+      ? getPerformanceTime() +
+        MUTATION_SOURCE_BOUNDARY_FLUSH_BUDGET_MS
+      : undefined
     mutationSourceFlushInProgress = true
     try {
-      if (shadowRootsController.flush() === false) {
-        // A shadow mutation that cannot be ordered after its unpublished host
-        // invalidates the paired document add as well. This also applies to the
-        // final page-exit drain, where starting a recovery snapshot is disabled.
+      var shadowFlushResult = true
+      if (!mutationFlushDocumentPending) {
+        do {
+          shadowFlushResult = shadowRootsController.flush()
+        } while (
+          shadowFlushResult === 'pending' &&
+          forceBoundaryDrain &&
+          getPerformanceTime() < boundaryDeadline
+        )
+      }
+      if (shadowFlushResult === 'pending') {
+        scheduleMutationSourceFlushContinuation()
+        return 'pending'
+      }
+      if (shadowFlushResult === false) {
         resetMutationsFromObservers()
         discardPendingMutationPayload()
         return false
       }
-      // Drain the document observer in the same commit window as every
-      // ShadowRoot observer. A move across those roots is reported as an add
-      // by one observer and a remove by another, and neither half may become
-      // visible to replay on its own.
-      if (flushMutationsFromObservers() === false) {
+      mutationFlushDocumentPending = true
+      var documentFlushResult
+      do {
+        documentFlushResult = flushMutationsFromObservers()
+      } while (
+        documentFlushResult === 'pending' &&
+        forceBoundaryDrain &&
+        getPerformanceTime() < boundaryDeadline
+      )
+      if (documentFlushResult === 'pending') {
+        scheduleMutationSourceFlushContinuation()
+        return 'pending'
+      }
+      if (documentFlushResult === false) {
+        mutationFlushDocumentPending = false
         resetMutationsFromObservers()
         if (shadowRootsController.reset) {
           shadowRootsController.reset()
@@ -1731,8 +2327,64 @@ export function record(options) {
     } finally {
       mutationSourceFlushInProgress = false
     }
+    mutationFlushDocumentPending = false
     flushPendingMutations()
     return true
+  }
+
+  function capturePendingMutationActivityForPreviousReplayTree(
+    includeShadowRoots
+  ) {
+    if (
+      !captureRecordsAgainstPreviousReplayTree ||
+      mutationSourceFlushInProgress
+    ) {
+      return
+    }
+    var resetShadowMutationsForBaseline = includeShadowRoots
+      ? shadowRootsController.$rResetPendingMutationsForBaseline
+      : undefined
+    if (resetShadowMutationsForBaseline) {
+      var shadowResetResult = resetShadowMutationsForBaseline()
+      if (shadowResetResult !== true) {
+        // Do not synchronously walk an arbitrary number of roots from an input
+        // handler. An incomplete reset means the optional candidate is no
+        // longer safe to abandon; the rebuilt baseline will absorb the live
+        // DOM.
+        pendingFullSnapshotCanBeDiscarded = false
+        pendingFullSnapshotRestartRequested = true
+        pendingFullSnapshotTimestamp = Math.max(
+          typeof pendingFullSnapshotTimestamp === 'number'
+            ? pendingFullSnapshotTimestamp
+            : 0,
+          timeStampNow()
+        )
+      }
+    }
+    resetMutationsFromObservers()
+    discardPendingMutationPayload()
+  }
+
+  function scheduleMutationSourceFlushContinuation() {
+    if (
+      mutationSourceFlushContinuationTimeout !== undefined ||
+      recordStopping ||
+      recordStopped
+    ) {
+      return
+    }
+    mutationSourceFlushContinuationTimeout = setTimeout(function () {
+      mutationSourceFlushContinuationTimeout = undefined
+      flushMutations()
+    }, 0)
+  }
+
+  function cancelMutationSourceFlushContinuation() {
+    if (mutationSourceFlushContinuationTimeout !== undefined) {
+      clearTimeout(mutationSourceFlushContinuationTimeout)
+      mutationSourceFlushContinuationTimeout = undefined
+    }
+    mutationFlushDocumentPending = false
   }
 
   function flushMutationRootForNode(node) {
@@ -1777,18 +2429,43 @@ export function record(options) {
     pendingMutationPayload = undefined
   }
 
-  function prepareForViewChange() {
+  function prepareMutationBaseline(preserveShadowRootObservers) {
     // A full snapshot supersedes mutation work that has not been emitted yet.
     // Do not force-drain time-sliced serializers immediately before traversing
     // the complete document.
+    cancelMutationSourceFlushContinuation()
     flushPendingMutations()
     discardPendingMutationAdmissions()
     resetMutationsFromObservers()
-    if (shadowRootsController.reset) {
+    if (
+      !preserveShadowRootObservers &&
+      shadowRootsController.reset
+    ) {
       shadowRootsController.reset()
     }
+    mutationResourceBudget.reset()
     discardPendingMutationPayload()
     resetPublishedReplayTree()
+  }
+
+  function prepareForViewChange() {
+    // View boundaries retire every event ordered against the old replay tree.
+    // Internal baseline retries preserve records captured during serialization,
+    // so keep this clearing behavior on the public view transition only.
+    // Give a paged raw/shadow transaction one final bounded drain before the
+    // old tree is retired. If it is still pending, prepareMutationBaseline()
+    // drops the complete uncommitted transaction; VIEW_CREATED then publishes
+    // the replacement baseline instead of exposing a half-applied move.
+    var flushResult = flushMutations(true)
+    if (flushResult === 'pending') {
+      addTelemetryDebug(
+        'Session Replay dropped a pending mutation transaction at a view boundary.',
+        { reason: 'view_boundary_mutation_tail_pending' }
+      )
+    }
+    clearDeferredRecords()
+    prepareMutationBaseline()
+    return flushResult
   }
 
   function resetCanvasRecordingBaseline() {
@@ -1806,15 +2483,26 @@ export function record(options) {
   }
 
   function prepareForFullSnapshot() {
-    prepareForViewChange()
+    // While the previous replay tail remains valid, keep its ShadowRoot
+    // observers alive until the candidate baseline commits or abandons. This
+    // closes the same-task window where a shadow mutation could otherwise
+    // happen after begin() but before the serializer re-registers the root.
+    prepareMutationBaseline(
+      captureRecordsAgainstPreviousReplayTree &&
+        pendingFullSnapshotCanBeDiscarded
+    )
     resetCanvasRecordingBaseline()
   }
 
-  function cancelScheduledFullSnapshot() {
+  function clearPendingFullSnapshotTimeout() {
     if (pendingFullSnapshotTimeout !== undefined) {
       clearTimeout(pendingFullSnapshotTimeout)
       pendingFullSnapshotTimeout = undefined
     }
+  }
+
+  function cancelScheduledFullSnapshot() {
+    clearPendingFullSnapshotTimeout()
     pendingFullSnapshotTimestamp = undefined
     pendingFullSnapshotCanBeDiscarded = false
     pendingFullSnapshotRequiresTailDiscard = false
@@ -1824,7 +2512,10 @@ export function record(options) {
     pendingFullSnapshotActiveDuration = 0
     pendingFullSnapshotRestartCount = 0
     pendingFullSnapshotRestartRequested = false
+    pendingFullSnapshotSynchronousFallbackAttempted = false
     pendingFullSnapshotIsInitial = false
+    pendingFullSnapshotBaselineRecords = undefined
+    pendingFullSnapshotBaselineMutationVersion = undefined
   }
 
   function clearDeferredRecords() {
@@ -1836,19 +2527,93 @@ export function record(options) {
     deferredRecordsApproxBytes = 0
   }
 
+  function isDeferredRecordAfterFullSnapshot(entry, timestamp) {
+    return Boolean(
+      entry &&
+        entry.$rRecord &&
+        typeof entry.$rRecord.timestamp === 'number' &&
+        entry.$rRecord.timestamp > timestamp
+    )
+  }
+
+  function flushAndRetireDeferredRecordsBeforeFullSnapshot(timestamp) {
+    if (deferredRecordAdmissionTimeout !== undefined) {
+      clearTimeout(deferredRecordAdmissionTimeout)
+      deferredRecordAdmissionTimeout = undefined
+    }
+    if (!deferredRecords.length) {
+      return false
+    }
+    var drainStartedAt = getPerformanceTime()
+    var drainedApproxBytes = 0
+    while (deferredRecords.length) {
+      var entry = deferredRecords[0]
+      if (isDeferredRecordAfterFullSnapshot(entry, timestamp)) {
+        break
+      }
+      if (
+        entry.$rMutationAdmissionBarrier &&
+        entry.$rMutationAdmissionBarrier.$rPendingAdmission
+      ) {
+        break
+      }
+      if (rawEmit(entry.$rRecord) === false) {
+        break
+      }
+      deferredRecords.shift()
+      deferredRecordsApproxBytes -= entry.$rApproxBytes
+      drainedApproxBytes += entry.$rApproxBytes
+      if (
+        drainedApproxBytes >=
+          MUTATION_ADMISSION_DRAIN_SLICE_APPROX_BYTES ||
+        getPerformanceTime() - drainStartedAt >=
+          MUTATION_ADMISSION_DRAIN_SLICE_MS
+      ) {
+        break
+      }
+    }
+    // A replacement baseline supersedes only records at or before its own
+    // timestamp. Preserve a future-dated suffix captured inside the current
+    // transaction so it can follow the replacement baseline. The bounded
+    // prefix attempt avoids adding an unbounded encode loop to this boundary.
+    var retainedDeferredRecords = []
+    var retainedDeferredRecordsApproxBytes = 0
+    var retiredStatefulRecord = false
+    deferredRecords.forEach(function (entry) {
+      if (isDeferredRecordAfterFullSnapshot(entry, timestamp)) {
+        retainedDeferredRecords.push(entry)
+        retainedDeferredRecordsApproxBytes += entry.$rApproxBytes
+      } else if (isStatefulDeferredRecord(entry.$rRecord)) {
+        retiredStatefulRecord = true
+      }
+    })
+    deferredRecords = retainedDeferredRecords
+    deferredRecordsApproxBytes = retainedDeferredRecordsApproxBytes
+    return retiredStatefulRecord
+  }
+
   function handleDeferredRecordLoss(record) {
     if (!isStatefulDeferredRecord(record)) {
       return
     }
     if (pendingFullSnapshotTask) {
-      requestFullSnapshotAfterMutationDrop()
+      beginAdmissionGapRecovery('deferred_stateful_record_loss')
       return
     }
-    clearDeferredRecords()
-    requestFullSnapshotAfterMutationDrop()
+    beginAdmissionGapRecovery('deferred_stateful_record_loss')
   }
 
   function scheduleDeferredRecordAdmissionRetry() {
+    scheduleDeferredRecordAdmissionDrain(
+      MUTATION_ADMISSION_RETRY_DELAY_MS
+    )
+  }
+
+  function scheduleDeferredRecordAdmissionContinuation() {
+    scheduleDeferredRecordAdmissionDrain(0)
+  }
+
+  function scheduleDeferredRecordAdmissionDrain(delay) {
     if (
       deferredRecordAdmissionTimeout !== undefined ||
       !deferredRecords.length ||
@@ -1859,26 +2624,66 @@ export function record(options) {
     }
     deferredRecordAdmissionTimeout = setTimeout(function () {
       deferredRecordAdmissionTimeout = undefined
-      flushDeferredRecords()
-    }, MUTATION_ADMISSION_RETRY_DELAY_MS)
+      var mutationAdmissionBarrier = deferredRecords.length
+        ? deferredRecords[0].$rMutationAdmissionBarrier
+        : undefined
+      var barrierWasDrained = flushDeferredRecords(
+        mutationAdmissionBarrier
+      )
+      if (barrierWasDrained) {
+        scheduleMutationAdmissionContinuation()
+      }
+    }, delay)
   }
 
-  function flushDeferredRecords() {
+  function flushDeferredRecords(mutationAdmissionBarrier, drainState) {
     if (
       suppressRecordsUntilFullSnapshot ||
       recordStopped
     ) {
-      return
+      return false
     }
     if (deferredRecordAdmissionTimeout !== undefined) {
       clearTimeout(deferredRecordAdmissionTimeout)
       deferredRecordAdmissionTimeout = undefined
     }
+    drainState = drainState || {
+      $rStartedAt: getPerformanceTime(),
+      $rApproxBytes: 0
+    }
     while (deferredRecords.length) {
       var entry = deferredRecords[0]
+      if (
+        entry.$rMutationAdmissionBarrier &&
+        (entry.$rMutationAdmissionBarrier.$rPendingAdmission ||
+          (mutationAdmissionBarrier &&
+            entry.$rMutationAdmissionBarrier !==
+              mutationAdmissionBarrier))
+      ) {
+        // A global/no-barrier drain may consume its unbound prefix, but a
+        // state record for a still-pending DOM add must wait for mutation
+        // admission. A concrete barrier drain likewise stops at the next
+        // structural boundary.
+        return true
+      }
       if (rawEmit(entry.$rRecord) !== false) {
         deferredRecords.shift()
         deferredRecordsApproxBytes -= entry.$rApproxBytes
+        drainState.$rApproxBytes += entry.$rApproxBytes
+        if (
+          deferredRecords.length &&
+          (!mutationAdmissionBarrier ||
+            !deferredRecords[0].$rMutationAdmissionBarrier ||
+            deferredRecords[0].$rMutationAdmissionBarrier ===
+              mutationAdmissionBarrier) &&
+          (drainState.$rApproxBytes >=
+            MUTATION_ADMISSION_DRAIN_SLICE_APPROX_BYTES ||
+            getPerformanceTime() - drainState.$rStartedAt >=
+              MUTATION_ADMISSION_DRAIN_SLICE_MS)
+        ) {
+          scheduleDeferredRecordAdmissionContinuation()
+          return false
+        }
         continue
       }
       if (
@@ -1886,7 +2691,7 @@ export function record(options) {
         options.$rWasLastEmitBackpressured()
       ) {
         scheduleDeferredRecordAdmissionRetry()
-        return
+        return false
       }
       deferredRecords.shift()
       deferredRecordsApproxBytes -= entry.$rApproxBytes
@@ -1894,19 +2699,24 @@ export function record(options) {
         // Canvas commands and CSSOM rule indexes form ordered state chains.
         // A permanent gap cannot be skipped; supersede the remainder with a
         // fresh mandatory baseline instead.
-        clearDeferredRecords()
-        requestFullSnapshotAfterMutationDrop()
-        return
+        beginAdmissionGapRecovery('deferred_stateful_record_rejected')
+        return false
       }
     }
+    return true
   }
 
-  function restoreRecordingAfterAbandonedFullSnapshot() {
+  function restoreRecordingAfterAbandonedFullSnapshot(
+    beforeShadowRootRollback
+  ) {
     restorePreviousPublishedReplayTree()
+    suppressRecordsUntilFullSnapshot = false
+    if (beforeShadowRootRollback) {
+      beforeShadowRootRollback()
+    }
     if (shadowRootsController.$rRollbackRecovery) {
       shadowRootsController.$rRollbackRecovery()
     }
-    suppressRecordsUntilFullSnapshot = false
     // Bitmap snapshots produced while the replacement baseline was being
     // serialized were deferred and are discarded on abandon. The shared
     // Canvas observer may already have advanced its frame signature/data URL
@@ -1932,11 +2742,10 @@ export function record(options) {
       prepareForFullSnapshot()
       createPendingFullSnapshotTask()
     } catch (error) {
-      handleFullSnapshotException(
+      return handleFullSnapshotException(
         'full_snapshot_initialization_error',
         error
       )
-      return false
     }
     schedulePendingFullSnapshotSlice()
     return true
@@ -1950,10 +2759,34 @@ export function record(options) {
     if (recordStopping || recordStopped) {
       return false
     }
-    cancelScheduledFullSnapshot()
-    pendingFullSnapshotTimestamp =
+    var replacesPendingFullSnapshot =
+      pendingFullSnapshotTimestamp !== undefined
+    var previousTransactionTimestamp = pendingFullSnapshotTimestamp
+    var fullSnapshotTimestamp =
       typeof timestamp === 'undefined' ? timeStampNow() : timestamp
-    pendingFullSnapshotCanBeDiscarded = Boolean(canBeDiscarded)
+    if (
+      replacesPendingFullSnapshot &&
+      typeof previousTransactionTimestamp === 'number'
+    ) {
+      fullSnapshotTimestamp = Math.max(
+        fullSnapshotTimestamp,
+        previousTransactionTimestamp
+      )
+    }
+    if (typeof previousReplayTreeLastRecordTimestamp === 'number') {
+      fullSnapshotTimestamp = Math.max(
+        fullSnapshotTimestamp,
+        previousReplayTreeLastRecordTimestamp
+      )
+    }
+    var retiredStatefulRecord =
+      flushAndRetireDeferredRecordsBeforeFullSnapshot(
+        fullSnapshotTimestamp
+      )
+    cancelScheduledFullSnapshot()
+    pendingFullSnapshotTimestamp = fullSnapshotTimestamp
+    pendingFullSnapshotCanBeDiscarded =
+      Boolean(canBeDiscarded) && !retiredStatefulRecord
     pendingFullSnapshotRequiresTailDiscard = Boolean(
       requiresTailDiscard
     )
@@ -1968,6 +2801,17 @@ export function record(options) {
     pendingFullSnapshotRestartCount = 0
     pendingFullSnapshotRestartRequested = false
     pendingFullSnapshotIsInitial = !fullSnapshotWasPublished
+    if (
+      !replacesPendingFullSnapshot ||
+      pendingFullSnapshotRequiresTailDiscard
+    ) {
+      resetPreviousReplayTreeRecords()
+    }
+    captureRecordsAgainstPreviousReplayTree =
+      !pendingFullSnapshotIsInitial &&
+      !pendingFullSnapshotRequiresTailDiscard
+    previousReplayTreeAdmissionActive =
+      captureRecordsAgainstPreviousReplayTree
     suppressRecordsUntilFullSnapshot = true
     if (!previousPublishedReplayTree) {
       previousPublishedReplayTree = getPublishedReplayTree()
@@ -1982,11 +2826,10 @@ export function record(options) {
       prepareForFullSnapshot()
       createPendingFullSnapshotTask()
     } catch (error) {
-      handleFullSnapshotException(
+      return handleFullSnapshotException(
         'full_snapshot_initialization_error',
         error
       )
-      return false
     }
     return true
   }
@@ -2020,6 +2863,13 @@ export function record(options) {
     delay = delay || 0
     pendingFullSnapshotTimeout = setTimeout(function () {
       pendingFullSnapshotTimeout = undefined
+      if (failPendingFullSnapshotOnTimeout()) {
+        return
+      }
+      if (pendingFullSnapshotBaselineRecords) {
+        runPendingFullSnapshotSliceSafely(true)
+        return
+      }
       if (!pendingFullSnapshotTask) {
         var completeSynchronously = false
         if (
@@ -2027,12 +2877,14 @@ export function record(options) {
         ) {
           pendingFullSnapshotMutationVersion = domMutationVersion
           if (
+            pendingFullSnapshotSynchronousFallbackAttempted ||
             getPerformanceTime() - pendingFullSnapshotStartedAt <
-            FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS
+              FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS
           ) {
             schedulePendingFullSnapshotSlice(delay)
             return
           }
+          pendingFullSnapshotSynchronousFallbackAttempted = true
           completeSynchronously = true
         }
         try {
@@ -2040,14 +2892,12 @@ export function record(options) {
           clearDeferredRecords()
           createPendingFullSnapshotTask()
         } catch (error) {
-          handleFullSnapshotException(
+          return handleFullSnapshotException(
             'full_snapshot_initialization_error',
             error
           )
-          return
         }
         if (completeSynchronously) {
-          pendingFullSnapshotActiveDuration = 0
           var synchronousStartedAt = getPerformanceTime()
           var synchronousDeadline =
             synchronousStartedAt +
@@ -2062,9 +2912,7 @@ export function record(options) {
               synchronousSliceCount >= synchronousMaxSliceCount ||
               getPerformanceTime() >= synchronousDeadline
             ) {
-              failOrAbandonFullSnapshot(
-                'full_snapshot_serialization_timeout'
-              )
+              deferPendingFullSnapshotUntilQuiet()
               return
             }
             synchronousSliceCount += 1
@@ -2074,6 +2922,12 @@ export function record(options) {
                 synchronousDeadline
               )
             ) {
+              return
+            }
+            if (pendingFullSnapshotBaselineRecords) {
+              schedulePendingFullSnapshotSlice(
+                MUTATION_ADMISSION_RETRY_DELAY_MS
+              )
               return
             }
           }
@@ -2086,13 +2940,17 @@ export function record(options) {
 
   function deferPendingFullSnapshotUntilQuiet() {
     pendingFullSnapshotTask = undefined
-    pendingFullSnapshotActiveDuration = 0
-    pendingFullSnapshotRestartCount = 0
     pendingFullSnapshotRestartRequested = false
-    pendingFullSnapshotStartedAt = getPerformanceTime()
-    prepareForFullSnapshot()
-    clearDeferredRecords()
-    pendingFullSnapshotMutationVersion = domMutationVersion
+    try {
+      prepareForFullSnapshot()
+      clearDeferredRecords()
+      pendingFullSnapshotMutationVersion = domMutationVersion
+    } catch (error) {
+      return handleFullSnapshotException(
+        'full_snapshot_initialization_error',
+        error
+      )
+    }
     schedulePendingFullSnapshotSlice(
       FULL_SNAPSHOT_MUTATION_QUIET_DELAY_MS
     )
@@ -2101,9 +2959,11 @@ export function record(options) {
   function restartPendingFullSnapshot(allowScheduling) {
     pendingFullSnapshotRestartCount += 1
     pendingFullSnapshotRestartRequested = false
+    if (failPendingFullSnapshotOnTimeout()) {
+      return
+    }
     if (
-      pendingFullSnapshotRestartCount > FULL_SNAPSHOT_MAX_RESTART_COUNT ||
-      pendingFullSnapshotActiveDuration > FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS
+      pendingFullSnapshotRestartCount > FULL_SNAPSHOT_MAX_RESTART_COUNT
     ) {
       if (
         !pendingFullSnapshotCanBeDiscarded &&
@@ -2123,10 +2983,17 @@ export function record(options) {
     // Records produced while serializing a discarded attempt may reference
     // nodes (including canvases) that are not part of the replacement
     // baseline. Never carry them across the generation boundary.
-    clearDeferredRecords()
-    prepareForViewChange()
-    resetCanvasRecordingBaseline()
-    createPendingFullSnapshotTask()
+    try {
+      clearDeferredRecords()
+      prepareMutationBaseline()
+      resetCanvasRecordingBaseline()
+      createPendingFullSnapshotTask()
+    } catch (error) {
+      return handleFullSnapshotException(
+        'full_snapshot_initialization_error',
+        error
+      )
+    }
     if (allowScheduling) {
       schedulePendingFullSnapshotSlice()
     }
@@ -2136,14 +3003,13 @@ export function record(options) {
     allowScheduling,
     serializationDeadline
   ) {
+    if (pendingFullSnapshotBaselineRecords) {
+      return tryPendingFullSnapshotAdmission(allowScheduling)
+    }
     if (!pendingFullSnapshotTask || recordStopped) {
       return false
     }
-    if (
-      pendingFullSnapshotActiveDuration >
-      FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS
-    ) {
-      failOrAbandonFullSnapshot('full_snapshot_serialization_timeout')
+    if (failPendingFullSnapshotOnTimeout()) {
       return false
     }
     if (
@@ -2171,11 +3037,7 @@ export function record(options) {
       getPerformanceTime() - sliceStartedAt,
       0
     )
-    if (
-      pendingFullSnapshotActiveDuration >
-      FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS
-    ) {
-      failOrAbandonFullSnapshot('full_snapshot_serialization_timeout')
+    if (failPendingFullSnapshotOnTimeout()) {
       return false
     }
     if (advanceResult.isWatermarkReached) {
@@ -2190,8 +3052,24 @@ export function record(options) {
     }
 
     // Capture native records that have not reached their observer callback yet.
-    // If any DOM changed during serialization, discard this mixed-time snapshot
-    // and rebuild it from a clean mutation generation.
+    // Shadow observers are reset in bounded pages: reset() performs
+    // takeRecords() and reports activity without serializing a mutation tail
+    // that this replacement baseline will supersede.
+    var resetShadowMutationsForBaseline =
+      shadowRootsController.$rResetPendingMutationsForBaseline
+    if (resetShadowMutationsForBaseline) {
+      var shadowResetResult = resetShadowMutationsForBaseline()
+      if (shadowResetResult === 'pending') {
+        if (allowScheduling) {
+          schedulePendingFullSnapshotSlice()
+        }
+        return false
+      }
+      if (shadowResetResult === false) {
+        restartPendingFullSnapshot(allowScheduling)
+        return false
+      }
+    }
     resetMutationsFromObservers()
     // Shadow-root observers created while the snapshot was serialized already
     // belong to the new generation. Mutations between slices have delivered an
@@ -2203,14 +3081,86 @@ export function record(options) {
       return false
     }
 
-    var timestamp = pendingFullSnapshotTimestamp
     var serializedDocument = pendingFullSnapshotTask.serializedNode
+    pendingFullSnapshotBaselineRecords = createFullSnapshotBaselineRecords(
+      pendingFullSnapshotTimestamp,
+      serializedDocument
+    )
+    pendingFullSnapshotBaselineMutationVersion =
+      pendingFullSnapshotMutationVersion
+    return tryPendingFullSnapshotAdmission(allowScheduling)
+  }
+
+  function tryPendingFullSnapshotAdmission(allowScheduling) {
+    if (
+      !pendingFullSnapshotBaselineRecords ||
+      recordStopped
+    ) {
+      return false
+    }
+    if (failPendingFullSnapshotOnTimeout()) {
+      return false
+    }
+    if (!drainPreviousReplayTreeRecords()) {
+      if (allowScheduling) {
+        schedulePendingFullSnapshotSlice(
+          MUTATION_ADMISSION_RETRY_DELAY_MS
+        )
+      }
+      return false
+    }
+    if (failPendingFullSnapshotOnTimeout()) {
+      return false
+    }
+    if (
+      pendingFullSnapshotRestartRequested ||
+      pendingFullSnapshotBaselineMutationVersion !== domMutationVersion
+    ) {
+      pendingFullSnapshotBaselineRecords = undefined
+      pendingFullSnapshotBaselineMutationVersion = undefined
+      discardPendingMutationPayload()
+      discardPendingMutationAdmissions()
+      prepareForFullSnapshot()
+      createPendingFullSnapshotTask()
+      pendingFullSnapshotRestartRequested = false
+      if (allowScheduling) {
+        schedulePendingFullSnapshotSlice()
+      }
+      return false
+    }
+    if (
+      pendingFullSnapshotBaselineRecords[0].timestamp !==
+      pendingFullSnapshotTimestamp
+    ) {
+      pendingFullSnapshotBaselineRecords =
+        createFullSnapshotBaselineRecords(
+          pendingFullSnapshotTimestamp,
+          pendingFullSnapshotBaselineRecords[2].data.node
+        )
+    }
+    var baselineRecords = pendingFullSnapshotBaselineRecords
     var startedAt = pendingFullSnapshotStartedAt
     var wasInitialFullSnapshot = pendingFullSnapshotIsInitial
-    if (!emitFullSnapshot(timestamp, serializedDocument, startedAt)) {
+    // Release the completed serializer and its timer while preserving the
+    // exact baseline transaction for a possible backpressure retry.
+    pendingFullSnapshotTask = undefined
+    clearPendingFullSnapshotTimeout()
+    if (!emitFullSnapshot(baselineRecords, startedAt)) {
+      if (wasLastEmitBackpressured()) {
+        if (allowScheduling) {
+          schedulePendingFullSnapshotSlice(
+            MUTATION_ADMISSION_RETRY_DELAY_MS
+          )
+        }
+        return false
+      }
+      pendingFullSnapshotBaselineRecords = undefined
+      pendingFullSnapshotBaselineMutationVersion = undefined
       failOrAbandonFullSnapshot('full_snapshot_admission_rejected')
       return false
     }
+    pendingFullSnapshotBaselineRecords = undefined
+    pendingFullSnapshotBaselineMutationVersion = undefined
     cancelScheduledFullSnapshot()
     if (
       !wasInitialFullSnapshot &&
@@ -2220,6 +3170,10 @@ export function record(options) {
     }
     previousPublishedReplayTree = undefined
     suppressRecordsUntilFullSnapshot = false
+    drainPendingMutationAdmissions()
+    resetPreviousReplayTreeRecords()
+    previousReplayTreeAdmissionActive = false
+    captureRecordsAgainstPreviousReplayTree = false
     flushDeferredRecords()
     if (!suppressRecordsUntilFullSnapshot && !recordStopped) {
       takeFullSnapshotCanvasBaseline()
@@ -2234,6 +3188,20 @@ export function record(options) {
     })
     failOrAbandonFullSnapshot(reason)
     return false
+  }
+
+  function failPendingFullSnapshotOnTimeout() {
+    if (
+      pendingFullSnapshotTimestamp === undefined ||
+      (pendingFullSnapshotActiveDuration <=
+        FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS &&
+        getPerformanceTime() - pendingFullSnapshotStartedAt <=
+          FULL_SNAPSHOT_MAX_WALL_DURATION_MS)
+    ) {
+      return false
+    }
+    failOrAbandonFullSnapshot('full_snapshot_serialization_timeout')
+    return true
   }
 
   function runPendingFullSnapshotSliceSafely(
@@ -2256,31 +3224,57 @@ export function record(options) {
   function abandonPendingFullSnapshot(skipRecoveryRestore) {
     var shouldDiscardTail =
       pendingFullSnapshotRequiresTailDiscard
+    var restoreError
     cancelScheduledFullSnapshot()
     clearDeferredRecords()
-    if (skipRecoveryRestore) {
-      // Teardown immediately retires every observer and Canvas scheduler.
-      // Rebuilding up to 64 ShadowRoot observers and rescanning canvases here
-      // would add pure main-thread work to stop() only to destroy it again.
-      previousPublishedReplayTree = undefined
-      suppressRecordsUntilFullSnapshot = false
-    } else {
-      restoreRecordingAfterAbandonedFullSnapshot()
+    try {
+      if (skipRecoveryRestore) {
+        // Teardown immediately retires every observer and Canvas scheduler.
+        // Rebuilding up to 64 ShadowRoot observers and rescanning canvases here
+        // would add pure main-thread work to stop() only to destroy it again.
+        previousPublishedReplayTree = undefined
+        suppressRecordsUntilFullSnapshot = false
+      } else {
+        restoreRecordingAfterAbandonedFullSnapshot(function () {
+          restorePreviousReplayTreeRecords()
+          // The native observer callback may not have run yet in this JavaScript
+          // turn. Now that the old publication tree is active again, serialize
+          // the bounded main/shadow mutation tail before retiring recovery
+          // observers, instead of silently dropping it.
+          flushMutations(true)
+        })
+      }
+    } catch (error) {
+      restoreError = error
+    } finally {
+      if (skipRecoveryRestore) {
+        resetPreviousReplayTreeRecords()
+      } else {
+        previousReplayTreeLastRecordTimestamp = undefined
+      }
+      previousReplayTreeAdmissionActive = false
+      captureRecordsAgainstPreviousReplayTree = false
+      if (
+        shouldDiscardTail &&
+        options.$rOnMandatoryFullSnapshotAbandoned
+      ) {
+        options.$rOnMandatoryFullSnapshotAbandoned()
+      }
     }
-    if (
-      shouldDiscardTail &&
-      options.$rOnMandatoryFullSnapshotAbandoned
-    ) {
-      options.$rOnMandatoryFullSnapshotAbandoned()
+    if (restoreError) {
+      return handleFullSnapshotException(
+        'full_snapshot_abandon_restore_error',
+        restoreError
+      )
     }
+    return true
   }
 
   function failOrAbandonFullSnapshot(reason) {
     if (pendingFullSnapshotCanBeDiscarded) {
-      abandonPendingFullSnapshot()
-      return
+      return abandonPendingFullSnapshot()
     }
-    failFullSnapshot(reason)
+    return failFullSnapshot(reason)
   }
 
   function failFullSnapshot(reason) {
@@ -2291,6 +3285,9 @@ export function record(options) {
       pendingFullSnapshotRequiresTailDiscard
     cancelScheduledFullSnapshot()
     clearDeferredRecords()
+    resetPreviousReplayTreeRecords()
+    previousReplayTreeAdmissionActive = false
+    captureRecordsAgainstPreviousReplayTree = false
     previousPublishedReplayTree = undefined
     if (
       shouldDiscardTail &&
@@ -2304,8 +3301,23 @@ export function record(options) {
     }
   }
 
-  function takeSubsequentFullSnapshot(timestamp) {
-    if (beginSubsequentFullSnapshot(timestamp, false)) {
+  function takeSubsequentFullSnapshot(timestamp, canBeDiscarded) {
+    // A public, best-effort snapshot must never replace an in-flight recovery
+    // transaction.  The recovery may already have retired stateful records or
+    // the previous replay chain, so downgrading it would make abandon unsafe.
+    if (
+      canBeDiscarded &&
+      pendingFullSnapshotTimestamp !== undefined
+    ) {
+      return
+    }
+    var shouldRunAfterRestart = Boolean(pendingFullSnapshotTask)
+    scheduleSubsequentFullSnapshot(
+      timestamp,
+      Boolean(canBeDiscarded)
+    )
+    runPendingFullSnapshotSliceSafely(true)
+    if (shouldRunAfterRestart && pendingFullSnapshotTask) {
       runPendingFullSnapshotSliceSafely(true)
     }
   }
@@ -2321,6 +3333,41 @@ export function record(options) {
       // The next view starts its own baseline transaction. Discard every held
       // tail from the old view before ViewEnd is emitted.
       abandonPendingFullSnapshot(true)
+      return true
+    }
+    if (
+      pendingFullSnapshotCanBeDiscarded &&
+      captureRecordsAgainstPreviousReplayTree
+    ) {
+      // Detect native main/shadow mutations that have not reached their async
+      // callbacks before deciding that an optional candidate may abandon.
+      capturePendingMutationActivityForPreviousReplayTree(true)
+    }
+    if (failPendingFullSnapshotOnTimeout()) {
+      return true
+    }
+    if (pendingFullSnapshotBaselineRecords) {
+      // Serialization already completed. Retry the exact baseline transaction
+      // instead of treating the intentionally empty serializer task as an
+      // incomplete snapshot. On unload this hook is invoked again after the
+      // encoder is synchronously drained, so the same objects get one more
+      // admission opportunity before teardown.
+      if (runPendingFullSnapshotSliceSafely(false)) {
+        return true
+      }
+      if (!pendingFullSnapshotBaselineRecords) {
+        return true
+      }
+      if (
+        skipRecoveryRestore ||
+        pendingFullSnapshotCanBeDiscarded
+      ) {
+        abandonPendingFullSnapshot(skipRecoveryRestore)
+      } else {
+        schedulePendingFullSnapshotSlice(
+          MUTATION_ADMISSION_RETRY_DELAY_MS
+        )
+      }
       return true
     }
     if (!pendingFullSnapshotTask) {
@@ -2341,8 +3388,16 @@ export function record(options) {
       abandonPendingFullSnapshot(skipRecoveryRestore)
       return true
     }
-    clearTimeout(pendingFullSnapshotTimeout)
-    pendingFullSnapshotTimeout = undefined
+    clearPendingFullSnapshotTimeout()
+    if (
+      pendingFullSnapshotRestartRequested ||
+      pendingFullSnapshotMutationVersion !== domMutationVersion
+    ) {
+      restartPendingFullSnapshot(false)
+      if (!pendingFullSnapshotTask || recordStopped) {
+        return true
+      }
+    }
     var completed = runPendingFullSnapshotSliceSafely(false)
     // Teardown and view-boundary flushes must remain one bounded slice. A
     // synchronous loop here could spend the full one-second recovery budget
@@ -2366,8 +3421,13 @@ export function record(options) {
       // Any request arriving while a replacement baseline is being built must
       // reuse the same bounded transaction. Re-running begin() would reset its
       // restart/time budget and let sustained mutation churn spin forever.
-      pendingFullSnapshotTimestamp =
+      var nextFullSnapshotTimestamp =
         typeof timestamp === 'undefined' ? timeStampNow() : timestamp
+      pendingFullSnapshotTimestamp = Math.max(
+        pendingFullSnapshotTimestamp,
+        nextFullSnapshotTimestamp,
+        previousReplayTreeLastRecordTimestamp || 0
+      )
       if (!canBeDiscarded) {
         pendingFullSnapshotCanBeDiscarded = false
       }
@@ -2377,6 +3437,9 @@ export function record(options) {
       ) {
         pendingFullSnapshotRequiresTailDiscard = true
         pendingFullSnapshotCanBeDiscarded = false
+        previousReplayTreeAdmissionActive = false
+        captureRecordsAgainstPreviousReplayTree = false
+        resetPreviousReplayTreeRecords()
         if (options.$rOnMandatoryFullSnapshotStarted) {
           options.$rOnMandatoryFullSnapshotStarted()
         }
@@ -2421,7 +3484,16 @@ export function record(options) {
         // Capture small records still queued by native MutationObservers.
         // Oversized subtree serialization is discarded once its synchronous
         // budget is exhausted.
-        flushMutations()
+        var finalMutationFlushResult = flushMutations(true)
+        if (finalMutationFlushResult === 'pending') {
+          // Chunked callbacks are published only when their final chunk closes,
+          // so teardown drops the whole tail and leaves the replay at its last
+          // consistent state. Never report the bounded drain as successful.
+          addTelemetryDebug(
+            'Session Replay dropped a pending mutation transaction during teardown.',
+            { reason: 'stop_mutation_tail_pending' }
+          )
+        }
       }
     } catch (error) {
       firstCleanupError = error
@@ -2429,15 +3501,19 @@ export function record(options) {
     recordStopped = true
     ;[
       discardPendingMutationAdmissions,
+      cancelMutationSourceFlushContinuation,
       cancelScheduledFullSnapshot,
       invalidateFullSnapshotCanvasBaseline,
       function () {
         suppressRecordsUntilFullSnapshot = false
+        previousReplayTreeAdmissionActive = false
+        captureRecordsAgainstPreviousReplayTree = false
       },
       clearDeferredRecords,
+      clearPreviousReplayTreeRecords,
       shadowRootsController.stop,
-      canvasWebGLSnapshotObserver.stop,
       canvasCommandCapture.stop,
+      canvasWebGLSnapshotObserver.stop,
       canvasObserver.stop,
       function () {
         stopCanvasSnapshots(canvasSnapshotLoop)
@@ -2463,6 +3539,20 @@ export function record(options) {
 
   var recorder = {
     stop: stopRecording,
+    $rFlushCanvasCommands: function () {
+      // A previous boundary pass may have preserved the exact Canvas record
+      // after transient segment/encoder backpressure. Retry that object before
+      // creating a newer command batch so unload's second writable pass keeps
+      // command ordering and can use the segment serialization cache.
+      try {
+        flushDeferredRecords()
+      } catch (_) {}
+      try {
+        if (canvasCommandCapture.flush) {
+          canvasCommandCapture.flush()
+        }
+      } catch (_) {}
+    },
     snapshotCanvas: function (canvas, snapshotOptions) {
       return snapshotCanvasIfActive(
         canvas,
@@ -2515,6 +3605,7 @@ function createInactiveRecorder() {
   var noop = function () {}
   var recorder = {
     stop: noop,
+    $rFlushCanvasCommands: noop,
     snapshotCanvas: noop,
     getSerializedNodeIdForDebug: noop,
     takeSubsequentFullSnapshot: noop,
@@ -3311,6 +4402,12 @@ function createReplayPerformanceStats() {
     processMutationsDuration: 0,
     mutationSerializationCount: 0,
     mutationSerializationDuration: 0,
+    mutationLocalDropCount: 0,
+    mutationLocalDropLastReason: undefined,
+    mutationDropRecoveryCount: 0,
+    mutationDropRecoveryLastReason: undefined,
+    admissionGapRecoveryCount: 0,
+    admissionGapRecoveryLastReason: undefined,
     mutationCallbackCount: 0,
     mutationRecordCount: 0,
     mutationAddCount: 0,
@@ -3332,6 +4429,20 @@ function accumulateReplayPerformanceStats(stats, delta) {
   stats.mutationSerializationCount += delta.mutationSerializationCount || 0
   stats.mutationSerializationDuration +=
     delta.mutationSerializationDuration || 0
+  stats.mutationLocalDropCount += delta.mutationLocalDropCount || 0
+  if (delta.mutationLocalDropReason) {
+    stats.mutationLocalDropLastReason = delta.mutationLocalDropReason
+  }
+  stats.mutationDropRecoveryCount += delta.mutationDropRecoveryCount || 0
+  if (delta.mutationDropRecoveryLastReason) {
+    stats.mutationDropRecoveryLastReason =
+      delta.mutationDropRecoveryLastReason
+  }
+  stats.admissionGapRecoveryCount += delta.admissionGapRecoveryCount || 0
+  if (delta.admissionGapRecoveryLastReason) {
+    stats.admissionGapRecoveryLastReason =
+      delta.admissionGapRecoveryLastReason
+  }
   stats.mutationCallbackCount += delta.mutationCallbackCount || 0
   stats.mutationRecordCount += delta.mutationRecordCount || 0
   stats.mutationAddCount += delta.mutationAddCount || 0
@@ -3363,6 +4474,14 @@ function cloneReplayPerformanceStats(stats) {
     mutationSerializationCount: stats.mutationSerializationCount,
     mutationSerializationDuration:
       Math.round(stats.mutationSerializationDuration * 10) / 10,
+    mutationLocalDropCount: stats.mutationLocalDropCount,
+    mutationLocalDropLastReason: stats.mutationLocalDropLastReason,
+    mutationDropRecoveryCount: stats.mutationDropRecoveryCount,
+    mutationDropRecoveryLastReason:
+      stats.mutationDropRecoveryLastReason,
+    admissionGapRecoveryCount: stats.admissionGapRecoveryCount,
+    admissionGapRecoveryLastReason:
+      stats.admissionGapRecoveryLastReason,
     mutationCallbackCount: stats.mutationCallbackCount,
     mutationRecordCount: stats.mutationRecordCount,
     mutationAddCount: stats.mutationAddCount,

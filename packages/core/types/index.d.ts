@@ -299,13 +299,11 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
    */
   replayCanvasQuality?: 'low' | 'medium' | 'high' | number | undefined
   /**
-   * Maximum canvas edge size before downscaling for encoding. Values above
-   * 2,048 are clamped to 2,048 to bound the target backing store to 16 MiB.
+   * Maximum canvas edge size before downscaling for encoding.
    */
   replayCanvasMaxCanvasSize?: number | undefined
   /**
-   * Maximum encoded bytes allowed for a single canvas snapshot. Values above
-   * 40,000 are clamped to 40,000 so a frame can fit in a replay segment.
+   * Maximum encoded bytes allowed for a single canvas snapshot.
    */
   replayCanvasMaxEncodedBytes?: number | undefined
   /**

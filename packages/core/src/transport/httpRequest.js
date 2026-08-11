@@ -35,17 +35,18 @@ export function createHttpRequest(
   var sendStrategyForRetry = function (payload, onResponse) {
     return fetchStrategyWithFallback(endpointUrl, payload, onResponse)
   }
+  var sendWithRetry = function (payload) {
+    sendWithRetryStrategy(
+      payload,
+      retryState,
+      sendStrategyForRetry,
+      endpointUrl,
+      reportError
+    )
+  }
 
   return {
-    send: function (payload) {
-      sendWithRetryStrategy(
-        payload,
-        retryState,
-        sendStrategyForRetry,
-        endpointUrl,
-        reportError
-      )
-    },
+    send: sendWithRetry,
     /**
      * Since fetch keepalive behaves like regular fetch on Firefox,
      * keep using sendBeaconStrategy on exit
@@ -56,11 +57,19 @@ export function createHttpRequest(
         isFinite(bytesBudget) &&
         bytesBudget >= 0
       if (!hasBytesBudget) {
-        sendBeaconStrategy(endpointUrl, bytesLimit, payload)
-        return {
-          $rBytesCount: getExitBytesCount(payload),
-          $rCurrentPayloadSent: true
+        if (
+          payload.$rEnforceOrder &&
+          hasPendingRetryPayloads(retryState)
+        ) {
+          // Hidden/frozen pages can resume. Do not let their newest replay
+          // segment bypass an older ordered fetch/retry: once beaconed, that
+          // dependent tail could not be withdrawn if the older segment is
+          // permanently rejected later.
+          sendWithRetry(payload)
+          return
         }
+        sendBeaconStrategy(endpointUrl, bytesLimit, payload)
+        return
       }
 
       // Replay explicitly provides a shared unload budget. Its regular fetches
@@ -112,6 +121,13 @@ export function createHttpRequest(
       }
     }
   }
+}
+
+function hasPendingRetryPayloads(retryState) {
+  return (
+    retryState.queuedPayloads.size() > 0 ||
+    retryState.$rOngoingRequests.size > 0
+  )
 }
 
 function sendPayloadsOnExit(

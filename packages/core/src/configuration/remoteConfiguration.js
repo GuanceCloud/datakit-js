@@ -1,7 +1,7 @@
 import { addEventListener } from '../browser/addEventListener'
 import { display } from '../helper/display'
 import { trim } from './transportConfiguration'
-import { objectEntries, getType } from '../helper/tools'
+import { assign, objectEntries, getType } from '../helper/tools'
 export function fetchAndApplyRemoteConfiguration(initConfiguration, callback) {
   fetchRemoteConfiguration(initConfiguration, (remoteInitConfiguration) => {
     callback(
@@ -41,7 +41,9 @@ const modifiableFieldPaths = {
 }
 function modificationByFieldsPath(remoteConfiguration, modifiableFieldPaths) {
   const result = {}
-  objectEntries(modifiableFieldPaths).forEach(([fieldPath, fieldType]) => {
+  objectEntries(modifiableFieldPaths).forEach(function (fieldEntry) {
+    const fieldPath = fieldEntry[0]
+    const fieldType = fieldEntry[1]
     // const sourceValue = sourceConfiguration[fieldPath]
     const remoteValue = remoteConfiguration[fieldPath]
     if (getType(remoteValue) === fieldType) {
@@ -82,13 +84,14 @@ export function applyRemoteConfiguration(
     initConfiguration,
     remoteInitConfiguration
   )
-  return {
-    ...initConfiguration,
-    ...modificationByFieldsPath(
+  return assign(
+    {},
+    initConfiguration,
+    modificationByFieldsPath(
       simpleRemoteInitConfiguration,
       modifiableFieldPaths
     )
-  }
+  )
 }
 
 export function fetchRemoteConfiguration(configuration, callback) {

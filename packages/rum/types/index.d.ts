@@ -129,6 +129,12 @@ export interface ReplayPerformanceDebugResult {
   processMutationsDuration: number
   mutationSerializationCount: number
   mutationSerializationDuration: number
+  mutationLocalDropCount: number
+  mutationLocalDropLastReason?: string | undefined
+  mutationDropRecoveryCount: number
+  mutationDropRecoveryLastReason?: string | undefined
+  admissionGapRecoveryCount: number
+  admissionGapRecoveryLastReason?: string | undefined
   mutationCallbackCount: number
   mutationRecordCount: number
   mutationAddCount: number
@@ -138,6 +144,9 @@ export interface ReplayPerformanceDebugResult {
   fullSnapshotCount: number
   fullSnapshotDuration: number
   replaySegmentFlushCount: number
+  replayResetCount: number
+  replayResetLastReason?: string | undefined
+  replaySegmentsLocked: boolean
 }
 
 export interface ResourceTrackerSnapshot {

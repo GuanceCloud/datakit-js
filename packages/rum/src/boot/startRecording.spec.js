@@ -4,8 +4,9 @@ import {
   PageExitReason
 } from '@cloudcare/browser-core'
 import { startRecording } from './startRecording'
-import { RecordType } from '../types'
+import { IncrementalSource, RecordType } from '../types'
 import { setSerializedNodeId } from '../domain/replay/record/serializationUtils'
+import { MAX_QUEUED_MUTATION_RECORDS } from '../domain/replay/record/mutationBatch'
 import { SEGMENT_DURATION_LIMIT } from '../domain/replay/segmentCollection/segmentCollection'
 
 describe('startRecording', () => {
@@ -33,6 +34,18 @@ describe('startRecording', () => {
       })
     }
     return encoder
+  }
+
+  function createRecordApi() {
+    return {
+      stop: jasmine.createSpy('recordStop'),
+      $rFlushCanvasCommands: jasmine.createSpy('flushCanvasCommands'),
+      takeSubsequentFullSnapshot: jasmine.createSpy(
+        'takeSubsequentFullSnapshot'
+      ),
+      flushMutations: jasmine.createSpy('flushMutations'),
+      prepareForViewChange: jasmine.createSpy('prepareForViewChange')
+    }
   }
 
   function parseBridgePayloads(sendEvent) {
@@ -525,6 +538,111 @@ describe('startRecording', () => {
     }, 0)
   })
 
+  it('should admit final Canvas commands before stopping the segment', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    const recordApi = createRecordApi()
+    let recordOptions
+    const canvasRecord = {
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 1,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 1,
+        type: '2D',
+        commands: [{ property: 'fillRect', args: [1, 2, 3, 4] }]
+      }
+    }
+    recordApi.$rFlushCanvasCommands.and.callFake(() => {
+      expect(recordOptions.emit(canvasRecord)).toBeTrue()
+    })
+    const recordImpl = jasmine
+      .createSpy('record')
+      .and.callFake((options) => {
+        recordOptions = options
+        return recordApi
+      })
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      undefined,
+      undefined,
+      recordImpl
+    )
+
+    recording.stop('manual_stop')
+
+    expect(recordApi.$rFlushCanvasCommands).toHaveBeenCalledTimes(1)
+    expect(encoder.finish).toHaveBeenCalledTimes(1)
+    expect(recordApi.stop).toHaveBeenCalledOnceWith('manual_stop', true)
+    expect(
+      recordApi.$rFlushCanvasCommands.calls.first().invocationOrder
+    ).toBeLessThan(encoder.finish.calls.first().invocationOrder)
+    expect(encoder.finish.calls.first().invocationOrder).toBeLessThan(
+      recordApi.stop.calls.first().invocationOrder
+    )
+  })
+
+  it('should flush Canvas commands before retiring the old view', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    const recordApi = createRecordApi()
+    const recordImpl = jasmine
+      .createSpy('record')
+      .and.returnValue(recordApi)
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      undefined,
+      undefined,
+      recordImpl
+    )
+
+    lifeCycle.notify(LifeCycleEventType.VIEW_ENDED)
+
+    expect(recordApi.$rFlushCanvasCommands).toHaveBeenCalledTimes(1)
+    expect(recordApi.prepareForViewChange).toHaveBeenCalledTimes(1)
+    expect(
+      recordApi.$rFlushCanvasCommands.calls.first().invocationOrder
+    ).toBeLessThan(
+      recordApi.prepareForViewChange.calls.first().invocationOrder
+    )
+
+    recording.stop()
+  })
+
   it('should flush same-task DOM mutations before ending a view', () => {
     const lifeCycle = new LifeCycle()
     const encoder = createEncoder()
@@ -677,7 +795,11 @@ describe('startRecording', () => {
 
         try {
           encoder.write.calls.reset()
-          for (let index = 0; index < 1001; index += 1) {
+          for (
+            let index = 0;
+            index < MAX_QUEUED_MUTATION_RECORDS + 1;
+            index += 1
+          ) {
             const target =
               index % 2 === 0 ? recoveryRoot : recoverySibling
             target.setAttribute(
@@ -747,6 +869,87 @@ describe('startRecording', () => {
 
     expect(httpRequest.sendOnExit).toHaveBeenCalledTimes(1)
     expect(httpRequest.send).not.toHaveBeenCalled()
+  })
+
+  it('should force the bounded mutation drain before the unload segment closes', () => {
+    const lifeCycle = new LifeCycle()
+    const recordApi = createRecordApi()
+    recordApi.flushMutations.and.returnValue('pending')
+    const recordImpl = jasmine
+      .createSpy('record')
+      .and.returnValue(recordApi)
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      createEncoder(),
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      undefined,
+      undefined,
+      recordImpl
+    )
+
+    recording.stop(PageExitReason.UNLOADING)
+
+    expect(recordApi.flushMutations).toHaveBeenCalledWith(true)
+    expect(
+      recordApi.flushMutations.calls.first().invocationOrder
+    ).toBeLessThan(recordApi.stop.calls.first().invocationOrder)
+    expect(recordApi.stop).toHaveBeenCalledOnceWith(
+      PageExitReason.UNLOADING,
+      true
+    )
+  })
+
+  it('should expose manual full snapshots as best-effort without downgrading internal recovery', () => {
+    const lifeCycle = new LifeCycle()
+    const recordApi = createRecordApi()
+    const recordImpl = jasmine
+      .createSpy('record')
+      .and.returnValue(recordApi)
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      createEncoder(),
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      undefined,
+      undefined,
+      recordImpl
+    )
+
+    recording.takeSubsequentFullSnapshot()
+
+    expect(
+      recordApi.takeSubsequentFullSnapshot
+    ).toHaveBeenCalledOnceWith(undefined, true)
+    recording.stop()
   })
 
   it('should retry the final mutation after unload releases encoder backpressure', () => {
@@ -889,6 +1092,107 @@ describe('startRecording', () => {
     })
     expect(disconnectSpy).toHaveBeenCalled()
     expect(onStopped).toHaveBeenCalledOnceWith('start_failure')
+  })
+
+  it('should clean up segment subscriptions when record initialization throws', () => {
+    const lifeCycle = new LifeCycle()
+    const originalSubscribe = lifeCycle.subscribe.bind(lifeCycle)
+    const trackedUnsubscribes = []
+    spyOn(lifeCycle, 'subscribe').and.callFake((eventType, callback) => {
+      const subscription = originalSubscribe(eventType, callback)
+      const unsubscribe = jasmine
+        .createSpy('unsubscribe')
+        .and.callFake(subscription.unsubscribe)
+      trackedUnsubscribes.push(unsubscribe)
+      return { unsubscribe }
+    })
+    const startupError = new Error('record initialization failed')
+    const onStopped = jasmine.createSpy('onStopped')
+
+    expect(() =>
+      startRecording(
+        lifeCycle,
+        { defaultPrivacyLevel: 'mask-user-input' },
+        {
+          findTrackedSession: () => ({
+            id: 'session-1',
+            sessionReplayAllowed: true
+          })
+        },
+        { findView: () => ({ id: 'view-current' }) },
+        createEncoder(),
+        {
+          send: jasmine.createSpy('send'),
+          sendOnExit: jasmine.createSpy('sendOnExit')
+        },
+        onStopped,
+        undefined,
+        () => {
+          throw startupError
+        }
+      )
+    ).toThrow(startupError)
+
+    expect(trackedUnsubscribes).toHaveSize(2)
+    trackedUnsubscribes.forEach((unsubscribe) => {
+      expect(unsubscribe).toHaveBeenCalledTimes(1)
+    })
+    expect(onStopped).toHaveBeenCalledOnceWith('start_failure')
+  })
+
+  it('should reuse one replay request across recorder restarts', () => {
+    const lifeCycle = new LifeCycle()
+    const createHttpRequestImpl = jasmine
+      .createSpy('createHttpRequest')
+      .and.returnValue({
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      })
+    const configuration = {
+      defaultPrivacyLevel: 'mask-user-input',
+      sessionReplayEndPoint: '/replay',
+      retryMaxSize: 3
+    }
+    const sessionManager = {
+      findTrackedSession: () => ({
+        id: 'session-1',
+        sessionReplayAllowed: true
+      })
+    }
+    const viewContexts = {
+      findView: () => ({ id: 'view-current' })
+    }
+    const recordImpl = jasmine
+      .createSpy('record')
+      .and.callFake(createRecordApi)
+
+    const firstRecording = startRecording(
+      lifeCycle,
+      configuration,
+      sessionManager,
+      viewContexts,
+      createEncoder(),
+      undefined,
+      undefined,
+      createHttpRequestImpl,
+      recordImpl
+    )
+    firstRecording.stop('session_expire')
+    const secondRecording = startRecording(
+      lifeCycle,
+      configuration,
+      sessionManager,
+      viewContexts,
+      createEncoder(),
+      undefined,
+      undefined,
+      createHttpRequestImpl,
+      recordImpl
+    )
+    secondRecording.stop('manual_stop')
+
+    expect(createHttpRequestImpl).toHaveBeenCalledTimes(1)
+    expect(recordImpl).toHaveBeenCalledTimes(2)
   })
 
   it('should finish every cleanup task when one cleanup throws', () => {

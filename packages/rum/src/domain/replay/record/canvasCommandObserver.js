@@ -11,6 +11,8 @@ var MAX_COMMAND_FALLBACK_SNAPSHOTS_PER_RUN = 8
 var MAX_COMMAND_FALLBACK_CONCURRENCY = 4
 var MAX_COMMAND_INITIAL_SNAPSHOT_QUEUE = 64
 var MAX_COMMAND_CANVAS_SCAN_PAGES = 32
+var MAX_COMMAND_DEFERRED_FALLBACKS =
+  MAX_COMMAND_INITIAL_SNAPSHOT_QUEUE * MAX_COMMAND_CANVAS_SCAN_PAGES
 var MAX_COMMAND_RECORD_REJECTED_RETRIES = 3
 var MAX_COMMAND_NOT_SERIALIZED_RETRIES = 8
 var MAX_COMMAND_FALLBACK_TIMERS = 64
@@ -46,13 +48,16 @@ export function startCanvasCommandCapture(options) {
     !window.HTMLCanvasElement.prototype
   ) {
     return {
+      flush: function () {},
       stop: function () {},
       reset: function () {}
     }
   }
 
   var emit = options.emit
-  var now = options.now || Date.now
+  var now = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.now || Date.now
+    : Date.now
   var onDebug = options.onDebug || function () {}
   var onMutationDebug = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
     ? options.onMutationDebug || function () {}
@@ -120,17 +125,17 @@ export function startCanvasCommandCapture(options) {
   var stopped = false
   var waitingForSnapshotBaseline = options.startPaused === true
   var scheduleMicrotask =
-    options.scheduleMicrotask ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.scheduleMicrotask) ||
     function (callback) {
       Promise.resolve().then(callback)
     }
   var setTimeoutImpl =
-    options.setTimeoutImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.setTimeoutImpl) ||
     function (callback, delay) {
       return setTimeout(callback, delay)
     }
   var clearTimeoutImpl =
-    options.clearTimeoutImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.clearTimeoutImpl) ||
     function (timeoutId) {
       clearTimeout(timeoutId)
     }
@@ -142,13 +147,16 @@ export function startCanvasCommandCapture(options) {
   var fallbackQueueScheduled = false
   var activeFallbackSnapshotCount = 0
   var fallbackTimerStates = new Set()
+  var deferredFallbacks = []
+  var deferredFallbackHead = 0
+  var fallbackRescanPending = false
+  var fallbackRescanScheduled = false
   var visibilityScanContinuationPending = false
   var visibilityScanContinuationGeneration = 0
   var visibilityScanContinuationScheduled = false
-  var fallbackCanvasWeakRefFactory = Object.prototype.hasOwnProperty.call(
-    options,
-    'weakRefFactory'
-  )
+  var fallbackCanvasWeakRefFactory =
+    __BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+    Object.prototype.hasOwnProperty.call(options, 'weakRefFactory')
     ? typeof options.weakRefFactory === 'function'
       ? options.weakRefFactory
       : undefined
@@ -158,13 +166,17 @@ export function startCanvasCommandCapture(options) {
       }
       : undefined
   var maxFallbackTimerCount = clampInteger(
-    options.maxFallbackTimerCount,
+    __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? options.maxFallbackTimerCount
+      : undefined,
     MAX_COMMAND_FALLBACK_TIMERS,
     1,
     MAX_COMMAND_FALLBACK_TIMERS
   )
   var maxFallbackTimerDelay = clampInteger(
-    options.maxFallbackTimerDelay,
+    __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? options.maxFallbackTimerDelay
+      : undefined,
     MAX_COMMAND_FALLBACK_TIMER_DELAY,
     1,
     MAX_COMMAND_FALLBACK_TIMER_DELAY
@@ -227,11 +239,13 @@ export function startCanvasCommandCapture(options) {
       state = {
         $rDirty: false,
         $rInFlight: false,
+        $rDeferred: false,
         $rQueued: false,
         retryQueued: false,
         consecutiveRecordRejectedCount: 0,
         $rLastRetryableFailureReason: undefined,
         nextEligibleAt: 0,
+        $rPriority: 0,
         $rReason: undefined,
         $rTimeoutId: undefined
       }
@@ -264,9 +278,63 @@ export function startCanvasCommandCapture(options) {
     )
   }
 
-  function dropFallbackState(state) {
-    state.$rDirty = false
-    state.$rReason = undefined
+  function getDeferredFallbackCount() {
+    return deferredFallbacks.length - deferredFallbackHead
+  }
+
+  function createFallbackCanvasRef(canvas) {
+    var canvasRef
+    try {
+      canvasRef = fallbackCanvasWeakRefFactory
+        ? fallbackCanvasWeakRefFactory(canvas)
+        : undefined
+    } catch (_) {}
+    if (canvasRef && typeof canvasRef.deref === 'function') {
+      return canvasRef
+    }
+    // WeakRef is unavailable in older browsers. This queue is strictly
+    // bounded, so retaining the canvas until its turn is preferable to
+    // dropping a final static frame.
+    return {
+      deref: function () {
+        return canvas
+      }
+    }
+  }
+
+  function deferFallbackState(canvas, state) {
+    if (state.$rDeferred) {
+      return
+    }
+    if (getDeferredFallbackCount() >= MAX_COMMAND_DEFERRED_FALLBACKS) {
+      // Keep memory bounded. The state stays dirty and a rolling DOM scan
+      // rediscovers it after the admitted work drains.
+      fallbackRescanPending = true
+      scheduleFallbackRescanIfReady()
+      return
+    }
+    state.$rDeferred = true
+    deferredFallbacks.push({
+      canvasRef: createFallbackCanvasRef(canvas),
+      state: state,
+      generation: fallbackGeneration
+    })
+  }
+
+  function dequeueDeferredFallback() {
+    var deferredFallback = deferredFallbacks[deferredFallbackHead]
+    deferredFallbacks[deferredFallbackHead] = undefined
+    deferredFallbackHead += 1
+    if (deferredFallbackHead === deferredFallbacks.length) {
+      deferredFallbacks = []
+      deferredFallbackHead = 0
+    } else if (
+      deferredFallbackHead >= MAX_COMMAND_INITIAL_SNAPSHOT_QUEUE
+    ) {
+      deferredFallbacks = deferredFallbacks.slice(deferredFallbackHead)
+      deferredFallbackHead = 0
+    }
+    return deferredFallback
   }
 
   function dequeueFallback() {
@@ -327,33 +395,46 @@ export function startCanvasCommandCapture(options) {
     startedAt,
     completedAt,
     result,
-    fallbackReason
+    fallbackReason,
+    priority
   ) {
-    onDebug({
-      scheduler: 'command_capture',
-      status: status,
-      startedAt: startedAt,
-      completedAt: completedAt,
-      timestamp: completedAt,
-      eligibleCanvasCount: 1,
-      selectedCanvasCount:
-        status === 'completed' && (!result || result.ok !== false) ? 1 : 0,
-      skippedBudgetCount: 0,
-      keepSessionAliveTriggered: false,
-      results: [
-        {
-          canvasId: getSerializedNodeId(canvas),
-          ok: status === 'completed' && (!result || result.ok !== false),
-          reason:
-            status === 'fallback'
-              ? fallbackReason
-              : result && result.ok === false
-                ? result.reason
-                : undefined,
-          priority: undefined
-        }
-      ]
-    })
+    if (!__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && status !== 'completed') {
+      return
+    }
+    var ok = status === 'completed' && (!result || result.ok !== false)
+    var reason =
+      status === 'fallback'
+        ? fallbackReason
+        : result && result.ok === false
+          ? result.reason
+          : undefined
+    onDebug(
+      __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+        ? {
+            scheduler: 'command_capture',
+            status: status,
+            startedAt: startedAt,
+            completedAt: completedAt,
+            timestamp: completedAt,
+            eligibleCanvasCount: 1,
+            selectedCanvasCount: ok ? 1 : 0,
+            skippedBudgetCount: 0,
+            keepSessionAliveTriggered: false,
+            results: [
+              {
+                canvasId: getSerializedNodeId(canvas),
+                ok: ok,
+                reason: reason,
+                priority: typeof priority === 'number' ? priority : 0
+              }
+            ]
+          }
+        : {
+            status: 'completed',
+            selectedCanvasCount: ok ? 1 : 0,
+            results: [{ ok: ok, reason: reason }]
+          }
+    )
   }
 
   function isFallbackPipelineIdle() {
@@ -361,9 +442,73 @@ export function startCanvasCommandCapture(options) {
       !fallbackQueueScheduled &&
       !getFallbackQueueSize() &&
       !getFallbackRetryQueueSize() &&
+      !getDeferredFallbackCount() &&
       !activeFallbackSnapshotCount &&
       !fallbackTimerStates.size
     )
+  }
+
+  function scheduleFallbackRescanIfReady() {
+    if (
+      stopped ||
+      !fallbackRescanPending ||
+      fallbackRescanScheduled ||
+      isDocumentHidden() ||
+      !isFallbackPipelineIdle()
+    ) {
+      return
+    }
+    fallbackRescanScheduled = true
+    var scheduledGeneration = fallbackGeneration
+    scheduleMicrotask(function () {
+      fallbackRescanScheduled = false
+      if (
+        stopped ||
+        scheduledGeneration !== fallbackGeneration ||
+        isDocumentHidden() ||
+        !isFallbackPipelineIdle()
+      ) {
+        return
+      }
+      fallbackRescanPending = false
+      patchExistingCanvases(false, true)
+    })
+  }
+
+  function promoteDeferredFallbacks() {
+    var inspectionCount = getDeferredFallbackCount()
+    while (
+      !stopped &&
+      getFallbackWorkCount() < MAX_COMMAND_INITIAL_SNAPSHOT_QUEUE &&
+      getDeferredFallbackCount() &&
+      inspectionCount > 0
+    ) {
+      var deferredFallback = dequeueDeferredFallback()
+      inspectionCount -= 1
+      var state = deferredFallback.state
+      state.$rDeferred = false
+      if (
+        deferredFallback.generation !== fallbackGeneration ||
+        !state.$rDirty ||
+        state.$rQueued ||
+        state.retryQueued ||
+        state.$rInFlight ||
+        state.$rTimeoutId !== undefined
+      ) {
+        continue
+      }
+      var canvas = deferredFallback.canvasRef.deref()
+      if (!canvas) {
+        state.$rDirty = false
+        continue
+      }
+      var workCount = getFallbackWorkCount()
+      enqueueFallbackSnapshot(canvas, state)
+      if (state.$rDeferred && getFallbackWorkCount() === workCount) {
+        break
+      }
+    }
+    scheduleFallbackRescanIfReady()
   }
 
   function scheduleVisibilityScanContinuationIfReady() {
@@ -403,6 +548,7 @@ export function startCanvasCommandCapture(options) {
       !getFallbackQueueSize() ||
       activeFallbackSnapshotCount >= maxActiveFallbackSnapshots
     ) {
+      scheduleFallbackRescanIfReady()
       scheduleVisibilityScanContinuationIfReady()
       return
     }
@@ -422,6 +568,7 @@ export function startCanvasCommandCapture(options) {
       stopped ||
       state.$rQueued ||
       state.retryQueued ||
+      state.$rDeferred ||
       state.$rInFlight ||
       state.$rTimeoutId !== undefined
     ) {
@@ -431,7 +578,7 @@ export function startCanvasCommandCapture(options) {
       getFallbackWorkCount() >=
       MAX_COMMAND_INITIAL_SNAPSHOT_QUEUE
     ) {
-      dropFallbackState(state)
+      deferFallbackState(canvas, state)
       return
     }
     if (getFallbackQueueSize() >= maxQueuedFallbackSnapshots) {
@@ -453,6 +600,7 @@ export function startCanvasCommandCapture(options) {
       stopped ||
       state.retryQueued ||
       state.$rQueued ||
+      state.$rDeferred ||
       state.$rInFlight ||
       state.$rTimeoutId !== undefined
     ) {
@@ -463,7 +611,7 @@ export function startCanvasCommandCapture(options) {
       getFallbackWorkCount() >=
         MAX_COMMAND_INITIAL_SNAPSHOT_QUEUE
     ) {
-      dropFallbackState(state)
+      deferFallbackState(canvas, state)
       return
     }
     state.retryQueued = true
@@ -512,6 +660,7 @@ export function startCanvasCommandCapture(options) {
       stopped ||
       state.$rQueued ||
       state.retryQueued ||
+      state.$rDeferred ||
       state.$rInFlight ||
       state.$rTimeoutId !== undefined
     ) {
@@ -526,36 +675,14 @@ export function startCanvasCommandCapture(options) {
       getFallbackWorkCount() >=
       MAX_COMMAND_INITIAL_SNAPSHOT_QUEUE
     ) {
-      dropFallbackState(state)
+      deferFallbackState(canvas, state)
       return
     }
     if (fallbackTimerStates.size >= maxFallbackTimerCount) {
       enqueueFallbackRetry(canvas, state)
       return
     }
-    var canvasRef
-    try {
-      canvasRef = fallbackCanvasWeakRefFactory
-        ? fallbackCanvasWeakRefFactory(canvas)
-        : {
-            // WeakRef is unavailable in older browsers. The timer count and
-            // delay are both bounded, so retaining this canvas briefly is
-            // preferable to losing the final dirty frame forever.
-            deref: function () {
-              return canvas
-            }
-          }
-    } catch (_) {}
-    if (!canvasRef || typeof canvasRef.deref !== 'function') {
-      // WeakRef construction is not guaranteed just because the global exists.
-      // The fallback timer count and delay are bounded, so use the same bounded
-      // strong-reference path rather than losing a static tail frame.
-      canvasRef = {
-        deref: function () {
-          return canvas
-        }
-      }
-    }
+    var canvasRef = createFallbackCanvasRef(canvas)
     var scheduledGeneration = fallbackGeneration
     try {
       state.$rTimeoutId = setTimeoutImpl(function () {
@@ -569,7 +696,9 @@ export function startCanvasCommandCapture(options) {
         }
         if (!state.$rDirty) {
           promoteFallbackRetries()
+          promoteDeferredFallbacks()
           scheduleFallbackQueueDrain()
+          scheduleFallbackRescanIfReady()
           scheduleVisibilityScanContinuationIfReady()
           return
         }
@@ -577,17 +706,22 @@ export function startCanvasCommandCapture(options) {
         if (!referencedCanvas) {
           state.$rDirty = false
           promoteFallbackRetries()
+          promoteDeferredFallbacks()
           scheduleFallbackQueueDrain()
+          scheduleFallbackRescanIfReady()
           scheduleVisibilityScanContinuationIfReady()
           return
         }
         enqueueFallbackSnapshot(referencedCanvas, state)
         promoteFallbackRetries()
+        promoteDeferredFallbacks()
         scheduleFallbackQueueDrain()
+        scheduleFallbackRescanIfReady()
         scheduleVisibilityScanContinuationIfReady()
       }, Math.min(delay, maxFallbackTimerDelay))
     } catch (_) {
       state.$rTimeoutId = undefined
+      deferFallbackState(canvas, state)
       return
     }
     fallbackTimerStates.add(state)
@@ -603,6 +737,18 @@ export function startCanvasCommandCapture(options) {
       return
     }
 
+    var recordingDecision = getReplayCanvasRecordingDecision(
+      configuration,
+      canvas
+    )
+    if (recordingDecision === false) {
+      state.$rDirty = false
+      state.$rReason = undefined
+      return
+    }
+    state.$rPriority =
+      typeof recordingDecision === 'number' ? recordingDecision : 0
+
     var startedAt = now()
     var fallbackReason = state.$rReason || 'unsupported_canvas_object'
     state.$rDirty = false
@@ -614,7 +760,8 @@ export function startCanvasCommandCapture(options) {
       startedAt,
       startedAt,
       undefined,
-      fallbackReason
+      fallbackReason,
+      state.$rPriority
     )
 
     Promise.resolve()
@@ -675,9 +822,11 @@ export function startCanvasCommandCapture(options) {
             maxRetryCount
         ) {
           state.$rReason = undefined
-          debugResult = {
-            ok: false,
-            reason: result.reason + '_retry_exhausted'
+          if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+            debugResult = {
+              ok: false,
+              reason: result.reason + '_retry_exhausted'
+            }
           }
         }
         notifyFallbackSnapshot(
@@ -686,7 +835,8 @@ export function startCanvasCommandCapture(options) {
           startedAt,
           completedAt,
           debugResult,
-          fallbackReason
+          fallbackReason,
+          state.$rPriority
         )
       })
       .finally(function () {
@@ -702,7 +852,10 @@ export function startCanvasCommandCapture(options) {
         ) {
           scheduleFallbackSnapshotWhenEligible(canvas, state)
         }
+        promoteFallbackRetries()
+        promoteDeferredFallbacks()
         scheduleFallbackQueueDrain()
+        scheduleFallbackRescanIfReady()
         scheduleVisibilityScanContinuationIfReady()
       })
   }
@@ -712,6 +865,7 @@ export function startCanvasCommandCapture(options) {
       return
     }
     promoteFallbackRetries()
+    promoteDeferredFallbacks()
     while (
       activeFallbackSnapshotCount < maxActiveFallbackSnapshots &&
       getFallbackQueueSize()
@@ -720,6 +874,7 @@ export function startCanvasCommandCapture(options) {
       var state = queuedFallback.state
       state.$rQueued = false
       promoteFallbackRetries()
+      promoteDeferredFallbacks()
       if (
         queuedFallback.generation !== fallbackGeneration ||
         !state.$rDirty
@@ -737,7 +892,9 @@ export function startCanvasCommandCapture(options) {
       )
     }
     promoteFallbackRetries()
+    promoteDeferredFallbacks()
     scheduleFallbackQueueDrain()
+    scheduleFallbackRescanIfReady()
     scheduleVisibilityScanContinuationIfReady()
   }
 
@@ -747,11 +904,24 @@ export function startCanvasCommandCapture(options) {
     }
     var canvas = context.canvas
     var state = getFallbackState(canvas)
+    var recordingDecision = getReplayCanvasRecordingDecision(
+      configuration,
+      canvas
+    )
+    if (recordingDecision === false) {
+      clearFallbackTimer(state)
+      state.$rDirty = false
+      state.$rReason = undefined
+      return
+    }
+    state.$rPriority =
+      typeof recordingDecision === 'number' ? recordingDecision : 0
     var hasActiveFallbackCycle =
       state.$rDirty ||
       state.$rInFlight ||
       state.$rQueued ||
       state.retryQueued ||
+      state.$rDeferred ||
       state.$rTimeoutId !== undefined
     if (!hasActiveFallbackCycle) {
       // A draw after a settled/exhausted cycle starts a fresh bounded retry
@@ -769,6 +939,7 @@ export function startCanvasCommandCapture(options) {
       state.$rInFlight ||
       state.$rQueued ||
       state.retryQueued ||
+      state.$rDeferred ||
       state.$rTimeoutId !== undefined
     ) {
       return
@@ -813,7 +984,11 @@ export function startCanvasCommandCapture(options) {
     fallbackQueueHead = 0
     fallbackRetryQueue = []
     fallbackRetryQueueHead = 0
+    deferredFallbacks = []
+    deferredFallbackHead = 0
     fallbackQueueScheduled = false
+    fallbackRescanPending = false
+    fallbackRescanScheduled = false
     visibilityScanContinuationPending = false
     visibilityScanContinuationScheduled = false
     visibilityScanContinuationGeneration = generation
@@ -825,7 +1000,7 @@ export function startCanvasCommandCapture(options) {
   }
 
   var recorder =
-    options.commandRecorder ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.commandRecorder) ||
     createCanvas2DCommandRecorder({
       shouldRecordContext: function (context) {
         return (
@@ -858,8 +1033,12 @@ export function startCanvasCommandCapture(options) {
           markCanvasMutation(context.canvas)
         }
       },
-      requestAnimationFrameImpl: options.requestAnimationFrameImpl,
-      cancelAnimationFrameImpl: options.cancelAnimationFrameImpl,
+      requestAnimationFrameImpl: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+        ? options.requestAnimationFrameImpl
+        : undefined,
+      cancelAnimationFrameImpl: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+        ? options.cancelAnimationFrameImpl
+        : undefined,
       requestSnapshotFallback: requestFallbackSnapshot,
       onCommandOverflow: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
         ? function (overflow) {
@@ -878,16 +1057,16 @@ export function startCanvasCommandCapture(options) {
           }
         : undefined,
       emit: function (event, metadata) {
-        var completedAt =
-          typeof event.completedAt === 'number'
-            ? event.completedAt
-            : typeof event.timestamp === 'number'
-              ? event.timestamp
-              : now()
-        var startedAt =
-          typeof event.startedAt === 'number' ? event.startedAt : completedAt
         var recordAccepted = emit(event)
         if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          var completedAt =
+            typeof event.completedAt === 'number'
+              ? event.completedAt
+              : typeof event.timestamp === 'number'
+                ? event.timestamp
+                : now()
+          var startedAt =
+            typeof event.startedAt === 'number' ? event.startedAt : completedAt
           var commands =
             event.data && event.data.commands ? event.data.commands : []
           var approxBytes =
@@ -910,28 +1089,31 @@ export function startCanvasCommandCapture(options) {
           }
           onMutationDebug(mutationDebug)
         }
-        onDebug({
-          scheduler: 'command_capture',
+        var summary = {
           status: 'completed',
-          startedAt: startedAt,
-          completedAt: completedAt,
-          timestamp: completedAt,
-          eligibleCanvasCount: 1,
           selectedCanvasCount: 1,
-          skippedBudgetCount: 0,
-          keepSessionAliveTriggered: false,
           results: [
             {
-              canvasId: event.data && event.data.id,
               ok: recordAccepted !== false,
               reason:
                 recordAccepted === false
                   ? 'command_record_rejected'
-                  : undefined,
-              priority: undefined
+                  : undefined
             }
           ]
-        })
+        }
+        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          summary.scheduler = 'command_capture'
+          summary.startedAt = startedAt
+          summary.completedAt = completedAt
+          summary.timestamp = completedAt
+          summary.eligibleCanvasCount = 1
+          summary.skippedBudgetCount = 0
+          summary.keepSessionAliveTriggered = false
+          summary.results[0].canvasId = event.data && event.data.id
+          summary.results[0].priority = undefined
+        }
+        onDebug(summary)
         return recordAccepted
       }
     })
@@ -1146,10 +1328,7 @@ export function startCanvasCommandCapture(options) {
         'bitmap_changed_during_snapshot'
       )
     }
-    if (
-      context &&
-      recorder.markPersistentSnapshotFallback
-    ) {
+    if (context && recorder.markPersistentSnapshotFallback) {
       recorder.markPersistentSnapshotFallback(
         context,
         reason || 'bitmap_snapshot_baseline'
@@ -1249,7 +1428,17 @@ export function startCanvasCommandCapture(options) {
       (initialSnapshotScanPageCount < MAX_COMMAND_CANVAS_SCAN_PAGES &&
         (foundUnseenCanvas || !canvases.length))
     if (useFallbackScheduler) {
-      if (shouldContinueScan) {
+      var reachedFallbackScanBudget =
+        initialSnapshotScanPageCount >= MAX_COMMAND_CANVAS_SCAN_PAGES &&
+        foundUnseenCanvas &&
+        canvases.length >= MAX_COMMAND_INITIAL_SNAPSHOT_QUEUE
+      if (reachedFallbackScanBudget) {
+        // Pause after each bounded page window, but preserve the WeakSet and
+        // rolling DOM offset. This lets very large pages continue after the
+        // current work drains and stop naturally once the scan wraps.
+        initialSnapshotScanPageCount = 0
+      }
+      if (shouldContinueScan || reachedFallbackScanBudget) {
         visibilityScanContinuationPending = true
         visibilityScanContinuationGeneration = generation
         scheduleVisibilityScanContinuationIfReady()
@@ -1278,16 +1467,21 @@ export function startCanvasCommandCapture(options) {
 
     var canvas
     var canvasId
+    var recordingDecision
     while (getPendingInitialSnapshotCount()) {
       canvas = dequeueInitialSnapshotCanvas()
       if (!canvas) {
         continue
       }
       canvasId = getSerializedNodeId(canvas)
+      recordingDecision = getReplayCanvasRecordingDecision(
+        configuration,
+        canvas
+      )
       if (
         (!canvasId && canvasId !== 0) ||
         initialSnapshotCanvases.has(canvas) ||
-        getReplayCanvasRecordingDecision(configuration, canvas) === false
+        recordingDecision === false
       ) {
         queuedInitialSnapshotCanvases.delete(canvas)
         canvas = undefined
@@ -1303,7 +1497,7 @@ export function startCanvasCommandCapture(options) {
       return
     }
 
-    var startedAt = now()
+    var startedAt = __BUILD_ENV__REPLAY_DEBUG_ENABLED__ ? now() : undefined
     var snapshotGeneration = generation
     var snapshotToken = {
       canvas: canvas,
@@ -1331,7 +1525,9 @@ export function startCanvasCommandCapture(options) {
         ) {
           return
         }
-        var completedAt = now()
+        var completedAt = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+          ? now()
+          : undefined
         if (result && result.ok === false) {
           initialSnapshotCanvases.delete(canvas)
         } else if (
@@ -1343,26 +1539,30 @@ export function startCanvasCommandCapture(options) {
         ) {
           initialSnapshotCanvases.delete(canvas)
         }
-        onDebug({
-          scheduler: 'command_capture',
+        var ok = !(result && result.ok === false)
+        var summary = {
           status: 'completed',
-          startedAt: startedAt,
-          completedAt: completedAt,
-          timestamp: completedAt,
-          eligibleCanvasCount: 1,
-          selectedCanvasCount:
-            result && result.ok === false ? 0 : 1,
-          skippedBudgetCount: 0,
-          keepSessionAliveTriggered: false,
+          selectedCanvasCount: ok ? 1 : 0,
           results: [
             {
-              canvasId: canvasId,
-              ok: !(result && result.ok === false),
-              reason: result && result.ok === false ? result.reason : undefined,
-              priority: undefined
+              ok: ok,
+              reason: result && result.ok === false ? result.reason : undefined
             }
           ]
-        })
+        }
+        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          summary.scheduler = 'command_capture'
+          summary.startedAt = startedAt
+          summary.completedAt = completedAt
+          summary.timestamp = completedAt
+          summary.eligibleCanvasCount = 1
+          summary.skippedBudgetCount = 0
+          summary.keepSessionAliveTriggered = false
+          summary.results[0].canvasId = canvasId
+          summary.results[0].priority =
+            typeof recordingDecision === 'number' ? recordingDecision : 0
+        }
+        onDebug(summary)
       })
       .catch(function () {
         if (
@@ -1372,27 +1572,32 @@ export function startCanvasCommandCapture(options) {
         ) {
           return
         }
-        var completedAt = now()
         initialSnapshotCanvases.delete(canvas)
-        onDebug({
-          scheduler: 'command_capture',
-          status: 'completed',
-          startedAt: startedAt,
-          completedAt: completedAt,
-          timestamp: completedAt,
-          eligibleCanvasCount: 1,
-          selectedCanvasCount: 0,
-          skippedBudgetCount: 0,
-          keepSessionAliveTriggered: false,
-          results: [
-            {
-              canvasId: canvasId,
-              ok: false,
-              reason: 'snapshot_failed',
-              priority: undefined
-            }
-          ]
-        })
+        if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+          var completedAt = now()
+          onDebug({
+            scheduler: 'command_capture',
+            status: 'completed',
+            startedAt: startedAt,
+            completedAt: completedAt,
+            timestamp: completedAt,
+            eligibleCanvasCount: 1,
+            selectedCanvasCount: 0,
+            skippedBudgetCount: 0,
+            keepSessionAliveTriggered: false,
+            results: [
+              {
+                canvasId: canvasId,
+                ok: false,
+                reason: 'snapshot_failed',
+                priority:
+                  typeof recordingDecision === 'number'
+                    ? recordingDecision
+                    : 0
+              }
+            ]
+          })
+        }
       })
       .finally(function () {
         if (
@@ -1512,6 +1717,11 @@ export function startCanvasCommandCapture(options) {
   }
 
   return {
+    flush: function () {
+      try {
+        recorder.flush()
+      } catch (_) {}
+    },
     stop: function () {
       try {
         recorder.flush()

@@ -86,6 +86,20 @@ describe('flushController', () => {
     })
   })
 
+  it('should notify an empty current batch on page exit for async journal draining', () => {
+    pageExitObservable.notify({ reason: 'before_unload' })
+
+    expect(flushSpy).toHaveBeenCalledOnceWith({
+      reason: 'before_unload',
+      messagesCount: 0,
+      bytesCount: 0
+    })
+
+    flushSpy.calls.reset()
+    sessionExpireObservable.notify()
+    expect(flushSpy).not.toHaveBeenCalled()
+  })
+
   it('should cancel the duration timer when all messages are removed', () => {
     flushController.notifyBeforeAddMessage(3)
     flushController.notifyAfterRemoveMessage(3)

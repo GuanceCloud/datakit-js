@@ -2,12 +2,14 @@ const fs = require('fs')
 const path = require('path')
 const { spawnSync } = require('child_process')
 
-// The full bundle includes replay, framework plugin support, forced-session
-// renewal, and the v3.3.6 experimental WebSocket collector.  Production-only
-// debug work is stripped before accepting this baseline.  Keep the budget
-// close to the measured artifact so future growth remains explicit.
-const RUM_BUNDLE_RAW_BYTES_LIMIT = 348000
-const RUM_BUNDLE_GZIP_BYTES_LIMIT = 108000
+// The full bundle includes DOM/Canvas 2D replay, framework plugin support,
+// forced-session renewal, and the v3.3.6 experimental WebSocket collector.
+// The optional WebGL implementation has its own package and size gate.  Keep
+// this budget close to the measured base artifact, including the atomic full
+// snapshot and ordered retry recovery paths, so it cannot drift back into the
+// main package unnoticed.
+const RUM_BUNDLE_RAW_BYTES_LIMIT = 330000
+const RUM_BUNDLE_GZIP_BYTES_LIMIT = 107000
 // Size-sensitive applications can use the slim package, which intentionally
 // omits Session Replay.  Gate it independently so growth in the full feature
 // set never weakens the lightweight distribution's contract.

@@ -20,10 +20,14 @@ import {
   serializeNodeWithId,
   createMutationSerializerTask,
   serializeAttribute,
-  SerializationContextStatus,
-  SERIALIZATION_MAX_NODE_SOURCE_LENGTH
+  truncateSerializedValue,
+  SERIALIZATION_MAX_MUTATION_SOURCE_LENGTH,
+  SerializationContextStatus
 } from './serialize'
-import { createMutationBatch } from './mutationBatch'
+import {
+  createMutationBatch,
+  MAX_QUEUED_MUTATION_NODES
+} from './mutationBatch'
 
 var MUTATION_SERIALIZATION_SLICE_MS = 4
 var MUTATION_SERIALIZATION_FLUSH_BUDGET_MS = 4
@@ -33,13 +37,21 @@ var MUTATION_NORMALIZATION_TIME_CHECK_INTERVAL = 32
 // observer callback. Let a small, raw-batch-bounded amount of normalization
 // finish before treating the wall-clock deadline as structural loss.
 var MUTATION_NORMALIZATION_SMALL_BATCH_MAX_RECORDS = 32
-var MUTATION_NORMALIZATION_MIN_OPERATIONS_BEFORE_TIMEOUT = 192
+var MUTATION_NORMALIZATION_MIN_OPERATIONS_BEFORE_TIMEOUT = 256
 var MUTATION_NORMALIZATION_ABORT = {}
 // A serialized add cannot be split below its root.  Stop before building one
 // that would exceed record.js' single mutation emit watermark.
 var MUTATION_SERIALIZATION_MAX_NODE_COUNT = 5000
 var MUTATION_SERIALIZATION_MAX_APPROX_BYTES = 200000
 export var MAX_PENDING_MUTATION_ROOT_TASKS = 256
+// Keep the expensive serializer state bounded while allowing a large burst of
+// unpublished, add-only roots to wait as lightweight DOM references.  The
+// deferred queue is intentionally finite and matches the raw node watermark:
+// one accepted native callback can therefore be drained without dropping a
+// root, while a sustained producer still cannot grow the queue without bound.
+export var MAX_DEFERRED_MUTATION_ROOT_TASKS =
+  MAX_QUEUED_MUTATION_NODES
+var DEFERRED_MUTATION_ROOT_TASK_APPROX_BYTES = 128
 export var MAX_PENDING_MUTATION_GROUPS = 256
 export var MAX_PENDING_MUTATION_ROOT_APPROX_BYTES = 4 * 1024 * 1024
 export var MAX_MUTATION_ROOT_TASK_REFRESH_COUNT = 16
@@ -48,10 +60,50 @@ export var MAX_REMOVED_SUBTREE_TRAVERSAL_NODES = 5000
 // current text/attribute values separately before privacy transforms and
 // record-size estimation scan them synchronously.
 export var MAX_MUTATION_CURRENT_SOURCE_CHARACTERS = 512 * 1024
+export var MAX_MUTATION_SERIALIZED_VALUE_CHARACTERS =
+  SERIALIZATION_MAX_MUTATION_SOURCE_LENGTH
+var AGGREGATE_RETAINED_MUTATION_WATERMARK =
+  'aggregate_retained_mutation_watermark'
+var MUTATION_ROOT_ADMISSION_WATERMARK =
+  'mutation_root_admission_watermark'
+var MUTATION_ROOT_RETAINED_BYTES_WATERMARK =
+  'mutation_root_retained_bytes_watermark'
 var MAX_REMOVED_SUBTREE_TRAVERSAL_DURATION_MS = 4
 var REMOVED_SUBTREE_TIME_CHECK_INTERVAL = 32
 var publicationTokenByMutationAdd = new WeakMap()
 var sourceNodeByMutationRemove = new WeakMap()
+var approxBytesByMutationPayload = new WeakMap()
+
+export function getMutationPayloadApproxBytes(payload) {
+  var trackedApproxBytes = approxBytesByMutationPayload.get(payload)
+  if (trackedApproxBytes) {
+    return trackedApproxBytes
+  }
+  return estimateFallbackMutationPayloadApproxBytes(payload)
+}
+
+function estimateFallbackMutationPayloadApproxBytes(payload) {
+  var approxBytes = 64
+  if (!payload) {
+    return approxBytes
+  }
+  approxBytes += (payload.adds || []).length * 64
+  approxBytes += (payload.removes || []).length * 24
+  ;(payload.texts || []).forEach(function (text) {
+    approxBytes +=
+      24 +
+      (typeof text.value === 'string' ? text.value.length * 2 : 0)
+  })
+  ;(payload.attributes || []).forEach(function (attribute) {
+    approxBytes += 24
+    Object.keys(attribute.attributes || {}).forEach(function (name) {
+      var value = attribute.attributes[name]
+      approxBytes += name.length * 2
+      approxBytes += typeof value === 'string' ? value.length * 2 : 0
+    })
+  })
+  return approxBytes
+}
 
 function getMutationDependencyState(shadowRootsController) {
   if (!shadowRootsController) {
@@ -152,13 +204,18 @@ export function startMutationObserver(
   mutationActivityCb,
   mutationNodeSerializationCb,
   isNodeIgnored,
-  isNodePublished
+  isNodePublished,
+  isSourceActive,
+  mutationResourceBudget
 ) {
   var MutationObserver = getMutationObserverConstructor()
   if (!MutationObserver) {
     return { stop: noop, flush: noop, reset: noop, deactivate: noop }
   }
   var active = true
+  var isObserverActive = function () {
+    return active && (!isSourceActive || isSourceActive())
+  }
 
   var mutationTasksController = createMutationTasksController(
     mutationCallback,
@@ -167,24 +224,31 @@ export function startMutationObserver(
     mutationPerfCb,
     mutationOverflowCb,
     mutationNodeSerializationCb,
-    isNodeIgnored
+    isNodeIgnored,
+    mutationResourceBudget
   )
 
-  var mutationBatch = createMutationBatch(function (mutations) {
-    if (!active) {
+  var mutationBatch = createMutationBatch(function (
+    mutations,
+    mutationBatchContext
+  ) {
+    if (!isObserverActive()) {
       return
     }
     var processStart = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
       ? getCurrentTime()
       : 0
-    processMutations(
+    var overflowCountBeforeProcess =
+      mutationTasksController.getOverflowCount()
+    var processed = processMutations(
       mutations,
       mutationCallback,
       configuration,
       shadowRootsController,
       mutationTasksController,
       isNodeIgnored,
-      isNodePublished
+      isNodePublished,
+      mutationBatchContext
     )
     if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && mutationPerfCb) {
       mutationPerfCb({
@@ -192,25 +256,27 @@ export function startMutationObserver(
         processMutationsDuration: getCurrentTime() - processStart
       })
     }
+    return mutationTasksController.getOverflowCount() ===
+      overflowCountBeforeProcess
+      ? processed
+      : false
   }, function (overflow) {
     if (!active) {
       return
     }
     observer.takeRecords()
     mutationTasksController.reset()
-    if (mutationOverflowCb) {
-      mutationOverflowCb({
-        reason: overflow.reason || 'raw_mutation_watermark',
-        mutationRecordCount: overflow.mutationRecordCount,
-        mutationNodeCount: overflow.mutationNodeCount,
-        mutationApproxBytes: overflow.mutationApproxBytes
-      })
-    }
-  })
+    reportMutationOverflow({
+      reason: overflow.reason || 'raw_mutation_watermark',
+      mutationRecordCount: overflow.mutationRecordCount,
+      mutationNodeCount: overflow.mutationNodeCount,
+      mutationApproxBytes: overflow.mutationApproxBytes
+    })
+  }, mutationResourceBudget)
 
   var observer = new MutationObserver(
     monitor(function (mutations) {
-      if (!active) {
+      if (!isObserverActive()) {
         return
       }
       notifyMutationActivity(mutations)
@@ -248,7 +314,7 @@ export function startMutationObserver(
       mutationTasksController.reset()
     },
     refreshAndFlushPendingRootForNode: function (node) {
-      if (!active) {
+      if (!isObserverActive()) {
         return
       }
       // A common attachShadow() pattern appends the host and attaches the root
@@ -260,13 +326,24 @@ export function startMutationObserver(
       if (!mutationBatch.addMutations(pendingRecords)) {
         return false
       }
-      mutationBatch.flush()
+      var batchFlushResult = mutationBatch.flush()
+      if (batchFlushResult === false) {
+        // A normalization overflow is reported from inside the batch
+        // processor. The batch drops its queued generation, but the task
+        // controller must also leave its overflowed state so a later DOM
+        // change can be recorded after recovery, matching the pre-slicing
+        // observer lifecycle.
+        mutationTasksController.reset()
+      }
+      if (batchFlushResult !== true) {
+        return batchFlushResult
+      }
       return mutationTasksController.refreshAndFlushPendingRootForNode(
         node
       )
     },
     flush: function () {
-      if (!active) {
+      if (!isObserverActive()) {
         return true
       }
       var pendingRecords = observer.takeRecords()
@@ -276,14 +353,27 @@ export function startMutationObserver(
       }
       var overflowCountBeforeFlush =
         mutationTasksController.getOverflowCount()
-      mutationBatch.flush()
-      if (!mutationTasksController.flush()) {
+      var batchFlushResult = mutationBatch.flush()
+      if (batchFlushResult === false) {
+        // processMutations may fail the task controller while mutationBatch
+        // is draining a transaction. Reset both halves of the pipeline; an
+        // otherwise sticky overflow would silently drop every later change.
+        mutationTasksController.reset()
+      }
+      if (batchFlushResult !== true) {
+        return batchFlushResult
+      }
+      var taskFlushResult = mutationTasksController.flush()
+      if (taskFlushResult === 'pending') {
+        return 'pending'
+      }
+      if (taskFlushResult === false) {
         var overflowAlreadyReported =
           mutationTasksController.getOverflowCount() >
           overflowCountBeforeFlush
         mutationTasksController.reset()
-        if (!overflowAlreadyReported && mutationOverflowCb) {
-          mutationOverflowCb({
+        if (!overflowAlreadyReported) {
+          reportMutationOverflow({
             reason: 'serialization_budget'
           })
         }
@@ -292,7 +382,7 @@ export function startMutationObserver(
       return true
     },
     reset: function () {
-      if (!active) {
+      if (!isObserverActive()) {
         return
       }
       // Drop records queued by the native observer before resetting the
@@ -311,6 +401,18 @@ export function startMutationObserver(
       mutationActivityCb(target)
     }
   }
+
+  function reportMutationOverflow(overflow) {
+    if (
+      mutationResourceBudget &&
+      !mutationResourceBudget.failOnce()
+    ) {
+      return
+    }
+    if (mutationOverflowCb) {
+      mutationOverflowCb(overflow)
+    }
+  }
 }
 
 export function processMutations(
@@ -320,7 +422,8 @@ export function processMutations(
   shadowRootsController,
   mutationTasksController,
   isNodeIgnored,
-  isNodePublished
+  isNodePublished,
+  mutationBatchContext
 ) {
   isNodeIgnored = isNodeIgnored || function () {
     return false
@@ -328,6 +431,19 @@ export function processMutations(
   isNodePublished = isNodePublished || hasSerializedNode
   if (mutationTasksController.isOverflowed()) {
     return
+  }
+  var transactionState =
+    mutationBatchContext && mutationBatchContext.transaction
+  if (
+    transactionState &&
+    transactionState.$rHasUnchunkableStructuralMutation
+  ) {
+    transactionState.$rFailed = true
+    mutationTasksController.handleOverflow({
+      reason: 'mutation_normalization_budget',
+      mutationRecordCount: transactionState.$rMutationRecordCount
+    })
+    return false
   }
   var nodePrivacyLevelCache = new Map()
   var pendingRootTasksToRefresh = new Set()
@@ -347,8 +463,15 @@ export function processMutations(
     mutationRecordCount: mutations.length,
     timeCheckCount: 0
   }
-  var currentSourceState = {
-    characters: 0
+  var currentSourceState
+  if (transactionState) {
+    currentSourceState = transactionState.$rCurrentSourceState
+    if (!currentSourceState) {
+      currentSourceState = { characters: 0 }
+      transactionState.$rCurrentSourceState = currentSourceState
+    }
+  } else {
+    currentSourceState = { characters: 0 }
   }
 
   for (var _i = 0, mutations_1 = mutations; _i < mutations_1.length; _i++) {
@@ -373,10 +496,10 @@ export function processMutations(
         !disconnectedShadowRootsCleaned &&
         shadowRootsController.cleanupDisconnectedShadowRoots
       ) {
-        // The real controller registry is bounded to 64 entries. Scanning that
-        // registry is both cheaper and more reliable than walking every node
-        // in a potentially huge removed subtree merely to discover its shadow
-        // hosts. The root removal itself remains a complete replay mutation.
+        // The controller owns a sliced registry cleanup. It is both safer and
+        // cheaper than walking every node in a potentially huge removed
+        // subtree merely to discover its shadow hosts. The root removal itself
+        // remains a complete replay mutation.
         shadowRootsController.cleanupDisconnectedShadowRoots()
         disconnectedShadowRootsCleaned = true
       } else if (!shadowRootsController.cleanupDisconnectedShadowRoots) {
@@ -449,21 +572,48 @@ export function processMutations(
   var supportsMutationGroups = Boolean(
     mutationTasksController.createMutationGroup
   )
+  var isPureAddTransaction = Boolean(
+    transactionState && transactionState.$rPureAdd
+  )
+  if (transactionState && transactionState.$rFailed) {
+    return false
+  }
   var shouldCreateMutationGroup =
     supportsMutationGroups &&
-    shouldUseAtomicMutationGroup(
-      childListMutations,
-      characterDataMutations,
-      attributeMutations
+    ((!isPureAddTransaction && Boolean(transactionState)) ||
+      shouldUseAtomicMutationGroup(
+        childListMutations,
+        characterDataMutations,
+        attributeMutations
+      ))
+  var mutationGroup
+  if (transactionState && !isPureAddTransaction) {
+    if (!transactionState.$rMutationGroup) {
+      transactionState.$rMutationGroup =
+        mutationTasksController.createMutationGroup(mutationCallback)
+      if (transactionState.$rMutationGroup) {
+        transactionState.$rMutationGroup.$rTransactionState = transactionState
+      }
+      transactionState.$rPayload = {
+        removes: [],
+        texts: [],
+        attributes: []
+      }
+    }
+    mutationGroup = transactionState.$rMutationGroup
+  } else if (shouldCreateMutationGroup) {
+    mutationGroup = mutationTasksController.createMutationGroup(
+      mutationCallback
     )
-  var mutationGroup = shouldCreateMutationGroup
-    ? mutationTasksController.createMutationGroup(mutationCallback)
-    : undefined
+  }
   // Overflow recovery can synchronously reset the controller from inside the
   // callback. An empty result is therefore the durable failure signal; the
   // transient overflow flag is not safe to re-read here.
   if (shouldCreateMutationGroup && !mutationGroup) {
-    return
+    if (transactionState) {
+      transactionState.$rFailed = true
+    }
+    return false
   }
   var _processChildListMutations = processChildListMutations(
     childListMutations,
@@ -474,7 +624,9 @@ export function processMutations(
     pendingRootTasksToRefresh,
     normalizationState,
     isNodePublished,
-    mutationGroup
+    mutationGroup,
+    mutationBatchContext &&
+      mutationBatchContext.$rTextReplacementByRemovedNode
   )
   var removes = _processChildListMutations.removes
   var serializedNodeIds = _processChildListMutations.serializedNodeIds
@@ -529,7 +681,10 @@ export function processMutations(
     nodePrivacyLevelCache,
     mutationTasksController,
     normalizationState,
-    currentSourceState
+    currentSourceState,
+    transactionState &&
+      (transactionState.$rHandledCharacterDataNodes ||
+        (transactionState.$rHandledCharacterDataNodes = new Set()))
   )
   consumeMutationNormalizationBudget(
     normalizationState,
@@ -550,19 +705,6 @@ export function processMutations(
     )
     return
   }
-  if (currentSourceState.overflow) {
-    completeNormalizedMutation(
-      mutationCallback,
-      mutationTasksController,
-      mutationGroup,
-      removes,
-      texts,
-      []
-    )
-    mutationTasksController.handleOverflow(currentSourceState.overflow)
-    return
-  }
-
   var pendingAttributeMutations = []
   for (
     var _b = 0, attributeMutations_1 = attributeMutations;
@@ -599,7 +741,10 @@ export function processMutations(
     nodePrivacyLevelCache,
     mutationTasksController,
     normalizationState,
-    currentSourceState
+    currentSourceState,
+    transactionState &&
+      (transactionState.$rHandledAttributeMutations ||
+        (transactionState.$rHandledAttributeMutations = new Map()))
   )
   consumeMutationNormalizationBudget(
     normalizationState,
@@ -620,24 +765,24 @@ export function processMutations(
     )
     return
   }
-  if (currentSourceState.overflow) {
-    completeNormalizedMutation(
-      mutationCallback,
-      mutationTasksController,
-      mutationGroup,
-      removes,
-      texts,
-      attributes
-    )
-    mutationTasksController.handleOverflow(currentSourceState.overflow)
-    return
-  }
   var rootTasksToRefresh = Array.from(pendingRootTasksToRefresh)
+  var refreshedRootTasks =
+    transactionState && rootTasksToRefresh.length
+      ? transactionState.$rRefreshedRootTasks ||
+        (transactionState.$rRefreshedRootTasks = new Set())
+      : undefined
   for (
     var refreshIndex = 0;
     refreshIndex < rootTasksToRefresh.length;
     refreshIndex += 1
   ) {
+    var rootTaskToRefresh = rootTasksToRefresh[refreshIndex]
+    if (
+      refreshedRootTasks &&
+      refreshedRootTasks.has(rootTaskToRefresh)
+    ) {
+      continue
+    }
     if (
       consumeMutationNormalizationBudget(
         normalizationState,
@@ -652,7 +797,7 @@ export function processMutations(
     }
     if (
       !mutationTasksController.refreshPendingRootTask(
-        rootTasksToRefresh[refreshIndex]
+        rootTaskToRefresh
       )
     ) {
       cancelNormalizedMutationGroup(
@@ -660,6 +805,9 @@ export function processMutations(
         mutationGroup
       )
       return
+    }
+    if (refreshedRootTasks) {
+      refreshedRootTasks.add(rootTaskToRefresh)
     }
   }
   if (
@@ -675,14 +823,35 @@ export function processMutations(
     )
     return
   }
-  completeNormalizedMutation(
-    mutationCallback,
-    mutationTasksController,
-    mutationGroup,
-    removes,
-    texts,
-    attributes
-  )
+  if (transactionState && !isPureAddTransaction) {
+    Array.prototype.push.apply(transactionState.$rPayload.removes, removes)
+    Array.prototype.push.apply(transactionState.$rPayload.texts, texts)
+    Array.prototype.push.apply(
+      transactionState.$rPayload.attributes,
+      attributes
+    )
+    if (mutationBatchContext.isLast) {
+      completeNormalizedMutation(
+        mutationCallback,
+        mutationTasksController,
+        mutationGroup,
+        transactionState.$rPayload.removes,
+        transactionState.$rPayload.texts,
+        transactionState.$rPayload.attributes
+      )
+      transactionState.$rCompleted = true
+    }
+  } else {
+    completeNormalizedMutation(
+      mutationCallback,
+      mutationTasksController,
+      mutationGroup,
+      removes,
+      texts,
+      attributes
+    )
+  }
+  return true
 }
 
 function shouldUseAtomicMutationGroup(
@@ -745,6 +914,9 @@ function cancelNormalizedMutationGroup(
     mutationGroup &&
     mutationTasksController.cancelMutationGroup
   ) {
+    if (mutationGroup.$rTransactionState) {
+      mutationGroup.$rTransactionState.$rFailed = true
+    }
     mutationTasksController.cancelMutationGroup(mutationGroup)
   }
 }
@@ -758,7 +930,8 @@ function processChildListMutations(
   pendingRootTasksToRefresh,
   normalizationState,
   isNodePublished,
-  mutationGroup
+  mutationGroup,
+  coalescedTextReplacementByRemovedNode
 ) {
   // First, we iterate over mutations to collect:
   //
@@ -774,8 +947,92 @@ function processChildListMutations(
   var addedAndMovedNodes = new Set()
   var removedNodes = new Map()
   var replacementNodes = new Set()
+  var singleReplacementNodes = new Map()
   for (var _i = 0, mutations_1 = mutations; _i < mutations_1.length; _i++) {
     var mutation = mutations_1[_i]
+    var coalescedTextReplacementMarker = undefined
+    var expectedTextReplacementSource
+    if (coalescedTextReplacementByRemovedNode) {
+      for (
+        var markerIndex = 0;
+        markerIndex < mutation.removedNodes.length;
+        markerIndex += 1
+      ) {
+        var markerSource = mutation.removedNodes[markerIndex]
+        var currentMarker =
+          coalescedTextReplacementByRemovedNode.get(markerSource)
+        if (currentMarker) {
+          if (coalescedTextReplacementMarker) {
+            mutationTasksController.handleOverflow({
+              reason: 'published_move_cancelled'
+            })
+            return createChildListNormalizationOverflowResult()
+          }
+          coalescedTextReplacementMarker = currentMarker
+          expectedTextReplacementSource = markerSource
+        }
+      }
+    }
+    if (coalescedTextReplacementMarker) {
+      var markerAddedNode = mutation.addedNodes[0]
+      var markerReachedFinal =
+        markerAddedNode === coalescedTextReplacementMarker[1]
+      if (
+        mutation.removedNodes.length !== 1 ||
+        mutation.addedNodes.length !== 1 ||
+        expectedTextReplacementSource.nodeType !== 3 ||
+        !markerAddedNode ||
+        markerAddedNode.nodeType !== 3 ||
+        mutation.target !== coalescedTextReplacementMarker[0] ||
+        expectedTextReplacementSource.isConnected ||
+        isNodePublished(expectedTextReplacementSource) ||
+        mutationTasksController.findPendingRootTask(
+          expectedTextReplacementSource
+        ) ||
+        (!markerReachedFinal &&
+          (markerAddedNode.isConnected ||
+            isNodePublished(markerAddedNode) ||
+            mutationTasksController.findPendingRootTask(markerAddedNode)))
+      ) {
+        mutationTasksController.handleOverflow({
+          reason: 'published_move_cancelled'
+        })
+        return createChildListNormalizationOverflowResult()
+      }
+      coalescedTextReplacementByRemovedNode.delete(
+        expectedTextReplacementSource
+      )
+      if (!markerReachedFinal) {
+        coalescedTextReplacementByRemovedNode.set(
+          markerAddedNode,
+          coalescedTextReplacementMarker
+        )
+      }
+      if (
+        consumeMutationNormalizationBudget(
+          normalizationState,
+          mutationTasksController
+        )
+      ) {
+        return createChildListNormalizationOverflowResult()
+      }
+      continue
+    }
+    if (
+      mutation.removedNodes.length === 1 &&
+      mutation.addedNodes.length === 1 &&
+      mutation.removedNodes[0] !== mutation.addedNodes[0]
+    ) {
+      singleReplacementNodes.set(
+        mutation.removedNodes[0],
+        [
+          mutation.addedNodes[0],
+          mutation.target,
+          mutation.previousSibling,
+          mutation.nextSibling
+        ]
+      )
+    }
     var hasPublishedRemoval = false
     for (
       var publishedRemovalIndex = 0;
@@ -790,7 +1047,10 @@ function processChildListMutations(
       ) {
         return createChildListNormalizationOverflowResult()
       }
-      if (isNodePublished(mutation.removedNodes[publishedRemovalIndex])) {
+      if (
+        isNodePublished(mutation.removedNodes[publishedRemovalIndex]) ||
+        replacementNodes.has(mutation.removedNodes[publishedRemovalIndex])
+      ) {
         hasPublishedRemoval = true
         break
       }
@@ -832,6 +1092,132 @@ function processChildListMutations(
         removedNodes.set(removedNode, mutation.target)
       }
       addedAndMovedNodes.delete(removedNode)
+    }
+  }
+
+  // A renderer can replace the same text/element again before the previous
+  // asynchronous add is emitted. Keep the original published removal and
+  // retarget its atomic add to the latest node. Treating the unpublished
+  // intermediate node as a cancelled published move would unnecessarily
+  // invalidate the whole replay while counters or framework text churn.
+  var singleReplacementEntries = Array.from(singleReplacementNodes)
+  for (
+    var replacementIndex = 0;
+    replacementIndex < singleReplacementEntries.length;
+    replacementIndex += 1
+  ) {
+    var replacementEntry = singleReplacementEntries[replacementIndex]
+    var replacedNode = replacementEntry[0]
+    var replacementNode = replacementEntry[1][0]
+    var replacementParent = replacementEntry[1][1]
+    var replacementDepth = 0
+    while (
+      !replacementNode.isConnected &&
+      replacementDepth < singleReplacementNodes.size
+    ) {
+      if (
+        consumeMutationNormalizationBudget(
+          normalizationState,
+          mutationTasksController
+        )
+      ) {
+        return createChildListNormalizationOverflowResult()
+      }
+      var intermediateReplacementOwner =
+        mutationTasksController.findPendingRootTask(replacementNode)
+      if (
+        isNodePublished(replacementNode) ||
+        (intermediateReplacementOwner &&
+          intermediateReplacementOwner.rootNode === replacementNode)
+      ) {
+        mutationTasksController.handleOverflow({
+          reason: 'published_move_cancelled'
+        })
+        return createChildListNormalizationOverflowResult()
+      }
+      var nextReplacement = singleReplacementNodes.get(replacementNode)
+      if (!nextReplacement || nextReplacement[1] !== replacementParent) {
+        break
+      }
+      replacementNode = nextReplacement[0]
+      replacementDepth += 1
+    }
+    var queuedReplacementSourceNode = replacementNode
+    var replacementTask = mutationTasksController.findPendingRootTask(
+      replacedNode,
+      replacementParent
+    )
+    var replacementOwner = mutationTasksController.findPendingRootTask(
+      replacementNode
+    )
+    var coalescedDetachedTextReplacement = false
+    // A hot textContent loop can detach the text node stored by an older
+    // normalization chunk before that chunk runs. Resolve only the exact live
+    // node occupying the MutationRecord's sibling slot. This is O(1), and all
+    // element moves, cross-parent moves, published intermediates, ambiguous
+    // slots and task-owner conflicts keep the existing fail-closed path.
+    if (
+      !replacementNode.isConnected &&
+      replacedNode.nodeType === 3 &&
+      replacementNode.nodeType === 3 &&
+      !isNodePublished(replacementNode) &&
+      !replacementOwner &&
+      isNodePublished(replacementParent) &&
+      (isNodePublished(replacedNode) ||
+        (replacementTask &&
+          replacementTask.rootNode === replacedNode &&
+          replacementTask.requiresBaselineOnDrop))
+    ) {
+      var currentSlotNode = findCurrentTextNodeAtReplacementSlot(
+        replacementParent,
+        replacementEntry[1][2],
+        replacementEntry[1][3]
+      )
+      var currentSlotOwner = currentSlotNode
+        ? mutationTasksController.findPendingRootTask(currentSlotNode)
+        : undefined
+      if (
+        currentSlotNode &&
+        !isNodePublished(currentSlotNode) &&
+        !currentSlotOwner
+      ) {
+        replacementNode = currentSlotNode
+        coalescedDetachedTextReplacement = true
+      }
+    }
+    if (coalescedDetachedTextReplacement) {
+      if (addedAndMovedNodes.delete(queuedReplacementSourceNode)) {
+        addedAndMovedNodes.add(replacementNode)
+      }
+      if (replacementNodes.delete(queuedReplacementSourceNode)) {
+        replacementNodes.add(replacementNode)
+      }
+      if (coalescedTextReplacementByRemovedNode) {
+        coalescedTextReplacementByRemovedNode.set(
+          queuedReplacementSourceNode,
+          [replacementParent, replacementNode]
+        )
+      }
+    }
+    if (
+      replacementTask &&
+      replacementTask.rootNode === replacedNode &&
+      !replacementOwner &&
+      !isNodePublished(replacementNode) &&
+      !replacedNode.isConnected &&
+      replacementNode.isConnected &&
+      getParentNode(replacementNode) === replacementParent
+    ) {
+      if (
+        !mutationTasksController.$rRetargetPendingRootTask(
+          replacementTask,
+          replacementNode
+        )
+      ) {
+        return createChildListNormalizationOverflowResult()
+      }
+      removedNodes.delete(replacedNode)
+      addedAndMovedNodes.delete(replacementNode)
     }
   }
 
@@ -1070,37 +1456,37 @@ function processChildListMutations(
   }
 }
 
-function hasPublishedStructuralRemoval(
-  mutations,
-  isNodePublished,
-  isNodeIgnored
+function findCurrentTextNodeAtReplacementSlot(
+  parent,
+  previousSibling,
+  nextSibling
 ) {
-  for (
-    var mutationIndex = 0;
-    mutationIndex < mutations.length;
-    mutationIndex += 1
-  ) {
-    var mutation = mutations[mutationIndex]
-    if (
-      mutation.type === 'childList' &&
-      mutation.target &&
-      mutation.target.isConnected &&
-      !isNodeIgnored(mutation.target) &&
-      mutation.removedNodes &&
-      Array.prototype.some.call(
-        mutation.removedNodes,
-        function (removedNode) {
-          return (
-            hasSerializedNode(removedNode) &&
-            isNodePublished(removedNode)
-          )
-        }
-      )
-    ) {
-      return true
-    }
+  // `undefined` means the synthetic record did not preserve native slot
+  // evidence. Never infer a replacement from the current DOM in that case.
+  if (previousSibling === undefined || nextSibling === undefined) {
+    return
   }
-  return false
+  if (
+    (previousSibling &&
+      getParentNode(previousSibling) !== parent) ||
+    (nextSibling &&
+      getParentNode(nextSibling) !== parent)
+  ) {
+    return
+  }
+  var candidate = previousSibling
+    ? previousSibling.nextSibling
+    : parent.firstChild
+  if (
+    !candidate ||
+    candidate === nextSibling ||
+    candidate.nextSibling !== nextSibling ||
+    !candidate.isConnected ||
+    candidate.nodeType !== 3
+  ) {
+    return
+  }
+  return candidate
 }
 
 function createChildListNormalizationOverflowResult() {
@@ -1117,12 +1503,13 @@ function processCharacterDataMutations(
   nodePrivacyLevelCache,
   mutationTasksController,
   normalizationState,
-  currentSourceState
+  currentSourceState,
+  handledNodes
 ) {
   var textMutations = []
 
   // Deduplicate mutations based on their target node
-  var handledNodes = new Set()
+  handledNodes = handledNodes || new Set()
   var filteredMutations = mutations.filter(function (mutation) {
     if (
       consumeMutationNormalizationBudget(
@@ -1158,15 +1545,6 @@ function processCharacterDataMutations(
     if (value === mutation.oldValue) {
       continue
     }
-    if (
-      !reserveCurrentMutationSource(
-        value,
-        currentSourceState,
-        normalizationState
-      )
-    ) {
-      break
-    }
 
     var parentNodePrivacyLevel = getNodePrivacyLevel(
       getParentNode(mutation.target),
@@ -1180,9 +1558,8 @@ function processCharacterDataMutations(
       continue
     }
 
-    textMutations.push({
-      id: getSerializedNodeId(mutation.target),
-      value: isNullUndefinedDefaultValue(
+    var serializedTextValue = truncateSerializedValue(
+      isNullUndefinedDefaultValue(
         getTextContent(
           configuration,
           mutation.target,
@@ -1190,7 +1567,24 @@ function processCharacterDataMutations(
           parentNodePrivacyLevel,
           null
         )
+      ),
+      MAX_MUTATION_SERIALIZED_VALUE_CHARACTERS
+    )
+    if (
+      !reserveCurrentMutationSource(
+        serializedTextValue,
+        currentSourceState
       )
+    ) {
+      mutationTasksController.handleOverflow({
+        reason: 'mutation_current_source_watermark',
+        mutationApproxBytes: currentSourceState.characters * 2
+      })
+      return []
+    }
+    textMutations.push({
+      id: getSerializedNodeId(mutation.target),
+      value: serializedTextValue
     })
   }
 
@@ -1203,12 +1597,13 @@ function processAttributesMutations(
   nodePrivacyLevelCache,
   mutationTasksController,
   normalizationState,
-  currentSourceState
+  currentSourceState,
+  handledElements
 ) {
   var attributeMutations = []
 
   // Deduplicate mutations based on their target node and changed attribute
-  var handledElements = new Map()
+  handledElements = handledElements || new Map()
   var filteredMutations = mutations.filter(function (mutation) {
     if (
       consumeMutationNormalizationBudget(
@@ -1250,15 +1645,6 @@ function processAttributesMutations(
     if (uncensoredValue === mutation.oldValue) {
       continue
     }
-    if (
-      !reserveCurrentMutationSource(
-        uncensoredValue,
-        currentSourceState,
-        normalizationState
-      )
-    ) {
-      break
-    }
     var privacyLevel = getNodePrivacyLevel(
       mutation.target,
       configuration.defaultPrivacyLevel,
@@ -1287,6 +1673,22 @@ function processAttributesMutations(
     } else {
       transformedValue = null
     }
+    transformedValue = truncateSerializedValue(
+      transformedValue,
+      MAX_MUTATION_SERIALIZED_VALUE_CHARACTERS
+    )
+    if (
+      !reserveCurrentMutationSource(
+        transformedValue,
+        currentSourceState
+      )
+    ) {
+      mutationTasksController.handleOverflow({
+        reason: 'mutation_current_source_watermark',
+        mutationApproxBytes: currentSourceState.characters * 2
+      })
+      return []
+    }
 
     var emittedMutation = emittedMutations.get(mutation.target)
     if (!emittedMutation) {
@@ -1306,27 +1708,16 @@ function processAttributesMutations(
 
 function reserveCurrentMutationSource(
   value,
-  currentSourceState,
-  normalizationState
+  currentSourceState
 ) {
   if (typeof value !== 'string') {
     return true
   }
-  var nextCharacterCount =
-    currentSourceState.characters + value.length
-  if (
-    value.length > SERIALIZATION_MAX_NODE_SOURCE_LENGTH ||
-    nextCharacterCount > MAX_MUTATION_CURRENT_SOURCE_CHARACTERS
-  ) {
-    currentSourceState.overflow = {
-      reason: 'mutation_source_watermark',
-      mutationRecordCount: normalizationState.mutationRecordCount,
-      mutationApproxBytes: nextCharacterCount * 2
-    }
-    return false
-  }
-  currentSourceState.characters = nextCharacterCount
-  return true
+  currentSourceState.characters += value.length
+  return (
+    currentSourceState.characters <=
+    MAX_MUTATION_CURRENT_SOURCE_CHARACTERS
+  )
 }
 
 export function sortAddedAndMovedNodes(nodes, normalizationState) {
@@ -1427,7 +1818,8 @@ export function createMutationTasksController(
   mutationPerfCb,
   mutationOverflowCb,
   mutationNodeSerializationCb,
-  isNodeIgnored
+  isNodeIgnored,
+  mutationResourceBudget
 ) {
   isNodeIgnored = isNodeIgnored || function () {
     return false
@@ -1441,6 +1833,9 @@ export function createMutationTasksController(
   var pendingRootTaskHead = 0
   var pendingRootTaskContinuation
   var pendingRootTaskCount = 0
+  var activeRootTaskCount = 0
+  var deferredRootTaskCount = 0
+  var deferredRootTaskOutstandingCount = 0
   var pendingRootTaskByRootNode = new WeakMap()
   var pendingRootTaskBySequence = new Map()
   var scheduledFlush = undefined
@@ -1449,6 +1844,7 @@ export function createMutationTasksController(
   var overflowCount = 0
   var retainedRootTaskApproxBytes = 0
   var retainedMutationGroupApproxBytes = 0
+  var retainedMutationBudgetReservation
   var completedRootTasksBySequence = new Map()
   var locallyDroppedRootNodes = new WeakSet()
 
@@ -1463,6 +1859,7 @@ export function createMutationTasksController(
     refreshAndFlushPendingRootForNode:
       refreshAndFlushPendingRootForNode,
     refreshPendingRootTask: refreshPendingRootTask,
+    $rRetargetPendingRootTask: retargetPendingRootTask,
     handlePendingRootRemoval: handlePendingRootRemoval,
     dropMutationGroupTasks: dropMutationGroupTasks,
     handleOverflow: handleOverflow,
@@ -1476,10 +1873,14 @@ export function createMutationTasksController(
       if (overflowed) {
         return false
       }
-      return processPendingRootTasks(
+      var flushResult = processPendingRootTasks(
         getCurrentTime() + MUTATION_SERIALIZATION_FLUSH_BUDGET_MS,
         true
       )
+      if (flushResult === false && deferredRootTaskOutstandingCount) {
+        return 'pending'
+      }
+      return flushResult
     },
     reset: reset,
     stop: function () {
@@ -1512,8 +1913,12 @@ export function createMutationTasksController(
     pendingRootTaskHead = 0
     pendingRootTaskContinuation = undefined
     pendingRootTaskCount = 0
+    activeRootTaskCount = 0
+    deferredRootTaskCount = 0
+    deferredRootTaskOutstandingCount = 0
     retainedRootTaskApproxBytes = 0
     retainedMutationGroupApproxBytes = 0
+    updateRetainedMutationResourceBudget()
     completedRootTasksBySequence = new Map()
     locallyDroppedRootNodes = new WeakSet()
     pendingRootTaskByRootNode = new WeakMap()
@@ -1564,6 +1969,13 @@ export function createMutationTasksController(
     }
     pendingMutationGroups.push(mutationGroup)
     retainedMutationGroupApproxBytes += mutationGroup.approxBytes
+    if (!updateRetainedMutationResourceBudget()) {
+      handleOverflow({
+        reason: AGGREGATE_RETAINED_MUTATION_WATERMARK,
+        mutationApproxBytes: getRetainedMutationApproxBytes()
+      })
+      return
+    }
     return mutationGroup
   }
 
@@ -1590,6 +2002,12 @@ export function createMutationTasksController(
     }
     mutationGroup.approxBytes += payloadApproxBytes
     retainedMutationGroupApproxBytes += payloadApproxBytes
+    if (!updateRetainedMutationResourceBudget()) {
+      return handleOverflow({
+        reason: AGGREGATE_RETAINED_MUTATION_WATERMARK,
+        mutationApproxBytes: getRetainedMutationApproxBytes()
+      })
+    }
     Array.prototype.push.apply(
       mutationGroup.payload.removes,
       payload.removes
@@ -1653,11 +2071,16 @@ export function createMutationTasksController(
       mutationGroup.active = false
       pendingMutationGroups[pendingMutationGroupHead] = undefined
       pendingMutationGroupHead += 1
+      var mutationGroupApproxBytes = mutationGroup.approxBytes
       releaseMutationGroupApproxBytes(mutationGroup)
       if (
         !mutationGroup.canceled &&
         hasMutationGroupEntries(mutationGroup.payload)
       ) {
+        approxBytesByMutationPayload.set(
+          mutationGroup.payload,
+          mutationGroupApproxBytes
+        )
         mutationGroup.callback(mutationGroup.payload)
       }
     }
@@ -1710,6 +2133,7 @@ export function createMutationTasksController(
       retainedMutationGroupApproxBytes - mutationGroup.approxBytes,
       0
     )
+    updateRetainedMutationResourceBudget()
   }
 
   function transferRetainedRootTaskToMutationGroup(
@@ -1717,9 +2141,16 @@ export function createMutationTasksController(
     mutationGroup
   ) {
     var taskApproxBytes = task.accountedApproxBytes
-    releaseRetainedRootTask(task)
+    task.isRetained = false
+    retainedRootTaskApproxBytes = Math.max(
+      retainedRootTaskApproxBytes - taskApproxBytes,
+      0
+    )
+    task.accountedApproxBytes = 0
     mutationGroup.approxBytes += taskApproxBytes
     retainedMutationGroupApproxBytes += taskApproxBytes
+    releaseActiveRootTask(task)
+    releaseDeferredRootTaskOutstanding(task)
   }
 
   function releaseMutationGroupDependency(task) {
@@ -1744,8 +2175,10 @@ export function createMutationTasksController(
     }
     overflowed = true
     overflowCount += 1
+    var shouldReportOverflow =
+      !mutationResourceBudget || mutationResourceBudget.failOnce()
     clearMutationTaskState()
-    if (mutationOverflowCb) {
+    if (shouldReportOverflow && mutationOverflowCb) {
       mutationOverflowCb(overflow)
     }
     return false
@@ -1769,25 +2202,43 @@ export function createMutationTasksController(
       }
       return true
     }
+    var canDefer = canDeferPendingRootTask(serializationOptions)
     if (
-      pendingRootTaskBySequence.size >=
+      deferredRootTaskCount &&
+      canDefer
+    ) {
+      return deferPendingRootTask(node, serializationOptions)
+    }
+    if (deferredRootTaskCount) {
+      // A non-deferred task cannot overtake an older deferred sequence: once
+      // later active tasks fill the cap, neither side can publish. Drain the
+      // older work within the normal slice before admitting the dependency.
+      if (!drainPendingRootTasksForAdmission()) {
+        return false
+      }
+      if (deferredRootTaskCount) {
+        return handleOverflow({ reason: MUTATION_ROOT_ADMISSION_WATERMARK })
+      }
+    }
+    if (
+      activeRootTaskCount >=
       MAX_PENDING_MUTATION_ROOT_TASKS
     ) {
-      if (mustDeferNormalizationEmission) {
-        return handleOverflow({
-          reason: 'mutation_root_admission_watermark'
-        })
-      }
-      processPendingRootTasks(
-        getCurrentTime() + MUTATION_SERIALIZATION_FLUSH_BUDGET_MS,
-        true
-      )
       if (
-        pendingRootTaskBySequence.size >=
+        !mustDeferNormalizationEmission &&
+        !drainPendingRootTasksForAdmission()
+      ) {
+        return false
+      }
+      if (
+        activeRootTaskCount >=
         MAX_PENDING_MUTATION_ROOT_TASKS
       ) {
+        if (canDefer) {
+          return deferPendingRootTask(node, serializationOptions)
+        }
         return handleOverflow({
-          reason: 'mutation_root_admission_watermark'
+          reason: MUTATION_ROOT_ADMISSION_WATERMARK
         })
       }
     }
@@ -1832,21 +2283,27 @@ export function createMutationTasksController(
     ) {
       if (mustDeferNormalizationEmission) {
         cancelPublicationToken(trackedSerializerTask.publicationToken)
+        if (canDeferPendingRootTask(serializationOptions)) {
+          return deferPendingRootTask(node, serializationOptions)
+        }
         return handleOverflow({
-          reason: 'mutation_root_retained_bytes_watermark'
+          reason: MUTATION_ROOT_RETAINED_BYTES_WATERMARK
         })
       }
-      processPendingRootTasks(
-        getCurrentTime() + MUTATION_SERIALIZATION_FLUSH_BUDGET_MS,
-        true
-      )
+      if (!drainPendingRootTasksForAdmission()) {
+        cancelPublicationToken(trackedSerializerTask.publicationToken)
+        return false
+      }
       if (
         getRetainedMutationApproxBytes() + serializerTask.approxBytes >
         MAX_PENDING_MUTATION_ROOT_APPROX_BYTES
       ) {
         cancelPublicationToken(trackedSerializerTask.publicationToken)
+        if (canDeferPendingRootTask(serializationOptions)) {
+          return deferPendingRootTask(node, serializationOptions)
+        }
         return handleOverflow({
-          reason: 'mutation_root_retained_bytes_watermark'
+          reason: MUTATION_ROOT_RETAINED_BYTES_WATERMARK
         })
       }
     }
@@ -1855,10 +2312,7 @@ export function createMutationTasksController(
       sequence: nextTaskSequence++,
       rootNode: node,
       parentId: getSerializedNodeId(getParentNode(node)),
-      nextId: getNextSibling(
-        node,
-        serializationOptions.serializedNodeIds
-      ),
+      nextId: null,
       serializerTask: serializerTask,
       publicationToken: trackedSerializerTask.publicationToken,
       serializedNodeIds: serializationOptions.serializedNodeIds,
@@ -1872,18 +2326,114 @@ export function createMutationTasksController(
         : undefined,
       requiresBaselineOnDrop: Boolean(
         serializationOptions.requiresBaselineOnDrop
-      )
+      ),
+      isActiveSerializerTask: true
     }
     if (task.mutationGroup) {
       task.mutationGroup.pendingTaskCount += 1
     }
     retainedRootTaskApproxBytes += task.accountedApproxBytes
-    locallyDroppedRootNodes.delete(node)
+    activeRootTaskCount += 1
+    if (!updateRetainedMutationResourceBudget()) {
+      cancelPublicationToken(task.publicationToken)
+      return handleOverflow({
+        reason: AGGREGATE_RETAINED_MUTATION_WATERMARK,
+        mutationApproxBytes: getRetainedMutationApproxBytes()
+      })
+    }
+    clearLocallyDroppedRootNode(node)
     enqueuePendingRootTask(task)
     pendingRootTaskByRootNode.set(node, task)
     pendingRootTaskBySequence.set(task.sequence, task)
     schedulePendingRootTasks()
     return true
+  }
+
+  function drainPendingRootTasksForAdmission() {
+    var drainGeneration = generation
+    var overflowCountBeforeDrain = overflowCount
+    processPendingRootTasks(
+      getCurrentTime() + MUTATION_SERIALIZATION_FLUSH_BUDGET_MS,
+      true
+    )
+    return (
+      !stopped &&
+      generation === drainGeneration &&
+      overflowCount === overflowCountBeforeDrain
+    )
+  }
+
+  function canDeferPendingRootTask(serializationOptions) {
+    return Boolean(
+      !serializationOptions.requiresBaselineOnDrop &&
+        !isActiveMutationGroup(serializationOptions.mutationGroup)
+    )
+  }
+
+  function deferPendingRootTask(node, serializationOptions) {
+    // A dropped unpublished add has no replay-tree dependency yet.  If the
+    // lightweight queue itself reaches its hard bound, degrading only that
+    // root is safer than replacing (and synchronously serializing) the whole
+    // document under the same load spike.
+    if (
+      deferredRootTaskCount >= MAX_DEFERRED_MUTATION_ROOT_TASKS ||
+      getRetainedMutationApproxBytes() +
+        DEFERRED_MUTATION_ROOT_TASK_APPROX_BYTES >
+        MAX_PENDING_MUTATION_ROOT_APPROX_BYTES
+    ) {
+      reportLocalRootDrop(
+        deferredRootTaskCount >= MAX_DEFERRED_MUTATION_ROOT_TASKS
+          ? MUTATION_ROOT_ADMISSION_WATERMARK
+          : MUTATION_ROOT_RETAINED_BYTES_WATERMARK
+      )
+      markLocallyDroppedRootNode(node)
+      return true
+    }
+    var task = {
+      generation: generation,
+      sequence: nextTaskSequence++,
+      rootNode: node,
+      serializedNodeIds: serializationOptions.serializedNodeIds,
+      refreshCount: 0,
+      accountedApproxBytes: DEFERRED_MUTATION_ROOT_TASK_APPROX_BYTES,
+      isRetained: true,
+      isDeferred: true,
+      wasDeferred: true,
+      requiresBaselineOnDrop: false
+    }
+    retainedRootTaskApproxBytes += task.accountedApproxBytes
+    if (!updateRetainedMutationResourceBudget()) {
+      retainedRootTaskApproxBytes = Math.max(
+        retainedRootTaskApproxBytes - task.accountedApproxBytes,
+        0
+      )
+      task.isRetained = false
+      task.accountedApproxBytes = 0
+      reportLocalRootDrop(AGGREGATE_RETAINED_MUTATION_WATERMARK)
+      markLocallyDroppedRootNode(node)
+      return true
+    }
+    clearLocallyDroppedRootNode(node)
+    deferredRootTaskCount += 1
+    deferredRootTaskOutstandingCount += 1
+    pendingRootTaskByRootNode.set(node, task)
+    pendingRootTaskBySequence.set(task.sequence, task)
+    enqueuePendingRootTask(task)
+    schedulePendingRootTasks()
+    return true
+  }
+
+  function reportLocalRootDrop(reason) {
+    if (mutationPerfCb) {
+      mutationPerfCb(
+        __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+          ? {
+              mutationLocalDropCount: 1,
+              mutationLocalDropReason: reason
+            }
+          : reason
+      )
+    }
   }
 
   function findPendingRootTask(node, fallbackAncestor) {
@@ -1943,7 +2493,7 @@ export function createMutationTasksController(
     })
   }
 
-  function refreshPendingRootTask(task) {
+  function refreshPendingRootTask(task, activateDeferredTask) {
     if (!task || task.generation !== generation || task.isCancelled) {
       return true
     }
@@ -1988,7 +2538,15 @@ export function createMutationTasksController(
       cancelPendingRootTask(task)
       return true
     }
-    if (task.refreshCount >= MAX_MUTATION_ROOT_TASK_REFRESH_COUNT) {
+    var wasDeferred = task.isDeferred
+    if (wasDeferred && !activateDeferredTask) {
+      schedulePendingRootTasks()
+      return true
+    }
+    if (
+      !wasDeferred &&
+      task.refreshCount >= MAX_MUTATION_ROOT_TASK_REFRESH_COUNT
+    ) {
       return dropUnpublishedRootTask(
         task,
         taskRequiresBaselineOnDrop(task)
@@ -2002,17 +2560,21 @@ export function createMutationTasksController(
     // are not present in the rebuilt subtree must immediately fall back to
     // their last published parent instead of remaining blocked by a token that
     // can no longer be emitted.
-    task.requiresBaselineOnDrop = taskRequiresBaselineOnDrop(task)
-    cancelPublicationToken(task.publicationToken)
+    if (!wasDeferred) {
+      task.requiresBaselineOnDrop = taskRequiresBaselineOnDrop(task)
+      cancelPublicationToken(task.publicationToken)
+    }
     var trackedSerializerTask = createTrackedMutationSerializerTask(
       task.rootNode,
       {
+        serializedNodeIds: task.serializedNodeIds,
         parentNodePrivacyLevel: parentNodePrivacyLevel,
         serializationContext: {
           status: SerializationContextStatus.MUTATION,
           shadowRootsController: shadowRootsController
         },
-        configuration: configuration
+        configuration: configuration,
+        requiresBaselineOnDrop: taskRequiresBaselineOnDrop(task)
       }
     )
     task.publicationToken = trackedSerializerTask.publicationToken
@@ -2026,7 +2588,9 @@ export function createMutationTasksController(
       cancelPendingRootTask(task)
       return true
     }
-    task.refreshCount += 1
+    if (!wasDeferred) {
+      task.refreshCount += 1
+    }
     if (serializerTask.isMaxNodeComplexityReached) {
       return dropUnpublishedRootTask(
         task,
@@ -2045,27 +2609,73 @@ export function createMutationTasksController(
         true
       )
     }
-    updateRetainedRootTaskApproxBytes(task, serializerTask.approxBytes)
+    if (
+      wasDeferred &&
+      getRetainedMutationApproxBytes() -
+        task.accountedApproxBytes +
+        serializerTask.approxBytes >
+        MAX_PENDING_MUTATION_ROOT_APPROX_BYTES
+    ) {
+      cancelPublicationToken(task.publicationToken)
+      task.publicationToken = undefined
+      return 'blocked'
+    }
+    if (
+      !updateRetainedRootTaskApproxBytes(
+        task,
+        serializerTask.approxBytes
+      )
+    ) {
+      return handleOverflow({
+        reason: AGGREGATE_RETAINED_MUTATION_WATERMARK,
+        mutationApproxBytes: getRetainedMutationApproxBytes()
+      })
+    }
     if (
       getRetainedMutationApproxBytes() >
       MAX_PENDING_MUTATION_ROOT_APPROX_BYTES
     ) {
       return handleOverflow({
-        reason: 'mutation_root_retained_bytes_watermark'
+        reason: MUTATION_ROOT_RETAINED_BYTES_WATERMARK
       })
     }
     removeCompletedRootTask(task)
     task.parentId = getSerializedNodeId(parentNode)
-    task.nextId = getNextSibling(
-      task.rootNode,
-      task.serializedNodeIds
-    )
+    task.nextId = null
     task.serializerTask = serializerTask
     task.isCompleted = false
     task.isCancelled = false
-    enqueuePendingRootTask(task)
-    schedulePendingRootTasks()
+    if (wasDeferred) {
+      removeDeferredRootTaskQueueMembership(task)
+      task.isActiveSerializerTask = true
+      activeRootTaskCount += 1
+    } else {
+      enqueuePendingRootTask(task)
+      schedulePendingRootTasks()
+    }
     return true
+  }
+
+  function retargetPendingRootTask(task, replacementNode) {
+    if (
+      !task ||
+      task.generation !== generation ||
+      task.isCancelled ||
+      !replacementNode
+    ) {
+      return true
+    }
+    if (
+      pendingRootTaskByRootNode.get(task.rootNode) !== task ||
+      pendingRootTaskByRootNode.get(replacementNode)
+    ) {
+      return handleOverflow({ reason: 'published_move_cancelled' })
+    }
+    pendingRootTaskByRootNode.delete(task.rootNode)
+    task.rootNode = replacementNode
+    clearLocallyDroppedRootNode(replacementNode)
+    pendingRootTaskByRootNode.set(replacementNode, task)
+    return refreshPendingRootTask(task)
   }
 
   function handlePendingRootRemoval(task, node) {
@@ -2100,6 +2710,7 @@ export function createMutationTasksController(
     cancelPublicationToken(task.publicationToken)
     releaseMutationGroupDependency(task)
     task.isCancelled = true
+    removeDeferredRootTaskQueueMembership(task)
     if (task.isQueued) {
       task.isQueued = false
       pendingRootTaskCount -= 1
@@ -2129,7 +2740,7 @@ export function createMutationTasksController(
           recoveryReason || 'published_move_serialization_watermark'
       })
     }
-    markLocallyDroppedRootNode(task.rootNode, task)
+    markLocallyDroppedRootNode(task.rootNode)
     cancelPendingRootTask(task)
     return true
   }
@@ -2179,14 +2790,14 @@ export function createMutationTasksController(
         reason: 'published_move_normalization_budget'
       })
     }
-    // Mark the whole group before cancellation, then repair references held by
-    // tasks from later groups so they cannot point at a dropped sibling.
+    // Mark the whole group before cancellation. Sibling anchors are resolved
+    // again immediately before emission, so no eager pending-task scan is
+    // needed here.
     tasks.forEach(function (task) {
       markSharedLocallyDroppedRootNode(task.rootNode)
       locallyDroppedRootNodes.add(task.rootNode)
     })
     tasks.forEach(function (task) {
-      repairPendingNextSiblingReferences(task.rootNode, task)
       cancelPendingRootTask(task)
     })
   }
@@ -2205,10 +2816,9 @@ export function createMutationTasksController(
     return Boolean(task && task.requiresBaselineOnDrop)
   }
 
-  function markLocallyDroppedRootNode(node, droppedTask) {
+  function markLocallyDroppedRootNode(node) {
     markSharedLocallyDroppedRootNode(node)
     locallyDroppedRootNodes.add(node)
-    repairPendingNextSiblingReferences(node, droppedTask)
   }
 
   function markSharedLocallyDroppedRootNode(node) {
@@ -2218,6 +2828,24 @@ export function createMutationTasksController(
     if (dependencyState) {
       dependencyState.$rLocallyDroppedRoots.add(node)
     }
+  }
+
+  function clearLocallyDroppedRootNode(node) {
+    locallyDroppedRootNodes.delete(node)
+    var dependencyState = getMutationDependencyState(
+      shadowRootsController
+    )
+    if (dependencyState) {
+      dependencyState.$rLocallyDroppedRoots.delete(node)
+    }
+  }
+
+  function removeDeferredRootTaskQueueMembership(task) {
+    if (!task || !task.isDeferred) {
+      return
+    }
+    task.isDeferred = false
+    deferredRootTaskCount = Math.max(deferredRootTaskCount - 1, 0)
   }
 
   function schedulePendingRootTasks() {
@@ -2238,10 +2866,10 @@ export function createMutationTasksController(
     if (stopped || overflowed) {
       return true
     }
+    if (flushCompletedTasks && completedRootTasksBySequence.size) {
+      emitCompletedRootTasks()
+    }
     if (!pendingRootTaskCount) {
-      if (flushCompletedTasks && completedRootTasksBySequence.size) {
-        emitCompletedRootTasks()
-      }
       return true
     }
 
@@ -2258,6 +2886,40 @@ export function createMutationTasksController(
         continue
       }
 
+      if (task.isDeferred) {
+        if (activeRootTaskCount >= MAX_PENDING_MUTATION_ROOT_TASKS) {
+          emitCompletedRootTasks()
+          if (stopped || overflowed) {
+            return false
+          }
+          if (activeRootTaskCount >= MAX_PENDING_MUTATION_ROOT_TASKS) {
+            return handleOverflow({
+              reason: MUTATION_ROOT_ADMISSION_WATERMARK
+            })
+          }
+        }
+        var activationResult = refreshPendingRootTask(task, true)
+        if (activationResult === 'blocked') {
+          emitCompletedRootTasks()
+          if (stopped || overflowed) {
+            return false
+          }
+          activationResult = refreshPendingRootTask(task, true)
+          if (activationResult === 'blocked') {
+            return handleOverflow({
+              reason: MUTATION_ROOT_RETAINED_BYTES_WATERMARK,
+              mutationApproxBytes: getRetainedMutationApproxBytes()
+            })
+          }
+        }
+        if (activationResult === false) {
+          return false
+        }
+        if (task.isCancelled || !task.isActiveSerializerTask) {
+          continue
+        }
+      }
+
       var completed = task.serializerTask.advance(
         deadline,
         MUTATION_SERIALIZATION_MAX_NODE_COUNT,
@@ -2266,10 +2928,18 @@ export function createMutationTasksController(
       if (task.generation !== generation) {
         continue
       }
-      updateRetainedRootTaskApproxBytes(
-        task,
-        task.serializerTask.approxBytes
-      )
+      if (
+        !updateRetainedRootTaskApproxBytes(
+          task,
+          task.serializerTask.approxBytes
+        )
+      ) {
+        handleOverflow({
+          reason: AGGREGATE_RETAINED_MUTATION_WATERMARK,
+          mutationApproxBytes: getRetainedMutationApproxBytes()
+        })
+        return false
+      }
 
       if (
         !completed &&
@@ -2315,7 +2985,7 @@ export function createMutationTasksController(
           MAX_PENDING_MUTATION_ROOT_APPROX_BYTES
         ) {
           handleOverflow({
-            reason: 'mutation_root_retained_bytes_watermark'
+            reason: MUTATION_ROOT_RETAINED_BYTES_WATERMARK
           })
           return false
         }
@@ -2374,7 +3044,7 @@ export function createMutationTasksController(
     }
 
     if (!readyTasks.length) {
-      if (pendingRootTaskCount) {
+      if (pendingRootTaskCount || deferredRootTaskCount) {
         schedulePendingRootTasks()
       }
       return
@@ -2382,6 +3052,42 @@ export function createMutationTasksController(
 
     var emissionGeneration = generation
     var ungroupedAdds = []
+    var ungroupedAddsApproxBytes = 64
+    var queuedRootParentIds = new Map()
+    var siblingResolutionState = [
+      getCurrentTime() + MUTATION_NORMALIZATION_MAX_DURATION_MS,
+      0,
+      false,
+      new Map(),
+      new Map()
+    ]
+
+    for (
+      var resolutionIndex = 0;
+      resolutionIndex < readyTasks.length;
+      resolutionIndex += 1
+    ) {
+      var resolutionTask = readyTasks[resolutionIndex]
+      resolutionTask.nextId = getNextSibling(
+        resolutionTask.rootNode,
+        queuedRootParentIds,
+        true,
+        siblingResolutionState,
+        resolutionTask.parentId,
+        resolutionTask.sequence
+      )
+      if (siblingResolutionState[2]) {
+        handleOverflow({
+          reason: 'mutation_sibling_resolution_watermark',
+          mutationNodeCount: siblingResolutionState[1]
+        })
+        return
+      }
+      queuedRootParentIds.set(
+        resolutionTask.serializerTask.serializedNode.id,
+        resolutionTask.parentId
+      )
+    }
 
     function isEmissionGenerationActive() {
       return (
@@ -2396,13 +3102,17 @@ export function createMutationTasksController(
         return true
       }
       var adds = ungroupedAdds
+      var approxBytes = ungroupedAddsApproxBytes
       ungroupedAdds = []
-      mutationCallback({
+      ungroupedAddsApproxBytes = 64
+      var payload = {
         adds: adds,
         removes: [],
         texts: [],
         attributes: []
-      })
+      }
+      approxBytesByMutationPayload.set(payload, approxBytes)
+      mutationCallback(payload)
       return isEmissionGenerationActive()
     }
 
@@ -2435,6 +3145,7 @@ export function createMutationTasksController(
           activeMutationGroup
         )
       } else {
+        ungroupedAddsApproxBytes += task.accountedApproxBytes
         releaseRetainedRootTask(task)
       }
       var add = {
@@ -2473,11 +3184,12 @@ export function createMutationTasksController(
 
   function updateRetainedRootTaskApproxBytes(task, approxBytes) {
     if (!task.isRetained) {
-      return
+      return true
     }
     retainedRootTaskApproxBytes +=
       approxBytes - task.accountedApproxBytes
     task.accountedApproxBytes = approxBytes
+    return updateRetainedMutationResourceBudget()
   }
 
   function releaseRetainedRootTask(task) {
@@ -2490,6 +3202,52 @@ export function createMutationTasksController(
       retainedRootTaskApproxBytes - task.accountedApproxBytes
     )
     task.accountedApproxBytes = 0
+    updateRetainedMutationResourceBudget()
+    releaseActiveRootTask(task)
+    releaseDeferredRootTaskOutstanding(task)
+  }
+
+  function releaseActiveRootTask(task) {
+    if (!task || !task.isActiveSerializerTask) {
+      return
+    }
+    task.isActiveSerializerTask = false
+    activeRootTaskCount = Math.max(activeRootTaskCount - 1, 0)
+  }
+
+  function releaseDeferredRootTaskOutstanding(task) {
+    if (!task || !task.wasDeferred) {
+      return
+    }
+    task.wasDeferred = false
+    deferredRootTaskOutstandingCount = Math.max(
+      deferredRootTaskOutstandingCount - 1,
+      0
+    )
+  }
+
+  function updateRetainedMutationResourceBudget() {
+    if (!mutationResourceBudget) {
+      return true
+    }
+    var approxBytes = getRetainedMutationApproxBytes()
+    if (!approxBytes) {
+      if (retainedMutationBudgetReservation) {
+        retainedMutationBudgetReservation()
+        retainedMutationBudgetReservation = undefined
+      }
+      return true
+    }
+    if (!retainedMutationBudgetReservation) {
+      retainedMutationBudgetReservation = mutationResourceBudget.reserve(
+        'retained',
+        { approxBytes: approxBytes }
+      )
+      return Boolean(retainedMutationBudgetReservation)
+    }
+    return retainedMutationBudgetReservation.update({
+      approxBytes: approxBytes
+    })
   }
 
   function createTrackedMutationSerializerTask(node, serializationOptions) {
@@ -2508,10 +3266,14 @@ export function createMutationTasksController(
       node,
       assign({}, serializationOptions, {
         serializationContext: serializationContext,
-        onSerializedNode: function (serializedNode, parentNode) {
+        onSerializedNode: function (node, parentNode) {
+          // A previously degraded node can later be published as a descendant
+          // of a wider root task. Clear both local markers for every staged
+          // node, not only when that node becomes a root task itself.
+          clearLocallyDroppedRootNode(node)
           if (mutationNodeSerializationCb) {
             mutationNodeSerializationCb(
-              serializedNode,
+              node,
               parentNode,
               publicationToken
             )
@@ -2536,28 +3298,6 @@ export function createMutationTasksController(
     ) {
       nextEmitSequence += 1
     }
-  }
-
-  function repairPendingNextSiblingReferences(
-    droppedRootNode,
-    droppedTask
-  ) {
-    var droppedRootId = getSerializedNodeId(droppedRootNode)
-    if (!droppedRootId) {
-      return
-    }
-    pendingRootTaskBySequence.forEach(function (task) {
-      if (
-        task !== droppedTask &&
-        task.nextId === droppedRootId &&
-        !task.isCancelled
-      ) {
-        task.nextId = getNextSibling(
-          task.rootNode,
-          task.serializedNodeIds
-        )
-      }
-    })
   }
 
   function enqueuePendingRootTask(task) {
@@ -2616,28 +3356,155 @@ export function createMutationTasksController(
     }
   }
 
-  function getNextSibling(node, serializedNodeIds) {
+  function getNextSibling(
+    node,
+    serializedNodeIds,
+    requireQueued,
+    resolutionState,
+    expectedParentId,
+    taskSequence
+  ) {
+    if (
+      requireQueued &&
+      getSerializedNodeId(getParentNode(node)) !== expectedParentId
+    ) {
+      // The native move is still waiting in MutationBatch. Emit the old-parent
+      // add without a cross-parent anchor; the later normalized move will place
+      // it under the current parent.
+      return null
+    }
     var nextSibling = node.nextSibling
+    var visitedNodes = resolutionState ? [] : undefined
     while (nextSibling) {
+      if (
+        resolutionState &&
+        consumeSiblingResolutionBudget(resolutionState)
+      ) {
+        return null
+      }
       if (hasSerializedNode(nextSibling)) {
         var nextSiblingId = getSerializedNodeId(nextSibling)
+        var pendingNextSiblingTask = requireQueued
+          ? findPendingRootTask(nextSibling)
+          : undefined
+        var serializedSiblingIsQueuedInCurrentParent = Boolean(
+          serializedNodeIds && serializedNodeIds.has(nextSiblingId)
+        )
+        if (
+          serializedSiblingIsQueuedInCurrentParent &&
+          requireQueued
+        ) {
+          serializedSiblingIsQueuedInCurrentParent =
+            serializedNodeIds.get(nextSiblingId) ===
+            getSerializedNodeId(getParentNode(nextSibling))
+        }
         if (
           !locallyDroppedRootNodes.has(nextSibling) &&
-          ((serializedNodeIds &&
-            serializedNodeIds.has(nextSiblingId)) ||
-            !isIgnoredNode(nextSibling))
+          (!pendingNextSiblingTask ||
+            serializedSiblingIsQueuedInCurrentParent) &&
+          (serializedSiblingIsQueuedInCurrentParent ||
+            !isIgnoredNode(nextSibling, requireQueued))
         ) {
-          return nextSiblingId
+          return finalizeSiblingResolution(
+            resolutionState,
+            visitedNodes,
+            nextSiblingId,
+            Infinity
+          )
         }
+        var cachedMinSequence =
+          resolutionState &&
+          resolutionState[4].get(nextSibling)
+        if (
+          cachedMinSequence !== undefined &&
+          cachedMinSequence >= taskSequence
+        ) {
+          return finalizeSiblingResolution(
+            resolutionState,
+            visitedNodes,
+            resolutionState[3].get(nextSibling),
+            cachedMinSequence
+          )
+        }
+        if (visitedNodes) {
+          visitedNodes.push(
+            nextSibling,
+            pendingNextSiblingTask
+              ? pendingNextSiblingTask.sequence
+              : Infinity
+          )
+        }
+      } else if (visitedNodes) {
+        var cachedIgnoredMinSequence =
+          resolutionState[4].get(nextSibling)
+        if (
+          cachedIgnoredMinSequence !== undefined &&
+          cachedIgnoredMinSequence >= taskSequence
+        ) {
+          return finalizeSiblingResolution(
+            resolutionState,
+            visitedNodes,
+            resolutionState[3].get(nextSibling),
+            cachedIgnoredMinSequence
+          )
+        }
+        visitedNodes.push(nextSibling, Infinity)
       }
       nextSibling = nextSibling.nextSibling
     }
-    return null
+    return finalizeSiblingResolution(
+      resolutionState,
+      visitedNodes,
+      null,
+      Infinity
+    )
   }
 
-  function isIgnoredNode(node) {
+  function finalizeSiblingResolution(
+    resolutionState,
+    visitedNodes,
+    nextId,
+    minPendingSequence
+  ) {
+    if (!resolutionState) {
+      return nextId
+    }
+    for (
+      var index = visitedNodes.length - 2;
+      index >= 0;
+      index -= 2
+    ) {
+      if (consumeSiblingResolutionBudget(resolutionState)) {
+        return null
+      }
+      minPendingSequence = Math.min(
+        minPendingSequence,
+        visitedNodes[index + 1]
+      )
+      resolutionState[3].set(visitedNodes[index], nextId)
+      resolutionState[4].set(visitedNodes[index], minPendingSequence)
+    }
+    return nextId
+  }
+
+  function consumeSiblingResolutionBudget(resolutionState) {
+    resolutionState[1] += 1
+    if (
+      resolutionState[1] >= MAX_PENDING_MUTATION_ROOT_TASKS * 32 ||
+      (resolutionState[1] %
+          MUTATION_NORMALIZATION_TIME_CHECK_INTERVAL ===
+        0 &&
+        getCurrentTime() >= resolutionState[0])
+    ) {
+      resolutionState[2] = true
+      return true
+    }
+    return false
+  }
+
+  function isIgnoredNode(node, includeQueued) {
     try {
-      return isNodeIgnored(node)
+      return isNodeIgnored(node, includeQueued)
     } catch (_) {
       return true
     }

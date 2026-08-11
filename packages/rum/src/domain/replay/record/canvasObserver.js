@@ -136,20 +136,28 @@ export function createCanvasObserver(options) {
   var onMutationDebug = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
     ? options.onMutationDebug || function () {}
     : undefined
-  var now = options.now || Date.now
+  var now = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.now || Date.now
+    : Date.now
   var encodeBridge =
     options.encodeBridge || createCanvasEncodeBridge(configuration)
   var frameSignatureExtractor =
-    options.frameSignatureExtractor || createCanvasFrameSignatureExtractor()
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+      options.frameSignatureExtractor) ||
+    createCanvasFrameSignatureExtractor()
   var flushMutations = options.flushMutations
   var configuredEncodedDataUrlCacheMaxCharacters =
-    options.encodedDataUrlCacheMaxCharacters
+    __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? options.encodedDataUrlCacheMaxCharacters
+      : undefined
   var encodedDataUrlCacheMaxCharacters =
     typeof configuredEncodedDataUrlCacheMaxCharacters === 'number' &&
     isFinite(configuredEncodedDataUrlCacheMaxCharacters)
       ? Math.max(0, Math.floor(configuredEncodedDataUrlCacheMaxCharacters))
       : DEFAULT_ENCODED_DATA_URL_CACHE_MAX_CHARACTERS
-  var weakRefFactory = options.weakRefFactory
+  var weakRefFactory = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.weakRefFactory
+    : undefined
   if (!weakRefFactory && typeof WeakRef === 'function') {
     weakRefFactory = function (value) {
       return new WeakRef(value)

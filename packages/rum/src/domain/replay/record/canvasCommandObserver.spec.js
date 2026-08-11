@@ -515,6 +515,34 @@ describe('replay/record/canvasCommandObserver', () => {
     )
   })
 
+  it('should flush a command batch without stopping capture', () => {
+    var emit = jasmine.createSpy('emit')
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration(),
+      emit: emit,
+      getSerializedNodeId: function (node) {
+        return node && node.__sn && node.__sn.id
+      }
+    })
+    var canvas = document.createElement('canvas')
+    canvas.__sn = { id: 83 }
+    var context = canvas.getContext('2d')
+
+    context.fillRect(1, 2, 3, 4)
+    recorder.flush()
+    context.clearRect(5, 6, 7, 8)
+    recorder.flush()
+
+    expect(emit.calls.count()).toBe(2)
+    expect(emit.calls.argsFor(0)[0].data.commands[0]).toEqual(
+      jasmine.objectContaining({ property: 'fillRect' })
+    )
+    expect(emit.calls.argsFor(1)[0].data.commands[0]).toEqual(
+      jasmine.objectContaining({ property: 'clearRect' })
+    )
+    recorder.stop()
+  })
+
   it('should not snapshot serialized canvases on startup without a known 2d context', () => {
     var patchContext = jasmine.createSpy('patchContext')
     var patchSharedPrototype = jasmine.createSpy('patchSharedPrototype')
@@ -682,6 +710,47 @@ describe('replay/record/canvasCommandObserver', () => {
           jasmine.objectContaining({
             canvasId: 18,
             ok: true
+          })
+        ]
+      })
+    )
+    recorder.stop()
+  })
+
+  it('should report failed fallback snapshots as unsuccessful', async () => {
+    var snapshotCanvas = jasmine
+      .createSpy('snapshotCanvas')
+      .and.returnValue(
+        Promise.resolve({ ok: false, reason: 'encode_failed' })
+      )
+    var onDebug = jasmine.createSpy('onDebug')
+    var canvas = document.createElement('canvas')
+    var recorder = startCanvasCommandCapture({
+      configuration: createConfiguration(),
+      emit: jasmine.createSpy('emit'),
+      snapshotCanvas: snapshotCanvas,
+      onDebug: onDebug,
+      getSerializedNodeId: function () {
+        return 19
+      },
+      getCanvases: function () {
+        return [canvas]
+      }
+    })
+
+    canvas.getContext('2d')
+    recorder.scanExistingCanvases()
+    await waitForAsyncSnapshotDebug()
+
+    expect(onDebug).toHaveBeenCalledWith(
+      jasmine.objectContaining({
+        status: 'completed',
+        selectedCanvasCount: 0,
+        results: [
+          jasmine.objectContaining({
+            canvasId: 19,
+            ok: false,
+            reason: 'encode_failed'
           })
         ]
       })
@@ -1990,9 +2059,10 @@ describe('replay/record/canvasCommandObserver', () => {
     recorder.stop()
   })
 
-  it('should clamp extreme fallback concurrency and queue sizes', async () => {
+  it('should paginate more than 64 dirty fallbacks without dropping them', async () => {
     var microtasks = []
     var snapshotResolvers = []
+    var canvases = []
     var snapshotCanvas = jasmine
       .createSpy('snapshotCanvas')
       .and.callFake(function () {
@@ -2008,7 +2078,7 @@ describe('replay/record/canvasCommandObserver', () => {
       emit: jasmine.createSpy('emit'),
       snapshotCanvas: snapshotCanvas,
       getCanvases: function () {
-        return []
+        return canvases
       },
       getSerializedNodeId: function (canvas) {
         return canvas.__sn && canvas.__sn.id
@@ -2027,6 +2097,7 @@ describe('replay/record/canvasCommandObserver', () => {
       canvas.__sn = { id: 200 + canvasIndex }
       var context = canvas.getContext('2d')
       context.fillStyle = context.createLinearGradient(0, 0, 1, 1)
+      canvases.push(canvas)
     }
 
     microtasks.shift()()
@@ -2035,7 +2106,7 @@ describe('replay/record/canvasCommandObserver', () => {
     expect(snapshotCanvas).toHaveBeenCalledTimes(4)
 
     var resolvedSnapshotCount = 0
-    for (var drainRound = 0; drainRound < 16; drainRound += 1) {
+    for (var drainRound = 0; drainRound < 32; drainRound += 1) {
       while (resolvedSnapshotCount < snapshotResolvers.length) {
         snapshotResolvers[resolvedSnapshotCount]({ ok: true })
         resolvedSnapshotCount += 1
@@ -2048,9 +2119,7 @@ describe('replay/record/canvasCommandObserver', () => {
       await Promise.resolve()
     }
 
-    // The active queue and retry queue retain one fixed 64-entry page. The
-    // rest are intentionally dropped instead of growing with the user value.
-    expect(snapshotCanvas).toHaveBeenCalledTimes(64)
+    expect(snapshotCanvas).toHaveBeenCalledTimes(100)
     recorder.stop()
   })
 

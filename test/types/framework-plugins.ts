@@ -1,6 +1,11 @@
 import { datafluxRum } from '@cloudcare/browser-rum'
 import { datafluxRum as slimRum } from '@cloudcare/browser-rum-slim'
 import {
+  datafluxRumWebGL,
+  webglReplayPlugin,
+  type WebGLReplayPlugin
+} from '@cloudcare/browser-rum-webgl'
+import {
   ExperimentalFeature,
   ResourceType
 } from '@cloudcare/browser-core'
@@ -88,7 +93,8 @@ datafluxRum.init({
     vuePlugin({ router: true }),
     angularPlugin({ router: true }),
     nextjsPlugin(),
-    nuxtRumPlugin({ router: nuxtRouter })
+    nuxtRumPlugin({ router: nuxtRouter }),
+    webglReplayPlugin()
   ]
 })
 
@@ -100,8 +106,40 @@ slimRum.init({
 })
 
 const boundary: typeof ReactErrorBoundary = ReactErrorBoundary
+const replayWebGLPlugin: WebGLReplayPlugin =
+  datafluxRumWebGL.webglReplayPlugin()
+const replayPerformance = datafluxRum.getReplayPerformanceForDebug()
+if (replayPerformance) {
+  const mutationLocalDropCount: number =
+    replayPerformance.mutationLocalDropCount
+  const mutationLocalDropLastReason: string | undefined =
+    replayPerformance.mutationLocalDropLastReason
+  const mutationDropRecoveryCount: number =
+    replayPerformance.mutationDropRecoveryCount
+  const mutationDropRecoveryLastReason: string | undefined =
+    replayPerformance.mutationDropRecoveryLastReason
+  const admissionGapRecoveryCount: number =
+    replayPerformance.admissionGapRecoveryCount
+  const admissionGapRecoveryLastReason: string | undefined =
+    replayPerformance.admissionGapRecoveryLastReason
+  const replayResetCount: number = replayPerformance.replayResetCount
+  const replayResetLastReason: string | undefined =
+    replayPerformance.replayResetLastReason
+  const replaySegmentsLocked: boolean =
+    replayPerformance.replaySegmentsLocked
+  void mutationLocalDropCount
+  void mutationLocalDropLastReason
+  void mutationDropRecoveryCount
+  void mutationDropRecoveryLastReason
+  void admissionGapRecoveryCount
+  void admissionGapRecoveryLastReason
+  void replayResetCount
+  void replayResetLastReason
+  void replaySegmentsLocked
+}
 const boundaryProps: ErrorBoundaryProps = { fallback: null }
 void boundary
+void replayWebGLPlugin
 void boundaryProps
 void webSocketResourceType
 void reactRouter

@@ -43,10 +43,11 @@ export function startRumAssembly(
   getCommonContext,
   reportError
 ) {
-  modifiableFieldPathsByEvent[RumEventType.VIEW] = {
-    ...USER_CUSTOMIZABLE_FIELD_PATHS,
-    ...VIEW_MODIFIABLE_FIELD_PATHS
-  }
+  modifiableFieldPathsByEvent[RumEventType.VIEW] = assign(
+    {},
+    USER_CUSTOMIZABLE_FIELD_PATHS,
+    VIEW_MODIFIABLE_FIELD_PATHS
+  )
   modifiableFieldPathsByEvent[RumEventType.ERROR] = assign(
     {
       'error.message': 'string',

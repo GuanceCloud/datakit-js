@@ -16,7 +16,10 @@ export function createFlushController({
   sessionExpireObservable
 }) {
   var pageExitSubscription = pageExitObservable.subscribe(function (event) {
-    return flush(event.reason)
+    // An asynchronous encoder can still own raw journals from an earlier
+    // flush after the controller's current counters reached zero. Give the
+    // batch one last page-exit notification so it can promote those journals.
+    return flush(event.reason, true)
   })
   var sessionExpireSubscription = sessionExpireObservable.subscribe(
     function () {
@@ -33,8 +36,8 @@ export function createFlushController({
   var currentBytesCount = 0
   var currentMessagesCount = 0
 
-  function flush(flushReason) {
-    if (currentMessagesCount === 0) {
+  function flush(flushReason, flushWhenEmpty) {
+    if (currentMessagesCount === 0 && !flushWhenEmpty) {
       return
     }
 

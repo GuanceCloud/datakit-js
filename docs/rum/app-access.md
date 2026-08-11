@@ -143,7 +143,14 @@ Web application integration can be done in three ways: NPM integration, asynchro
 | `replayCanvasWorkerUrl`                | String                           | No       |               | Self-hosted URL for the dedicated canvas encode worker (`canvas-worker.js`). This only affects canvas snapshot encoding and does not replace `workerUrl` or the existing deflate worker. Use this in stricter CSP/security environments where blob workers are blocked.                                                                                                                                 |
 | `replayCanvasEnabled`                  | Boolean                          | No       | `false`       | Whether to enable canvas recording for Session Replay. This is the primary switch for all canvas recording behavior. If this is not set to `true`, no canvas recording will occur.                                                                                                                                                                                     |
 | `replayCanvasMode`                     | `'manual' \| 'auto'`             | No       | `auto`        | Canvas recording mode. `manual` requires calling `snapshotCanvas(canvas)` explicitly. `auto` enables automatic canvas recording, and is the default when `replayCanvasEnabled` is turned on. You should still explicitly configure `replayCanvasSampling` for predictable behavior.                                                                             |
-| `replayCanvasSampling`                 | Number / `'all'`                 | No       |               | Only applies when `replayCanvasMode: 'auto'` is used.<br>Use a number for automatic snapshot sampling. Smaller numbers sample more often and cost more to encode and upload; starting with `2` is recommended.<br>Use `'all'` for higher-fidelity automatic recording that tries to preserve more of the drawing process. In complex scenes, the SDK may still fall back to snapshot recording.                                                                                                                                                  |
+| `replayCanvasSampling`                 | Number / `'all'`                 | No       | `2`           | Only applies when `replayCanvasMode: 'auto'` is used.<br>Use a positive number (starting with `2` is recommended) to select the safer automatic snapshot path. The number itself does not control cadence; tune cadence with `replayCanvasAutoInterval` and the cooldown/backoff options.<br>Use `'all'` for higher-fidelity automatic recording that tries to preserve more of the drawing process. In complex scenes, the SDK may still fall back to snapshot recording.                                                                                                                                                  |
+| `replayCanvasQuality`                  | `'low' \| 'medium' \| 'high'` / Number | No | `0.4` | Canvas snapshot encode quality. Named presets also change sampling and automatic scheduling budgets. |
+| `replayCanvasAutoInterval`             | Number                           | No       | `1000`        | Automatic snapshot scheduling interval in milliseconds. |
+| `replayCanvasAutoCooldown`             | Number                           | No       | `1000`        | Minimum automatic snapshot cooldown per canvas in milliseconds. |
+| `replayCanvasAutoUnchangedBackoff`     | Number                           | No       | `3000`        | Backoff after an unchanged frame in milliseconds. |
+| `replayCanvasAutoFailureBackoff`       | Number                           | No       | `5000`        | Backoff after an automatic capture failure in milliseconds. |
+| `replayCanvasAutoMaxPerRun`            | Number                           | No       | `2`           | Maximum canvases processed in one automatic scheduling run. |
+| `replayCanvasFlushImmediately`         | Boolean                          | No       | `manual: true` / `auto: false` | Whether an accepted canvas frame requests an immediate replay flush. |
 
 ### Canvas Replay Notes
 
@@ -152,15 +159,26 @@ Web application integration can be done in three ways: NPM integration, asynchro
   - Session Replay is sampled in (`sessionReplaySampleRate > 0` or `sessionReplayOnErrorSampleRate` is hit)
   - `startSessionReplayRecording()` has been called
   - `replayCanvasEnabled: true` is configured
-  - The target element is a `2d canvas`
+  - The target element is a `2d canvas`; WebGL/WebGL2 additionally requires
+    the optional `@cloudcare/browser-rum-webgl` plugin in `auto` mode
 - In `manual` mode, business code must also call `snapshotCanvas(canvas)`.
 - `replayCanvasMode` controls whether canvas replay is `manual` or `auto`.
 - `replayCanvasSampling` controls the recording strategy used by `auto` mode:
   - `2`: recommended starting point, safer automatic snapshot sampling
-  - `1`: more frequent automatic snapshots, with higher cost
+  - other positive numbers: the same automatic snapshot path; do not use this number to tune cadence
   - `'all'`: higher-fidelity auto recording
+- Automatic snapshot cadence is controlled by `replayCanvasAutoInterval` and the cooldown/backoff options.
 - `replayCanvasWorkerUrl` only affects snapshot encoding. It does not replace `workerUrl`.
 - In `replayCanvasSampling: 'all'` mode, some complex scenes may still fall back to snapshot recording.
+- WebGL/WebGL2 always uses the optional plugin's budgeted pixel-snapshot path;
+  `'all'` only enables command capture for Canvas 2D.
+- The defaults in the table apply when no `low`, `medium`, or `high` named
+  quality preset is used. A named preset replaces quality, sampling, interval,
+  cooldown, unchanged/failure backoff, and max-per-run together; an explicitly
+  configured individual option overrides only its corresponding preset value.
+  Use a numeric `replayCanvasQuality` from `0` to `1` when you only want to
+  change image quality. See the [Canvas recording guide](../replay-canvas.en.md)
+  for the complete preset matrix.
 
 Recommended minimum configurations:
 
@@ -227,5 +245,7 @@ And in `auto` mode, also explicitly set:
 
 - `replayCanvasSampling`
   - `2`: recommended starting value
-  - `1`: more frequent automatic snapshots
+  - other positive numbers: the same automatic snapshot path
   - `'all'`: higher-fidelity auto recording
+
+Use `replayCanvasAutoInterval` and the cooldown/backoff options to tune automatic snapshot cadence.

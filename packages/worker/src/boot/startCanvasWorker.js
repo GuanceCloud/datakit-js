@@ -161,9 +161,6 @@ export function startCanvasWorker(workerScope) {
     Promise.resolve()
       .then(function () {
         var targetSize = computeTargetSize(data.width, data.height, data.maxSize)
-        if (getCanvasPixelBytes(targetSize) > MAX_CANVAS_POOL_PIXEL_BYTES) {
-          throw new Error('Canvas worker target memory budget exceeded')
-        }
         canvas = acquireCanvas(targetSize.width, targetSize.height)
         var context = canvas.getContext('2d')
         if (!context) {
@@ -218,6 +215,11 @@ export function startCanvasWorker(workerScope) {
         closeBitmap(data.bitmap)
         if (canReuseCanvas) {
           releaseCanvas(canvas)
+        } else {
+          // Failed conversions are not pooled, but their backing stores can
+          // otherwise stay resident until a later worker GC. Release them
+          // immediately so repeated encode failures remain memory-bounded.
+          releaseCanvasBackingStore(canvas)
         }
       })
       .then(function (response) {

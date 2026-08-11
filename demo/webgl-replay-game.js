@@ -26,11 +26,21 @@
   var recordingStatus = document.getElementById('recording-status')
   var replayDot = document.getElementById('replay-dot')
   var query = new URLSearchParams(window.location.search)
+  var requestedContext =
+    query.get('context') === 'webgl2' ? 'webgl2' : 'webgl'
+  var pluginEnabled = query.get('plugin') !== '0'
+  var sampledOut = query.get('sampledOut') === '1'
   var sampling = query.get('sampling') || '2'
   if (['1', '2', '4', 'all'].indexOf(sampling) === -1) {
     sampling = '2'
   }
   var numericSampling = sampling === 'all' ? 'all' : Number(sampling)
+  var entropyMode = query.get('entropy') === '1'
+  var cacheDrawMethod = query.get('cacheDraw') === '1'
+  var extraDrawCalls = Math.max(
+    0,
+    Math.min(240, Math.floor(Number(query.get('draws')) || 0))
+  )
   var captureProfiles = {
     1: {
       targetFps: 2,
@@ -63,7 +73,7 @@
   }
   var captureProfile = captureProfiles[sampling] || captureProfiles[2]
   var destroyed = false
-  var replayEnabled = true
+  var replayEnabled = !sampledOut
   var paused = false
   var stressMode = query.get('stress') === '1'
   var pointerDown = false
@@ -94,6 +104,12 @@
     sampling: numericSampling,
     captureProfile: captureProfile,
     stressMode: stressMode,
+    entropyMode: entropyMode,
+    cacheDrawMethod: cacheDrawMethod,
+    extraDrawCalls: extraDrawCalls,
+    contextType: requestedContext,
+    pluginEnabled: pluginEnabled,
+    sampledOut: sampledOut,
     replaySnapshots: 0,
     lastSnapshot: undefined,
     lastMutation: undefined,
@@ -129,6 +145,15 @@
       recordingStatus.textContent = 'SDK unavailable'
       return
     }
+    if (
+      pluginEnabled &&
+      (!window.DATAFLUX_RUM_WEBGL ||
+        typeof window.DATAFLUX_RUM_WEBGL.webglReplayPlugin !==
+          'function')
+    ) {
+      recordingStatus.textContent = 'WebGL plugin unavailable'
+      throw new Error('Session Replay WebGL plugin is unavailable.')
+    }
 
     var autoInterval = captureProfile.interval
     window.DATAFLUX_RUM.init({
@@ -138,8 +163,11 @@
       service: 'browser',
       env: 'production',
       version: '1.0.0',
+      plugins: pluginEnabled
+        ? [window.DATAFLUX_RUM_WEBGL.webglReplayPlugin()]
+        : [],
       sessionSampleRate: 100,
-      sessionReplaySampleRate: 70,
+      sessionReplaySampleRate: sampledOut ? 0 : 70,
       replayCanvasEnabled: true,
       replayCanvasMode: 'auto',
       replayCanvasSampling: numericSampling,
@@ -162,9 +190,14 @@
     })
     // Keep the requested 70% production configuration, but force this
     // acceptance page into the sampled cohort so a demo run is deterministic.
-    window.DATAFLUX_RUM.setForcedSession()
-    window.DATAFLUX_RUM.startSessionReplayRecording()
-    recordingStatus.textContent = 'starting'
+    if (sampledOut) {
+      recordingStatus.textContent = 'sampled out'
+      replayButton.textContent = 'Replay: sampled out'
+    } else {
+      window.DATAFLUX_RUM.setForcedSession()
+      window.DATAFLUX_RUM.startSessionReplayRecording()
+      recordingStatus.textContent = 'starting'
+    }
   }
 
   try {
@@ -174,7 +207,7 @@
     recordingStatus.textContent = 'init failed'
   }
 
-  var gl = canvas.getContext('webgl', {
+  var gl = canvas.getContext(requestedContext, {
     alpha: false,
     antialias: true,
     depth: false,
@@ -185,28 +218,71 @@
   diagnostics.webglAvailable = !!gl
   if (!gl) {
     metricWebGL.textContent = 'unavailable'
-    recordError(new Error('This browser does not expose a WebGL context.'))
+    recordError(
+      new Error(
+        'This browser does not expose a ' + requestedContext + ' context.'
+      )
+    )
     return
   }
 
   diagnostics.preserveDrawingBuffer =
     gl.getContextAttributes().preserveDrawingBuffer
-  metricWebGL.textContent =
-    'WebGL 1 · preserve=' + diagnostics.preserveDrawingBuffer
+  // Cocos-style engines commonly cache WebGL methods during engine boot,
+  // before the asynchronous Replay recorder is ready.  The optional plugin
+  // installs its bootstrap hook synchronously from RUM init(), so deliberately
+  // cache the method now instead of waiting for isRecording().
+  var cachedDrawArrays = cacheDrawMethod
+    ? gl.drawArrays.bind(gl)
+    : undefined
+  diagnostics.drawMethodCached = Boolean(cachedDrawArrays)
+
+  function updateWebGLMetric() {
+    metricWebGL.textContent =
+      (requestedContext === 'webgl2' ? 'WebGL 2' : 'WebGL 1') +
+      ' · preserve=' +
+      diagnostics.preserveDrawingBuffer +
+      (cacheDrawMethod
+        ? diagnostics.drawMethodCached
+          ? ' · cached drawArrays during boot'
+          : ' · draw cache unavailable'
+        : '') +
+      (extraDrawCalls ? ' · +' + extraDrawCalls + ' draws/frame' : '')
+  }
+
+  function invokeDrawArrays() {
+    return cachedDrawArrays
+      ? cachedDrawArrays.apply(undefined, arguments)
+      : gl.drawArrays.apply(gl, arguments)
+  }
+
+  updateWebGLMetric()
+
+  var isWebGL2 = requestedContext === 'webgl2'
+  var shaderVersion = isWebGL2 ? '#version 300 es' : ''
+  var vertexInput = isWebGL2 ? 'in' : 'attribute'
+  var vertexOutput = isWebGL2 ? 'out' : 'varying'
+  var fragmentInput = isWebGL2 ? 'in' : 'varying'
+  var fragmentOutput = isWebGL2 ? 'out vec4 replayColor;' : ''
+  var fragmentColor = isWebGL2 ? 'replayColor' : 'gl_FragColor'
 
   var backgroundVertexShader = [
-    'attribute vec2 a_position;',
-    'varying vec2 v_uv;',
+    shaderVersion,
+    vertexInput + ' vec2 a_position;',
+    vertexOutput + ' vec2 v_uv;',
     'void main() {',
     '  v_uv = a_position * 0.5 + 0.5;',
     '  gl_Position = vec4(a_position, 0.0, 1.0);',
     '}'
   ].join('\n')
   var backgroundFragmentShader = [
+    shaderVersion,
     'precision mediump float;',
-    'varying vec2 v_uv;',
+    fragmentInput + ' vec2 v_uv;',
+    fragmentOutput,
     'uniform float u_time;',
     'uniform vec2 u_resolution;',
+    'uniform float u_entropy;',
     'float hash(vec2 point) {',
     '  return fract(sin(dot(point, vec2(127.1, 311.7))) * 43758.5453);',
     '}',
@@ -221,17 +297,27 @@
     '  vec3 base = mix(vec3(0.012, 0.018, 0.07), vec3(0.12, 0.04, 0.24), nebula);',
     '  float grain = hash(floor(gl_FragCoord.xy * 0.33) + floor(u_time * 0.5));',
     '  base += (grain - 0.5) * 0.018;',
+    '  if (u_entropy > 0.5) {',
+    '    vec2 noiseCell = floor(gl_FragCoord.xy / 6.0) + floor(u_time * 8.0);',
+    '    vec3 noiseColor = vec3(',
+    '      hash(noiseCell),',
+    '      hash(noiseCell + vec2(19.0, 7.0)),',
+    '      hash(noiseCell + vec2(3.0, 29.0))',
+    '    );',
+    '    base = mix(base, noiseColor, 0.88);',
+    '  }',
     '  float glow = 0.12 / max(length(centered - vec2(0.32, 0.12)), 0.08);',
     '  base += vec3(0.03, 0.12, 0.18) * glow;',
-    '  gl_FragColor = vec4(base, 1.0);',
+    '  ' + fragmentColor + ' = vec4(base, 1.0);',
     '}'
   ].join('\n')
   var spriteVertexShader = [
-    'attribute vec2 a_position;',
-    'attribute float a_size;',
-    'attribute vec4 a_color;',
+    shaderVersion,
+    vertexInput + ' vec2 a_position;',
+    vertexInput + ' float a_size;',
+    vertexInput + ' vec4 a_color;',
     'uniform float u_pixel_ratio;',
-    'varying vec4 v_color;',
+    vertexOutput + ' vec4 v_color;',
     'void main() {',
     '  gl_Position = vec4(a_position, 0.0, 1.0);',
     '  gl_PointSize = max(1.0, a_size * u_pixel_ratio);',
@@ -239,8 +325,10 @@
     '}'
   ].join('\n')
   var spriteFragmentShader = [
+    shaderVersion,
     'precision mediump float;',
-    'varying vec4 v_color;',
+    fragmentInput + ' vec4 v_color;',
+    fragmentOutput,
     'uniform float u_shape;',
     'void main() {',
     '  vec2 point = gl_PointCoord * 2.0 - 1.0;',
@@ -265,7 +353,7 @@
     '    alpha = max(body, engine * 0.75);',
     '  }',
     '  if (alpha < 0.01) discard;',
-    '  gl_FragColor = vec4(v_color.rgb, alpha);',
+    '  ' + fragmentColor + ' = vec4(v_color.rgb, alpha);',
     '}'
   ].join('\n')
 
@@ -327,6 +415,10 @@
   var backgroundResolutionLocation = gl.getUniformLocation(
     backgroundProgram,
     'u_resolution'
+  )
+  var backgroundEntropyLocation = gl.getUniformLocation(
+    backgroundProgram,
+    'u_entropy'
   )
   var spritePositionLocation = gl.getAttribLocation(spriteProgram, 'a_position')
   var spriteSizeLocation = gl.getAttribLocation(spriteProgram, 'a_size')
@@ -569,7 +661,8 @@
     )
     gl.uniform1f(backgroundTimeLocation, time)
     gl.uniform2f(backgroundResolutionLocation, canvas.width, canvas.height)
-    gl.drawArrays(gl.TRIANGLES, 0, 3)
+    gl.uniform1f(backgroundEntropyLocation, entropyMode ? 1 : 0)
+    invokeDrawArrays(gl.TRIANGLES, 0, 3)
     drawsInWindow += 1
   }
 
@@ -601,7 +694,7 @@
     gl.vertexAttribPointer(spriteColorLocation, 4, gl.FLOAT, false, 28, 12)
     gl.uniform1f(spritePixelRatioLocation, pixelRatio)
     gl.uniform1f(spriteShapeLocation, shape)
-    gl.drawArrays(gl.POINTS, 0, objects.length)
+    invokeDrawArrays(gl.POINTS, 0, objects.length)
     drawsInWindow += 1
   }
 
@@ -666,6 +759,9 @@
     drawBatch(bullets, 2, pixelRatio, writeBulletVertex)
     drawBatch(particles, 3, pixelRatio, writeParticleVertex)
     drawBatch(playerBatch, 4, pixelRatio, writePlayerVertex)
+    for (var drawIndex = 0; drawIndex < extraDrawCalls; drawIndex += 1) {
+      drawBatch(playerBatch, 4, pixelRatio, writePlayerVertex)
+    }
   }
 
   function updateHud() {
@@ -829,7 +925,14 @@
           mutation: lastCanvasMutation,
           segment: lastSegment,
           objects: diagnostics.objectCount,
-          stressMode: stressMode
+          stressMode: stressMode,
+          entropyMode: entropyMode,
+          cacheDrawMethod: cacheDrawMethod,
+          drawMethodCached: diagnostics.drawMethodCached,
+          extraDrawCalls: extraDrawCalls,
+          contextType: requestedContext,
+          pluginEnabled: pluginEnabled,
+          sampledOut: sampledOut
         },
         null,
         2

@@ -1,5 +1,7 @@
 import { TraceType, DefaultPrivacyLevel } from '@cloudcare/browser-core'
 import { display } from '@cloudcare/browser-core'
+import { createCanvasObserver } from './replay/record/canvasObserver'
+import { setSerializedNodeId } from './replay/record/serializationUtils'
 
 describe('rum configuration', () => {
   let validateAndBuildRumConfiguration
@@ -26,6 +28,45 @@ describe('rum configuration', () => {
     expect(displayErrorSpy).toHaveBeenCalledWith(
       'Application ID is not configured, no RUM data will be collected.'
     )
+  })
+
+  it('should preserve the complete zero-config replay defaults', () => {
+    const configuration = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com'
+    })
+
+    expect(configuration.sessionReplaySampleRate).toBe(100)
+    expect(configuration.sessionOnErrorSampleRate).toBe(0)
+    expect(configuration.sessionReplayOnErrorSampleRate).toBe(0)
+    expect(configuration.defaultPrivacyLevel).toBe(
+      DefaultPrivacyLevel.MASK_USER_INPUT
+    )
+    expect(configuration.replayCanvasEnabled).toBeFalse()
+    expect(configuration.replayCanvasMode).toBe('auto')
+    expect(configuration.replayCanvasSampling).toBe(2)
+    expect(configuration.replayCanvasQuality).toBe(0.4)
+    expect(configuration.replayCanvasMimeType).toBe('image/webp')
+    expect(configuration.replayCanvasMaxCanvasSize).toBe(1280)
+    expect(configuration.replayCanvasMaxEncodedBytes).toBe(40000)
+    expect(configuration.replayCanvasMaxConcurrentEncodes).toBe(1)
+    expect(configuration.replayCanvasAutoInterval).toBe(1000)
+    expect(configuration.replayCanvasAutoCooldown).toBe(1000)
+    expect(configuration.replayCanvasAutoUnchangedBackoff).toBe(3000)
+    expect(configuration.replayCanvasAutoFailureBackoff).toBe(5000)
+    expect(configuration.replayCanvasAutoMaxPerRun).toBe(2)
+    expect(configuration.replayCanvasFlushImmediately).toBeFalse()
+  })
+
+  it('should carry the private WebGL runtime registered before normalization', () => {
+    const sessionReplayWebGL = function () {}
+    const configuration = validateAndBuildRumConfiguration({
+      applicationId: 'app-webgl-runtime',
+      datakitUrl: 'https://datakit.example.com',
+      sessionReplayWebGL
+    })
+
+    expect(configuration.sessionReplayWebGL).toBe(sessionReplayWebGL)
   })
 
   it('should build tracing options and rum defaults', () => {
@@ -186,7 +227,7 @@ describe('rum configuration', () => {
     expect(configuration.replayCanvasAutoMaxPerRun).toBe(2)
   })
 
-  it('should clamp the canvas encoded byte budget to a deliverable segment size', () => {
+  it('should preserve an explicit canvas encoded byte budget', () => {
     const configuration = validateAndBuildRumConfiguration({
       applicationId: 'app-1',
       datakitUrl: 'https://datakit.example.com',
@@ -194,10 +235,10 @@ describe('rum configuration', () => {
       replayCanvasMaxEncodedBytes: 120000
     })
 
-    expect(configuration.replayCanvasMaxEncodedBytes).toBe(40000)
+    expect(configuration.replayCanvasMaxEncodedBytes).toBe(120000)
   })
 
-  it('should clamp the canvas target edge to the 16 MiB backing-store budget', () => {
+  it('should preserve an explicit canvas target edge', () => {
     const configuration = validateAndBuildRumConfiguration({
       applicationId: 'app-1',
       datakitUrl: 'https://datakit.example.com',
@@ -205,7 +246,7 @@ describe('rum configuration', () => {
       replayCanvasMaxCanvasSize: 8192
     })
 
-    expect(configuration.replayCanvasMaxCanvasSize).toBe(2048)
+    expect(configuration.replayCanvasMaxCanvasSize).toBe(8192)
   })
 
   it('should let explicit auto canvas overrides win over quality presets', () => {
@@ -266,6 +307,43 @@ describe('rum configuration', () => {
 
     expect(configuration.replayCanvasMode).toBe('auto')
     expect(configuration.replayCanvasFlushImmediately).toBeFalse()
+  })
+
+  it('should fail closed in the canvas observer when shouldRecordCanvas throws', async () => {
+    const displayErrorSpy = spyOn(display, 'error')
+    const encode = jasmine.createSpy('encode')
+    const canvas = document.createElement('canvas')
+    document.body.appendChild(canvas)
+    setSerializedNodeId(canvas, 42)
+    const configuration = validateAndBuildRumConfiguration({
+      applicationId: 'app-1',
+      datakitUrl: 'https://datakit.example.com',
+      replayCanvasEnabled: true,
+      shouldRecordCanvas: () => {
+        throw new Error('privacy predicate failed')
+      }
+    })
+    const observer = createCanvasObserver({
+      configuration,
+      emit: jasmine.createSpy('emit'),
+      encodeBridge: {
+        encode,
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    expect(await observer.snapshot(canvas)).toEqual({
+      ok: false,
+      reason: 'rejected_by_should_record_canvas'
+    })
+    expect(encode).not.toHaveBeenCalled()
+    expect(displayErrorSpy).toHaveBeenCalledWith(
+      'shouldRecordCanvas threw an error:',
+      jasmine.any(Error)
+    )
+
+    observer.stop()
+    canvas.remove()
   })
 
   it('should convert legacy tracing origins and warn on precedence conflicts', () => {

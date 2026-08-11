@@ -760,6 +760,7 @@
         n.parentNode.insertBefore(d, n)
       })(window, document, 'script', './dataflux-rum.js', 'DATAFLUX_RUM')
       window.DATAFLUX_RUM.onReady(() => {
+        const startDemoRum = () => {
         const replayCanvasMode =
           window.localStorage.getItem('demoReplayCanvasMode') || 'auto'
         const replayCanvasScheduler =
@@ -816,6 +817,15 @@
         ) {
           window.DATAFLUX_RUM.stopSession()
           window.DATAFLUX_RUM.startSession()
+          const freshSessionUrl = new URL(window.location.href)
+          freshSessionUrl.searchParams.delete('freshSession')
+          window.history.replaceState(
+            null,
+            '',
+            freshSessionUrl.pathname +
+              freshSessionUrl.search +
+              freshSessionUrl.hash
+          )
         }
         window.DATAFLUX_RUM.setForcedSession()
         window.DATAFLUX_RUM && window.DATAFLUX_RUM._setDebug(true)
@@ -829,6 +839,17 @@
           )
         } else {
           window.__demoCanvasReplayBaselinePending = true
+        }
+        }
+        // Wait until the inline demo setup has drawn the pre-existing canvas.
+        // This keeps acceptance coverage for canvases created before recorder
+        // startup instead of validating only the easier post-start path.
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', startDemoRum, {
+            once: true
+          })
+        } else {
+          startDemoRum()
         }
       })
     </script>
@@ -1203,6 +1224,17 @@
               </div>
             </div>
             <div class="demo-main">
+              <div class="canvas-demo__dashboard-label">
+                Pre-existing 2D canvas · drawn before recorder startup
+              </div>
+              <div class="canvas-demo__canvas-mount">
+                <canvas
+                  id="pre-existing-replay-canvas"
+                  class="canvas-demo__board"
+                  width="480"
+                  height="220"
+                ></canvas>
+              </div>
               <div id="replay-canvas-mount" class="canvas-demo__canvas-mount"></div>
               <div class="canvas-demo__toolbar demo-toolbar">
                 <div class="demo-toolbar-group">
@@ -1223,6 +1255,7 @@
                 <div class="demo-toolbar-group">
                   <div class="demo-toolbar-group__title">Drawing</div>
                   <div class="demo-toolbar-group__actions">
+                    <button delay="canvasDrawPreExisting">pre-init canvas redraw</button>
                     <button delay="canvasDraw">canvas draw</button>
                     <button delay="canvasDrawLineChart">line chart</button>
                     <button delay="canvasDrawBarChart">bar chart</button>
@@ -1707,6 +1740,9 @@
           )
         }, 700)
       }
+      const preExistingReplayCanvas = document.getElementById(
+        'pre-existing-replay-canvas'
+      )
       const replayCanvasMount = document.getElementById('replay-canvas-mount')
       let replayCanvas
       const replayCanvasLog = document.getElementById('canvas-demo-log')
@@ -1790,6 +1826,8 @@
       let initialCanvasReplayBaselineCaptured = false
       let replayCanvasTargetsReady = false
       const replayCanvasTargetsReadyCallbacks = []
+      const maxReplayCanvasTargetsReadyCallbacks = 32
+      let preExistingCanvasStep = 0
       let canvasStep = 0
       let canvasAnimationFrameId = null
       let canvasAutoDrawIntervalId = null
@@ -1857,6 +1895,10 @@
       let largeDomCurrentShape = 'none'
       let largeDomCurrentRows = 0
       let largeDomCurrentElements = 0
+      // buildDashboardRow creates 35 actual elements (plus 25 text nodes).
+      // Keep the UI metric tied to its "elements" label instead of the old
+      // serialized-node estimate.
+      const largeDomElementsPerRow = 35
       let largeDomGenerateStartedAt = 0
       let largeDomGenerateFinishedAt = 0
       let largeDomLastSnapshotMs = 0
@@ -1874,6 +1916,11 @@
         'utility-dom-mutation-output'
       )
       let utilityReplayDialog = null
+
+      // This runs during HTML parsing. RUM startup waits for DOMContentLoaded,
+      // so the initial bitmap and its 2D context genuinely predate the
+      // recorder and exercise FullSnapshot canvas baseline recovery.
+      drawPreExistingCanvasScene('pre-init')
 
       function setLegacyActionLog(message) {
         if (legacyActionLog) {
@@ -2347,11 +2394,17 @@
           drawCanvasScene('initial')
           drawDashboardCanvasChart('initial-board')
           replayCanvasTargetsReady = true
-          replayCanvasTargetsReadyCallbacks
-            .splice(0)
-            .forEach((readyCallback) => {
+          const readyCallbacks = replayCanvasTargetsReadyCallbacks.splice(0)
+          readyCallbacks.forEach((readyCallback) => {
+            try {
               readyCallback()
-            })
+            } catch (error) {
+              setCanvasStatus(
+                replayCanvasReasonStatus,
+                'queued canvas action failed'
+              )
+            }
+          })
           if (demoReplayCanvasMode === 'manual') {
             window.setTimeout(async () => {
               await snapshotCanvasScene('initial-ready')
@@ -2366,7 +2419,22 @@
           callback()
           return
         }
+        if (
+          replayCanvasTargetsReadyCallbacks.length >=
+          maxReplayCanvasTargetsReadyCallbacks
+        ) {
+          replayCanvasTargetsReadyCallbacks.shift()
+        }
         replayCanvasTargetsReadyCallbacks.push(callback)
+      }
+
+      function runReplayCanvasActionWhenReady(actionName, callback) {
+        if (replayCanvasTargetsReady) {
+          callback()
+          return
+        }
+        whenReplayCanvasTargetsReady(callback)
+        setCanvasLog('Queued ' + actionName + ' until canvas publication')
       }
 
       function whenReplayCanvasTargetsPublished(callback) {
@@ -2393,8 +2461,16 @@
             return
           }
           if (performance.now() >= deadline) {
+            const discardedActionCount =
+              replayCanvasTargetsReadyCallbacks.length
+            replayCanvasTargetsReadyCallbacks.length = 0
             setCanvasStatus(replayCanvasReasonStatus, 'canvas publication timeout')
-            setCanvasLog('Canvas targets were not admitted into the replay DOM')
+            setCanvasLog(
+              'Canvas targets were not admitted into the replay DOM' +
+                (discardedActionCount
+                  ? '; discarded ' + discardedActionCount + ' queued action(s)'
+                  : '')
+            )
             setCanvasStatus(
               replayDashboardCanvasReasonStatus,
               'canvas publication timeout'
@@ -2543,6 +2619,14 @@
       }
 
       function mutationEntryHasUtilityReplayDialog(entry) {
+        const rum = window.DATAFLUX_RUM
+        const serializedDialogId =
+          utilityReplayDialog &&
+          utilityReplayDialog.wrapper &&
+          rum &&
+          typeof rum.getSerializedNodeIdForDebug === 'function'
+            ? rum.getSerializedNodeIdForDebug(utilityReplayDialog.wrapper)
+            : undefined
         return !!(
           entry &&
           entry.adds &&
@@ -2551,7 +2635,9 @@
               addEntry &&
               addEntry.node &&
               addEntry.node.type === 2 &&
-              isUtilityReplayDialogNode(addEntry.node)
+              ((serializedDialogId !== undefined &&
+                addEntry.node.id === serializedDialogId) ||
+                isUtilityReplayDialogNode(addEntry.node))
             )
           })
         )
@@ -2961,7 +3047,8 @@
             remainingInChunk -= 1
           }
           largeDomCurrentRows = largeDomHost.children.length
-          largeDomCurrentElements = largeDomCurrentRows * 57
+          largeDomCurrentElements =
+            largeDomCurrentRows * largeDomElementsPerRow
 
           if (largeDomHost.firstChild) {
             window.requestAnimationFrame(function () {
@@ -3227,10 +3314,10 @@
         const generationEpoch = largeDomGenerationEpoch
 
         let appendedRows = 0
-        // One row contains about 57 referenced nodes. Keep each native
-        // MutationObserver callback below the recorder's 1,000-node admission
-        // watermark so this stress case exercises streaming incrementals
-        // instead of immediately forcing an impossible 142k-node baseline.
+        // One row contains 35 elements and about 25 text nodes. Keep each
+        // native MutationObserver callback below the recorder's 1,000-node
+        // admission watermark so this stress case exercises streaming
+        // incrementals instead of forcing an impossible large-tree baseline.
         const chunkSize = 4
 
         let resolveGeneration
@@ -3279,7 +3366,8 @@
             }
             largeDomHost.appendChild(fragment)
             appendedRows = chunkEnd
-            largeDomCurrentElements = appendedRows * 57
+            largeDomCurrentElements =
+              appendedRows * largeDomElementsPerRow
           } catch (error) {
             setLargeDomLastAction('generation failed')
             generation.resolve({
@@ -3728,6 +3816,42 @@
           slots[index].appendChild(canvas)
           return canvas
         })
+      }
+
+      function drawPreExistingCanvasScene(label) {
+        if (!preExistingReplayCanvas) return
+        const context = preExistingReplayCanvas.getContext('2d')
+        if (!context) return
+        preExistingCanvasStep += 1
+        const hue = (preExistingCanvasStep * 61) % 360
+        context.clearRect(
+          0,
+          0,
+          preExistingReplayCanvas.width,
+          preExistingReplayCanvas.height
+        )
+        context.fillStyle = '#f8fafc'
+        context.fillRect(
+          0,
+          0,
+          preExistingReplayCanvas.width,
+          preExistingReplayCanvas.height
+        )
+        context.fillStyle = `hsl(${hue} 72% 52%)`
+        context.fillRect(28, 34, 132, 72)
+        context.fillStyle = '#0f172a'
+        context.font = '700 20px sans-serif'
+        context.fillText(label + ' #' + preExistingCanvasStep, 188, 76)
+        context.strokeStyle = '#334155'
+        context.lineWidth = 5
+        context.beginPath()
+        context.moveTo(72, 164)
+        context.lineTo(232, 118 + (preExistingCanvasStep % 3) * 12)
+        context.lineTo(402, 170)
+        context.stroke()
+        preExistingReplayCanvas.dataset.preExistingStep = String(
+          preExistingCanvasStep
+        )
       }
 
       function drawCanvasScene(label) {
@@ -5573,60 +5697,128 @@ async function runMainCanvasVisibilityBenchmark(mode, scheduler) {
           switchReplayCanvasWorkerMode('inline')
         } else if (delay === 'canvasWorkerExternal') {
           switchReplayCanvasWorkerMode('external')
+        } else if (delay === 'canvasDrawPreExisting') {
+          drawPreExistingCanvasScene('pre-init-redraw')
         } else if (delay === 'canvasDraw') {
-          drawCanvasScene('manual')
+          runReplayCanvasActionWhenReady('canvas draw', () => {
+            drawCanvasScene('manual')
+          })
         } else if (delay === 'canvasDrawLineChart') {
-          drawCanvasLineChart('manual-line')
+          runReplayCanvasActionWhenReady('line chart', () => {
+            drawCanvasLineChart('manual-line')
+          })
         } else if (delay === 'canvasDrawBarChart') {
-          drawCanvasBarChart('manual-bar')
+          runReplayCanvasActionWhenReady('bar chart', () => {
+            drawCanvasBarChart('manual-bar')
+          })
         } else if (delay === 'canvasDrawDashboard') {
-          drawCanvasDashboardChart('manual-board')
+          runReplayCanvasActionWhenReady('dashboard chart', () => {
+            drawCanvasDashboardChart('manual-board')
+          })
         } else if (delay === 'canvasDrawComplexFidelity') {
-          drawCanvasComplexFidelityScene('manual-complex')
+          runReplayCanvasActionWhenReady('complex fidelity', () => {
+            drawCanvasComplexFidelityScene('manual-complex')
+          })
         } else if (delay === 'canvasAnimateCharts') {
-          animateCanvasCharts()
+          runReplayCanvasActionWhenReady('animate charts', animateCanvasCharts)
         } else if (delay === 'canvasAutoDrawToggle') {
-          toggleAutoDraw()
+          runReplayCanvasActionWhenReady('toggle auto draw', toggleAutoDraw)
         } else if (delay === 'canvasSnapshot') {
-          snapshotCanvasScene()
+          runReplayCanvasActionWhenReady('canvas snapshot', snapshotCanvasScene)
         } else if (delay === 'canvasSnapshotConcurrent') {
-          snapshotCanvasSceneConcurrently()
+          runReplayCanvasActionWhenReady(
+            'concurrent canvas snapshot',
+            snapshotCanvasSceneConcurrently
+          )
         } else if (delay === 'canvasAnimateAndSnapshot') {
-          animateCanvasAndSnapshot()
+          runReplayCanvasActionWhenReady(
+            'canvas animate and snapshot',
+            animateCanvasAndSnapshot
+          )
         } else if (delay === 'canvasClear') {
-          clearCanvasScene()
+          runReplayCanvasActionWhenReady('canvas clear', clearCanvasScene)
         } else if (delay === 'canvasExportEvent') {
           exportLastCanvasReplayEvent()
         } else if (delay === 'canvasAutoBenchmarkContinuous') {
-          runMainCanvasAutoBenchmark('auto', 'continuous_snapshot')
+          runReplayCanvasActionWhenReady('auto continuous benchmark', () => {
+            runMainCanvasAutoBenchmark('auto', 'continuous_snapshot')
+          })
         } else if (delay === 'canvasAutoBenchmarkCommand') {
-          runMainCanvasAutoBenchmark('auto', 'command_capture')
+          runReplayCanvasActionWhenReady('auto command benchmark', () => {
+            runMainCanvasAutoBenchmark('auto', 'command_capture')
+          })
         } else if (delay === 'canvasVisibilityBenchmarkContinuous') {
-          runMainCanvasVisibilityBenchmark('auto', 'continuous_snapshot')
+          runReplayCanvasActionWhenReady(
+            'continuous visibility benchmark',
+            () => {
+              runMainCanvasVisibilityBenchmark('auto', 'continuous_snapshot')
+            }
+          )
         } else if (delay === 'canvasVisibilityBenchmarkCommand') {
-          runMainCanvasVisibilityBenchmark('auto', 'command_capture')
+          runReplayCanvasActionWhenReady('command visibility benchmark', () => {
+            runMainCanvasVisibilityBenchmark('auto', 'command_capture')
+          })
         } else if (delay === 'dashboardCanvasDraw') {
-          drawDashboardCanvasChart('manual-board')
+          runReplayCanvasActionWhenReady('draw dashboard canvases', () => {
+            drawDashboardCanvasChart('manual-board')
+          })
         } else if (delay === 'dashboardCanvasAnimate') {
-          animateDashboardCanvas()
+          runReplayCanvasActionWhenReady(
+            'animate dashboard canvases',
+            animateDashboardCanvas
+          )
         } else if (delay === 'dashboardCanvasClear') {
-          clearDashboardCanvasScene()
+          runReplayCanvasActionWhenReady(
+            'clear dashboard canvases',
+            clearDashboardCanvasScene
+          )
         } else if (delay === 'dashboardCanvasSnapshot') {
-          snapshotDashboardCanvasScene()
+          runReplayCanvasActionWhenReady(
+            'dashboard canvas snapshot',
+            snapshotDashboardCanvasScene
+          )
         } else if (delay === 'dashboardCanvasSnapshotConcurrent') {
-          snapshotDashboardCanvasSceneConcurrently()
+          runReplayCanvasActionWhenReady(
+            'concurrent dashboard canvas snapshot',
+            snapshotDashboardCanvasSceneConcurrently
+          )
         } else if (delay === 'dashboardCanvasExportEvent') {
           exportLastDashboardCanvasReplayEvent()
         } else if (delay === 'dashboardCanvasBenchmarkContinuous') {
-          runDashboardCanvasBenchmark('auto', 'continuous_snapshot')
+          runReplayCanvasActionWhenReady('dashboard benchmark', () => {
+            runDashboardCanvasBenchmark('auto', 'continuous_snapshot')
+          })
         } else if (delay === 'dashboardCanvasAutoBenchmarkContinuous') {
-          runDashboardCanvasAutoBenchmark('auto', 'continuous_snapshot')
+          runReplayCanvasActionWhenReady(
+            'dashboard auto continuous benchmark',
+            () => {
+              runDashboardCanvasAutoBenchmark('auto', 'continuous_snapshot')
+            }
+          )
         } else if (delay === 'dashboardCanvasAutoBenchmarkCommand') {
-          runDashboardCanvasAutoBenchmark('auto', 'command_capture')
+          runReplayCanvasActionWhenReady(
+            'dashboard auto command benchmark',
+            () => {
+              runDashboardCanvasAutoBenchmark('auto', 'command_capture')
+            }
+          )
         } else if (delay === 'dashboardCanvasVisibilityBenchmarkContinuous') {
-          runDashboardCanvasVisibilityBenchmark('auto', 'continuous_snapshot')
+          runReplayCanvasActionWhenReady(
+            'dashboard continuous visibility benchmark',
+            () => {
+              runDashboardCanvasVisibilityBenchmark(
+                'auto',
+                'continuous_snapshot'
+              )
+            }
+          )
         } else if (delay === 'dashboardCanvasVisibilityBenchmarkCommand') {
-          runDashboardCanvasVisibilityBenchmark('auto', 'command_capture')
+          runReplayCanvasActionWhenReady(
+            'dashboard command visibility benchmark',
+            () => {
+              runDashboardCanvasVisibilityBenchmark('auto', 'command_capture')
+            }
+          )
         } else if (delay === 'largeDomReplayOn') {
           setLargeDomReplayRecording(true)
         } else if (delay === 'largeDomReplayOff') {

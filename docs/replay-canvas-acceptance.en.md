@@ -31,8 +31,20 @@ Before running acceptance, confirm:
 - Session Replay is sampled in
 - `startSessionReplayRecording()` has been called
 - `replayCanvasEnabled: true`
-- the target is a `2d canvas`, or a `webgl` / `webgl2` canvas in `auto` mode
+- the target is a `2d canvas`; WebGL/WebGL2 additionally requires
+  `@cloudcare/browser-rum-webgl` registered in `auto` mode
+- Cocos or another WebGL engine starts only after plugin/RUM `init()` completes
 - the demo or business page is already running in the target mode
+
+For WebGL/WebGL2, also verify that a draw method cached during engine boot,
+before recorder readiness, is still captured. Do not hide this path by waiting
+for `isRecording()` before caching the method.
+For draws deferred by cooldown, an in-flight encode, or concurrency pressure,
+also verify that neither a timer nor encode completion starts a capture; only
+the next real draw may stage new pixels.
+The asynchronous full-snapshot baseline does not read WebGL. The first accepted
+WebGL frame must come from a real draw after the observer starts; ordinary
+static 2D baselines remain unchanged.
 
 ## Core Acceptance Items
 

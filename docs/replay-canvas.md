@@ -16,7 +16,8 @@ canvas 录制要真正生效，至少还需要同时满足下面这些前置条�
   - 也就是调用 `startSessionReplayRecording()`
 - 已开启 canvas 录制
   - 也就是 `replayCanvasEnabled: true`
-- 页面里的目标元素是 `2d canvas`，或在 `auto` 模式下使用 `webgl` / `webgl2`
+- 页面里的目标元素是 `2d canvas`；若是 `webgl` / `webgl2`，还需要在
+  `auto` 模式下显式安装并注册 `@cloudcare/browser-rum-webgl`
 - 如果是 `manual` 模式，业务代码还必须主动调用 `snapshotCanvas(canvas)`
 
 当前版本的能力边界是：
@@ -26,8 +27,10 @@ canvas 录制要真正生效，至少还需要同时满足下面这些前置条�
 - 自动录制支持两条正式路径：
   - snapshot sampling
   - higher-fidelity auto recording
-- 完整支持 `2d canvas`
-- `webgl` / `webgl2` 支持绘制驱动的自动像素快照
+- 支持 `2d canvas`；复杂 Path2D、Gradient、Pattern、video 或跨域
+  `drawImage` 等场景可能回退，或无法做到完全一致的还原
+- 可选的 `@cloudcare/browser-rum-webgl` 插件为 `webgl` / `webgl2`
+  提供绘制驱动的自动像素快照
 - 录制结果会进入 Session Replay 事件流
 
 当前版本暂不覆盖的范围：
@@ -35,6 +38,48 @@ canvas 录制要真正生效，至少还需要同时满足下面这些前置条�
 - WebGL command-level replay
 - `OffscreenCanvas`
 - 对所有复杂 2D 场景都做完全一致的还原
+
+## WebGL 插件接入
+
+WebGL 实现不在 `@cloudcare/browser-rum` 主包中。普通 DOM 和 2D Canvas
+无需安装插件；只有需要 WebGL Replay 的应用才额外引入：
+
+```js
+import { datafluxRum } from '@cloudcare/browser-rum'
+import { webglReplayPlugin } from '@cloudcare/browser-rum-webgl'
+
+datafluxRum.init({
+  // ...
+  sessionReplaySampleRate: 100,
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'auto',
+  replayCanvasSampling: 2,
+  plugins: [webglReplayPlugin()]
+})
+
+datafluxRum.startSessionReplayRecording()
+```
+
+CDN 接入时，两个脚本都必须在 `init()` 前加载：
+
+```html
+<script src="https://static.guance.com/browser-sdk/v3/dataflux-rum.js"></script>
+<script src="https://static.guance.com/browser-sdk/v3/dataflux-rum-webgl.js"></script>
+<script>
+  DATAFLUX_RUM.init({
+    // ...
+    replayCanvasEnabled: true,
+    replayCanvasMode: 'auto',
+    plugins: [DATAFLUX_RUM_WEBGL.webglReplayPlugin()]
+  })
+  DATAFLUX_RUM.startSessionReplayRecording()
+</script>
+```
+
+插件必须在 RUM `init()` 时注册。插件缺失、重复、版本不兼容或初始化失败时，
+SDK 会关闭 WebGL 采集，但普通 DOM、2D Canvas 和其他 RUM 数据仍继续工作。
+当 `replayCanvasEnabled` 不是 `true`，或 `replayCanvasMode` 为 `manual` 时，
+即使注册了插件也不会安装提前 WebGL/rAF bootstrap hook。
 
 ## 快速选择
 
@@ -372,15 +417,26 @@ datafluxRum.startSessionReplayRecording()
 
 canvas 快照编码质量。
 
-推荐优先使用预设值：
+字符串预设同时调整编码质量和自动采集预算，不只是图片质量：
 
-- `low`: 编码质量 `0.25`
-- `medium`: 编码质量 `0.4`
-- `high`: 编码质量 `0.5`
+| 配置 | 未使用字符串预设 | `low` | `medium` | `high` |
+| --- | --- | --- | --- | --- |
+| snapshot 编码质量 | `0.4` | `0.25` | `0.4` | `0.5` |
+| `replayCanvasSampling` | `2` | `1` | `2` | `4` |
+| `replayCanvasAutoInterval` | `1000 ms` | `1500 ms` | `1000 ms` | `700 ms` |
+| `replayCanvasAutoCooldown` | `1000 ms` | `3000 ms` | `2000 ms` | `1400 ms` |
+| `replayCanvasAutoUnchangedBackoff` | `3000 ms` | `5000 ms` | `3000 ms` | `2000 ms` |
+| `replayCanvasAutoFailureBackoff` | `5000 ms` | `7000 ms` | `5000 ms` | `4000 ms` |
+| `replayCanvasAutoMaxPerRun` | `2` | `1` | `2` | `4` |
 
-这些预设主要影响 snapshot 编码质量。在 `replayCanvasSampling: 'all'` 下，command 帧本身不会走图片编码，但 fallback snapshot 仍会用到这里的质量配置。
+未使用 `low`、`medium`、`high` 时，表中的“未使用字符串预设”列就是运行时
+基线默认值。显式传入某个独立配置时，该配置会覆盖预设中的对应值。例如，
+`replayCanvasQuality: 'medium'` 配合 `replayCanvasAutoCooldown: 800` 时，仅
+cooldown 使用 `800 ms`，其他项仍采用 `medium` 的值。
 
-如果传数字，仍然按高级覆盖项处理。
+如果只想改变图片编码质量而不改变采样与调度预算，请传 `0` 到 `1` 之间的数字，
+例如 `replayCanvasQuality: 0.4`。在 `replayCanvasSampling: 'all'` 下，command
+帧本身不走图片编码，但 fallback snapshot 仍会使用这里的质量配置。
 
 数值或预设越高：
 
@@ -529,16 +585,15 @@ datafluxRum.init({
 - `replayCanvasMimeType`
   编码格式，默认 `image/webp`
 - `replayCanvasMaxCanvasSize`
-  编码前允许的最大边长，默认 `1280`、最大 `2048`；更大的配置值会被限制为
-  `2048`，从而把单个编码目标 backing store 控制在 `16 MiB` 以内
+  编码前允许的最大边长，默认 `1280`。增大该值会显著增加像素处理和内存开销
 - `replayCanvasMaxEncodedBytes`
-  单帧允许进入 replay 的最大字节数，默认且最大为 `40000`；更大的配置值会
-  被限制为 `40000`，超过该预算的帧会被拒绝。若频繁超限，应降低
+  单帧允许进入 replay 的最大字节数，默认 `40000`。超过配置预算的帧会被
+  拒绝；若频繁超限，应降低
   `replayCanvasQuality` 或 `replayCanvasMaxCanvasSize`
 - `replayCanvasMaxConcurrentEncodes`
   并发编码上限，默认 `1`
 - `replayCanvasFlushImmediately`
-  成功进入 replay 后是否优先 flush，默认 `true`
+  成功进入 replay 后是否优先 flush；`manual` 默认 `true`，`auto` 默认 `false`
 
 只有在以下场景才建议继续调这些项：
 
@@ -564,13 +619,42 @@ datafluxRum.init({
 - `toggle auto draw`: 周期性重绘 canvas，方便观察 auto 模式下是否持续产生变化
 - `export last canvas event`: 导出最近一次成功手动 snapshot 对应的调试事件
 
-WebGL 场景使用单独的 `/webgl-replay-game.html`：
+WebGL 场景使用单独的 `/webgl-replay-game.html`；该页面会额外加载
+`dataflux-rum-webgl.js`：
 
 - 持续运行 shader 背景、星场、陨石、子弹和碰撞粒子
 - `Stress` 可以把场景提高到约 800 个动态对象
 - 侧栏直接展示 `webgl_snapshot` 次数、编码字节数和采集耗时
 - `Replay: on/off` 可以在同一游戏负载下对比开启和关闭录制
 - `sampling=all` 仍会让 WebGL 走像素快照，只把 2D canvas 交给 command capture
+
+对于 Cocos Creator 这类会在启动阶段创建 WebGL context、查询 extension，甚至
+缓存 `draw*` 方法的引擎，必须先加载 WebGL 插件并完成 RUM `init()`，再加载
+Cocos engine / `main.js`。插件会在 `init()` 期间同步安装轻量 bootstrap hook，因此
+引擎在 recorder 异步就绪之前缓存的 `draw*`、extension draw 和 rAF 方法，也能在
+录制开始后路由到当前 observer。
+
+未被 recorder 接管的 bootstrap hook 会在 30 秒后自动恢复原型，避免未命中采样或
+始终未启动 Replay 的页面长期承担 hook 成本。因此应在 `init()` 后立即启动引擎；
+引擎在这 30 秒内缓存的 wrapper 过期后仍可路由，recorder 已接管的 hook 则会持续到
+observer 停止。
+
+```js
+datafluxRum.init({
+  // ...
+  plugins: [webglReplayPlugin()]
+})
+datafluxRum.startSessionReplayRecording()
+
+// init() 完成后即可正常启动引擎，无需轮询 isRecording()。
+bootCocosCreator()
+```
+
+不要用 `isRecording()` 轮询阻塞游戏启动：未命中 `sessionReplaySampleRate` 的会话本来
+就不会进入 recording。如果 Cocos 在插件/RUM `init()` 之前已经缓存了原始 WebGL
+方法，SDK 无法追溯替换已保存的函数引用，这种错误接入顺序不在支持范围内。
+这里验证的是此类引擎常见的启动期方法缓存契约，并不等同于已经验证所有 Cocos
+Creator 版本；接入方仍需用目标版本的真实 H5 构建产物完成录制和播放验收。
 
 WebGL 动画如果回放跳帧，优先调整采集节奏，而不是单独提高图片质量。可以从
 下面这组约 4 FPS 的配置开始：
@@ -587,6 +671,18 @@ replayCanvasAutoFailureBackoff: 3000
 
 降低 quality 或最大尺寸能减少编码耗时和单帧体积，但时间上的连贯度主要由
 interval 控制。像素快照回放不会在相邻采集帧之间插帧。
+
+当 WebGL 编码结果超过 `replayCanvasMaxEncodedBytes` 时，SDK 会复用同一张
+staging frame，仅再尝试一次降级编码：宽高缩放到 40%，编码质量减半（最低
+0.12）。成功的降级档位会缓存 10 秒，随后自动探测一次原始档位，避免游戏换场景
+后长期停留在低清晰度。若降级结果仍然超限，当前帧仍会丢弃，但缓存期间不会对
+每个采样帧都重复执行两次编码。该策略只作用于 WebGL/WebGL2；普通 2D canvas
+保持原来的单次编码路径，体积上限也不会被放宽。
+
+WebGL staging canvas 的内部总像素内存预算为 `16 MiB`。高 DPR、4K 或多路并发
+画面如果在 staging 阶段超过该预算，当前帧会直接跳过，尚未进入上面的编码体积
+降级；应通过 `replayCanvasMaxCanvasSize` 主动降低 WebGL 采集尺寸。这个内部预算
+只约束 WebGL staging/readback，不会静默收紧普通 2D canvas 的显式尺寸配置。
 
 需要注意：
 
@@ -659,23 +755,41 @@ canvas 录制是高成本能力，建议保守使用。
 - 在还原度和成本之间做平衡
 - 不把 Session Replay 变成视频录制
 
-### 3. WebGL 是怎么录制的？
+### 3. WebGL 插件是怎么录制的？
 
-`auto` 模式会 hook WebGL / WebGL2 的绘制入口，在同一轮任务的 microtask
+注册插件后，`auto` 模式会 hook WebGL / WebGL2 的绘制入口，在同一轮任务的 microtask
 阶段合并多次 draw，并立刻创建像素快照。这样可以在浏览器合成和清空默认
 drawing buffer 之前取到画面，同时避免把 shader、buffer、texture 和 typed
 array 全量序列化进 replay。
+
+编码超限时的降级使用 draw 边界已经保存的同一张 staging frame，不会在异步
+Worker 返回后重新读取 `preserveDrawingBuffer: false` 的源 canvas。
 
 这条路径的边界是：
 
 - 输出仍是 rrweb-compatible 的 2D image `CanvasMutation`
 - 受 `replayCanvasAutoInterval`、cooldown 和 failure backoff 控制
-- 要获得完整的 draw-driven 捕获，应在业务创建 WebGL context、查询 extension
-  之前启动 Replay；对启动前已缓存的 extension 对象，后续 draw 只能 best-effort 捕获
+- 要获得完整的 draw-driven 捕获，必须在业务创建 WebGL context、查询
+  extension 或缓存 draw/rAF 方法之前，先注册插件并完成 RUM `init()`
+- `init()` 期间安装的 bootstrap hook 会把 recorder ready 之前缓存的已 hook
+  方法路由到后续活动 observer，无需轮询 `isRecording()`
+- cooldown、编码中、并发满或当前边界候选队列已满时，只把 canvas 保持为 dirty；
+  必须等该 canvas 下一次真实 draw 才会重新进入采集候选
+- timer 和异步编码完成回调都不会读取源 WebGL framebuffer，避免
+  `preserveDrawingBuffer: false` 下产生过期帧或空白帧
+- 每个绘制边界的候选数量和并发编码数都有上限，并按 priority 与上次入选顺序兼顾公平；
+  页面进入 hidden/page-exit 后会丢弃 deferred 状态
+- 异步 full-snapshot canvas baseline 会跳过已识别的 WebGL canvas；它的第一张安全
+  回放画面来自 observer 启动后的下一次真实 draw，普通静态 2D/unknown canvas 的
+  baseline 行为保持不变
+- `shouldRecordCanvas()` 会在调度时重新计算；返回数字时数值越大优先级越高，
+  该 priority 也会写入 canvas replay 调试结果
+- 插件/RUM `init()` 之前已保存的原始函数引用无法追溯替换
 - 不支持 `OffscreenCanvas`
 - 不是 WebGL command-level replay，也不是逐帧视频
-- `manual` 模式下如果 `preserveDrawingBuffer: false`，应在业务绘制函数内立即调用
-  `snapshotCanvas()`；绘制函数返回后再调用可能得到空白帧
+- WebGL 插件只支持 `auto` 模式的 draw-driven snapshot，不能用 `manual`
+  `snapshotCanvas()` 替代；需要通过自动采集节奏和 `shouldRecordCanvas()` 优先级
+  控制成本与覆盖率
 
 ### 4. canvas 录制是单独上传的吗？
 

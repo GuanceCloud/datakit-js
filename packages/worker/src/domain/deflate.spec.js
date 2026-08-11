@@ -63,6 +63,26 @@ describe('worker/deflate', () => {
     expect(deflate.chunks).toEqual([])
   })
 
+  it('should round-trip deterministic binary data across multiple window-sized chunks', async () => {
+    const input = new Uint8Array(96 * 1024)
+    let seed = 0x12345678
+    for (let index = 0; index < input.length; index += 1) {
+      seed = (seed * 1664525 + 1013904223) >>> 0
+      input[index] = seed >>> 24
+    }
+
+    const deflate = new Deflate()
+    expect(deflate.push(input.subarray(0, 17003), false)).toBeTrue()
+    expect(deflate.push(input.subarray(17003, 65551), false)).toBeTrue()
+    expect(deflate.push(input.subarray(65551), true)).toBeTrue()
+
+    const outputStream = new Blob([deflate.result])
+      .stream()
+      .pipeThrough(new DecompressionStream('deflate'))
+    const output = new Uint8Array(await new Response(outputStream).arrayBuffer())
+    expect(output).toEqual(input)
+  })
+
   it('should return false when pushing after the stream has ended', () => {
     const deflate = new Deflate()
 

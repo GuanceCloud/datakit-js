@@ -1,12 +1,16 @@
-import { deepClone, getType } from '../tools'
+import { assign, deepClone, getType } from '../tools'
 import { sanitize } from '../sanitize'
 import { Observable } from '../observable'
 import { display } from '../display'
 
 function ensureProperties(context, propertiesConfig, name) {
-  const newContext = { ...context }
+  const newContext = assign({}, context)
 
-  for (const [key, { required, type }] of Object.entries(propertiesConfig)) {
+  Object.entries(propertiesConfig).forEach(function (propertyEntry) {
+    const key = propertyEntry[0]
+    const propertyConfiguration = propertyEntry[1]
+    const required = propertyConfiguration.required
+    const type = propertyConfiguration.type
     /**
      * Ensure specified properties are strings as defined here:
      */
@@ -19,7 +23,7 @@ function ensureProperties(context, propertiesConfig, name) {
         `The property ${key} of ${name} context is required; context will not be sent to the intake.`
       )
     }
-  }
+  })
 
   return newContext
 }
@@ -45,8 +49,15 @@ export function createContextManager(
     },
 
     setContextProperty: (key, property) => {
+      const propertyContext = {}
+      Object.defineProperty(propertyContext, key, {
+        configurable: true,
+        enumerable: true,
+        value: property,
+        writable: true
+      })
       context[key] = sanitize(
-        ensureProperties({ [key]: property }, propertiesConfig, name)[key]
+        ensureProperties(propertyContext, propertiesConfig, name)[key]
       )
       customerDataTracker?.updateCustomerData(context)
       changeObservable.notify()

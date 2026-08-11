@@ -20,9 +20,6 @@ import { buildEnv } from '../boot/buildEnv'
 import { isTracingOption } from '../domain/tracing/tracer'
 import { validatePlugins } from './plugins'
 
-var REPLAY_CANVAS_MAX_ENCODED_BYTES = 40000
-var REPLAY_CANVAS_MAX_CANVAS_SIZE = 2048
-
 var REPLAY_CANVAS_QUALITY_PRESETS = {
   low: {
     quality: 0.25,
@@ -52,6 +49,17 @@ var REPLAY_CANVAS_QUALITY_PRESETS = {
     autoMaxPerRun: 4
   }
 }
+
+var POSITIVE_REPLAY_CANVAS_OPTIONS = [
+  ['replayCanvasMaxCanvasSize', 'Max Canvas Size'],
+  ['replayCanvasMaxEncodedBytes', 'Max Encoded Bytes'],
+  ['replayCanvasMaxConcurrentEncodes', 'Max Concurrent Encodes'],
+  ['replayCanvasAutoInterval', 'Auto Interval'],
+  ['replayCanvasAutoCooldown', 'Auto Cooldown'],
+  ['replayCanvasAutoUnchangedBackoff', 'Auto Unchanged Backoff'],
+  ['replayCanvasAutoFailureBackoff', 'Auto Failure Backoff'],
+  ['replayCanvasAutoMaxPerRun', 'Auto Max Per Run']
+]
 
 function getReplayCanvasQualityPreset(value) {
   return typeof value === 'string'
@@ -164,77 +172,25 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
     )
     return
   }
-  if (
-    initConfiguration.replayCanvasMaxCanvasSize !== undefined &&
-    (!isNumber(initConfiguration.replayCanvasMaxCanvasSize) ||
-      initConfiguration.replayCanvasMaxCanvasSize <= 0)
+  for (
+    var replayCanvasOptionIndex = 0;
+    replayCanvasOptionIndex < POSITIVE_REPLAY_CANVAS_OPTIONS.length;
+    replayCanvasOptionIndex += 1
   ) {
-    display.error('Replay Canvas Max Canvas Size should be a positive number')
-    return
-  }
-  if (
-    initConfiguration.replayCanvasMaxEncodedBytes !== undefined &&
-    (!isNumber(initConfiguration.replayCanvasMaxEncodedBytes) ||
-      initConfiguration.replayCanvasMaxEncodedBytes <= 0)
-  ) {
-    display.error(
-      'Replay Canvas Max Encoded Bytes should be a positive number'
-    )
-    return
-  }
-  if (
-    initConfiguration.replayCanvasMaxConcurrentEncodes !== undefined &&
-    (!isNumber(initConfiguration.replayCanvasMaxConcurrentEncodes) ||
-      initConfiguration.replayCanvasMaxConcurrentEncodes <= 0)
-  ) {
-    display.error(
-      'Replay Canvas Max Concurrent Encodes should be a positive number'
-    )
-    return
-  }
-  if (
-    initConfiguration.replayCanvasAutoInterval !== undefined &&
-    (!isNumber(initConfiguration.replayCanvasAutoInterval) ||
-      initConfiguration.replayCanvasAutoInterval <= 0)
-  ) {
-    display.error('Replay Canvas Auto Interval should be a positive number')
-    return
-  }
-  if (
-    initConfiguration.replayCanvasAutoCooldown !== undefined &&
-    (!isNumber(initConfiguration.replayCanvasAutoCooldown) ||
-      initConfiguration.replayCanvasAutoCooldown <= 0)
-  ) {
-    display.error('Replay Canvas Auto Cooldown should be a positive number')
-    return
-  }
-  if (
-    initConfiguration.replayCanvasAutoUnchangedBackoff !== undefined &&
-    (!isNumber(initConfiguration.replayCanvasAutoUnchangedBackoff) ||
-      initConfiguration.replayCanvasAutoUnchangedBackoff <= 0)
-  ) {
-    display.error(
-      'Replay Canvas Auto Unchanged Backoff should be a positive number'
-    )
-    return
-  }
-  if (
-    initConfiguration.replayCanvasAutoFailureBackoff !== undefined &&
-    (!isNumber(initConfiguration.replayCanvasAutoFailureBackoff) ||
-      initConfiguration.replayCanvasAutoFailureBackoff <= 0)
-  ) {
-    display.error(
-      'Replay Canvas Auto Failure Backoff should be a positive number'
-    )
-    return
-  }
-  if (
-    initConfiguration.replayCanvasAutoMaxPerRun !== undefined &&
-    (!isNumber(initConfiguration.replayCanvasAutoMaxPerRun) ||
-      initConfiguration.replayCanvasAutoMaxPerRun <= 0)
-  ) {
-    display.error('Replay Canvas Auto Max Per Run should be a positive number')
-    return
+    var replayCanvasOption =
+      POSITIVE_REPLAY_CANVAS_OPTIONS[replayCanvasOptionIndex]
+    var replayCanvasOptionValue = initConfiguration[replayCanvasOption[0]]
+    if (
+      replayCanvasOptionValue !== undefined &&
+      (!isNumber(replayCanvasOptionValue) || replayCanvasOptionValue <= 0)
+    ) {
+      display.error(
+        'Replay Canvas ' +
+          replayCanvasOption[1] +
+          ' should be a positive number'
+      )
+      return
+    }
   }
 
   var baseConfiguration = validateAndBuildConfiguration(initConfiguration)
@@ -307,6 +263,7 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
       enableLongAnimationFrame: !!initConfiguration.enableLongAnimationFrame,
       trackViewsManually: !!initConfiguration.trackViewsManually,
       plugins: initConfiguration.plugins || [],
+      sessionReplayWebGL: initConfiguration.sessionReplayWebGL,
       replayCanvasEnabled: !!initConfiguration.replayCanvasEnabled,
       replayCanvasMode: replayCanvasMode,
       replayCanvasSampling: replayCanvasSampling,
@@ -320,19 +277,13 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         initConfiguration.replayCanvasMimeType,
         'image/webp'
       ),
-      replayCanvasMaxCanvasSize: Math.min(
-        isNullUndefinedDefaultValue(
-          initConfiguration.replayCanvasMaxCanvasSize,
-          1280
-        ),
-        REPLAY_CANVAS_MAX_CANVAS_SIZE
+      replayCanvasMaxCanvasSize: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasMaxCanvasSize,
+        1280
       ),
-      replayCanvasMaxEncodedBytes: Math.min(
-        isNullUndefinedDefaultValue(
-          initConfiguration.replayCanvasMaxEncodedBytes,
-          REPLAY_CANVAS_MAX_ENCODED_BYTES
-        ),
-        REPLAY_CANVAS_MAX_ENCODED_BYTES
+      replayCanvasMaxEncodedBytes: isNullUndefinedDefaultValue(
+        initConfiguration.replayCanvasMaxEncodedBytes,
+        40000
       ),
       replayCanvasMaxConcurrentEncodes: isNullUndefinedDefaultValue(
         initConfiguration.replayCanvasMaxConcurrentEncodes,
@@ -391,10 +342,14 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         ),
       shouldRecordCanvas:
         initConfiguration.shouldRecordCanvas &&
-        catchUserErrors(
-          initConfiguration.shouldRecordCanvas,
-          'shouldRecordCanvas threw an error:'
-        )
+        function (canvas) {
+          try {
+            return initConfiguration.shouldRecordCanvas(canvas)
+          } catch (error) {
+            display.error('shouldRecordCanvas threw an error:', error)
+            return false
+          }
+        }
     },
     baseConfiguration,
     buildEnv

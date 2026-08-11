@@ -5,16 +5,22 @@ export function limitModification(object, modifiableFieldPaths, modifier) {
   const clone = deepClone(object)
   const result = modifier(clone)
 
-  objectEntries(modifiableFieldPaths).forEach(([fieldPath, fieldType]) =>
+  objectEntries(modifiableFieldPaths).forEach(function (fieldEntry) {
     // Traverse both object and clone simultaneously up to the path and apply the modification from the clone to the original object when the type is valid
-    setValueAtPath(object, clone, fieldPath.split(/\.|(?=\[\])/), fieldType)
-  )
+    setValueAtPath(
+      object,
+      clone,
+      fieldEntry[0].split(/\.|(?=\[\])/),
+      fieldEntry[1]
+    )
+  })
 
   return result
 }
 
 function setValueAtPath(object, clone, pathSegments, fieldType) {
-  const [field, ...restPathSegments] = pathSegments
+  const field = pathSegments[0]
+  const restPathSegments = pathSegments.slice(1)
 
   if (field === '[]') {
     if (Array.isArray(object) && Array.isArray(clone)) {

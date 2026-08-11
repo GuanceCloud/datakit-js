@@ -57,20 +57,32 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
   var initializationTimeoutId
   var initializationAttempt = 0
   var stopListeners = function () {}
-  var createWorker =
-    options.createWorker ||
-    function () {
-      return createCanvasEncodeWorker(
-        configuration,
-        options.Worker || globalThis.Worker,
-        options.url || globalThis.URL
-      )
-    }
-  var timeoutDelay =
-    options.initializationTimeoutDelay ||
-    CANVAS_WORKER_INITIALIZATION_TIME_OUT_DELAY
-  var addTelemetryErrorImpl = options.addTelemetryError || addTelemetryError
-  var displayError = options.displayError || display.error
+  var createWorker = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.createWorker ||
+      function () {
+        return createCanvasEncodeWorker(
+          configuration,
+          options.Worker || globalThis.Worker,
+          options.url || globalThis.URL
+        )
+      }
+    : function () {
+        return createCanvasEncodeWorker(
+          configuration,
+          globalThis.Worker,
+          globalThis.URL
+        )
+      }
+  var timeoutDelay = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.initializationTimeoutDelay ||
+      CANVAS_WORKER_INITIALIZATION_TIME_OUT_DELAY
+    : CANVAS_WORKER_INITIALIZATION_TIME_OUT_DELAY
+  var addTelemetryErrorImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.addTelemetryError || addTelemetryError
+    : addTelemetryError
+  var displayError = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.displayError || display.error
+    : display.error
   var onInitialized = options.onInitialized || function () {}
   var onError = options.onError || function () {}
   var onMessage = options.onMessage || function () {}
@@ -149,7 +161,7 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
     })
   }
 
-  return {
+  var manager = {
     ensureWorker: function () {
       if (
         status === CanvasEncodeWorkerStatus.Loading ||
@@ -213,11 +225,14 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
     stop: function () {
       status = CanvasEncodeWorkerStatus.Nil
       cleanup()
-    },
-    getStatus: function () {
+    }
+  }
+  if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+    manager.getStatus = function () {
       return status
     }
   }
+  return manager
 }
 
 function isMessageCspRelated(message) {

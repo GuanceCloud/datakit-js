@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
 
-TARGET_ROOT = Path("docs/zh/real-user-monitoring/web")
+TARGET_ROOTS = (
+    Path("docs/zh/real-user-monitoring/web"),
+    Path("docs/zh/real-user-monitoring/session-replay/web"),
+)
 DEFAULT_DOCS_REPO = (
     Path(__file__).resolve().parents[4].parent.parent / "dataflux-doc"
 )
@@ -131,13 +134,25 @@ def changed_paths(repo: Path, base: str) -> Tuple[List[Path], Set[Path], Set[Pat
     return paths, added, deleted, untracked
 
 
+def target_root_for(path: Path) -> Path:
+    path_text = path.as_posix()
+    for root in TARGET_ROOTS:
+        if path_text.startswith(root.as_posix() + "/"):
+            return root
+    raise CheckFailure(
+        "{} is outside the allowed Web RUM documentation roots: {}".format(
+            path, ", ".join(str(root) for root in TARGET_ROOTS)
+        )
+    )
+
+
 def ensure_allowed_paths(paths: Iterable[Path]) -> None:
     errors = []
-    root_prefix = TARGET_ROOT.as_posix() + "/"
     for path in paths:
-        path_text = path.as_posix()
-        if not path_text.startswith(root_prefix):
-            errors.append("{} is outside {}".format(path, TARGET_ROOT))
+        try:
+            target_root_for(path)
+        except CheckFailure as error:
+            errors.append(str(error))
             continue
         if path.name != ".pages" and path.suffix.lower() not in ALLOWED_SUFFIXES:
             errors.append("{} has an unsupported documentation file type".format(path))
@@ -370,7 +385,7 @@ def check_markdown_structure(repo: Path, paths: Sequence[Path]) -> List[str]:
 
 def closest_pages_file(repo: Path, document: Path) -> Path:
     current = document.parent
-    target = repo / TARGET_ROOT
+    target = repo / target_root_for(document)
     while True:
         candidate = repo / current / ".pages"
         if candidate.is_file():

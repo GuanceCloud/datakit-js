@@ -5,15 +5,23 @@ import {
   noop,
   setTimeout
 } from '@cloudcare/browser-core'
-import { startMutationObserver } from './mutationObserver'
+import {
+  getMutationPayloadApproxBytes,
+  startMutationObserver
+} from './mutationObserver'
 import { initInputObserver } from './observers'
 
 export var SHADOW_ROOT_CLEANUP_BATCH_SIZE = 32
 export var SHADOW_ROOT_CLEANUP_BUDGET_MS = 4
 export var SHADOW_ROOT_FLUSH_MAX_COUNT = 64
 export var SHADOW_ROOT_FLUSH_BUDGET_MS = 4
+// Kept as an internal compatibility export for existing diagnostics/tests.
+// It is now the per-turn activation/flush slice, not a total observer cap.
 export var SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT =
   SHADOW_ROOT_FLUSH_MAX_COUNT
+// Kept as an internal compatibility export for diagnostics. Retired
+// generations are now invalidated in O(1) and disconnected in bounded slices;
+// this value no longer triggers synchronous cleanup.
 export var SHADOW_ROOT_RETIRED_CONTROLLER_LIMIT = 512
 export var SHADOW_ROOT_SKIPPED_ANCESTOR_MAX_DEPTH = 1000
 
@@ -26,6 +34,7 @@ export var initShadowRootsController = function (configuration, data) {
   var mutationActivityCb = data.mutationActivityCb
   var inputCb = data.inputCb
   var isNodeIgnored = data.isNodeIgnored
+  var isInputNodeIgnored = data.isInputNodeIgnored || isNodeIgnored
   var isMutationNodeIgnored =
     isNodeIgnored &&
     function (node) {
@@ -33,13 +42,22 @@ export var initShadowRootsController = function (configuration, data) {
     }
   var isNodePublished = data.isNodePublished
   var mutationNodeSerializationCb = data.mutationNodeSerializationCb
-  var startMutationObserverImpl =
-    data.startMutationObserver || startMutationObserver
-  var initInputObserverImpl = data.initInputObserver || initInputObserver
-  var scheduleCleanupImpl =
-    data.scheduleCleanup || defaultScheduleCleanup
-  var getCurrentTimeImpl = data.getCurrentTime || getCurrentTime
-  var cleanupErrorCb = data.cleanupErrorCb
+  var mutationResourceBudget = data.mutationResourceBudget
+  var startMutationObserverImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? data.startMutationObserver || startMutationObserver
+    : startMutationObserver
+  var initInputObserverImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? data.initInputObserver || initInputObserver
+    : initInputObserver
+  var scheduleCleanupImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? data.scheduleCleanup || defaultScheduleCleanup
+    : defaultScheduleCleanup
+  var getCurrentTimeImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? data.getCurrentTime || getCurrentTime
+    : getCurrentTime
+  var cleanupErrorCb = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? data.cleanupErrorCb
+    : undefined
   var stopAttachShadowObserver = data.shadowRootCreatedCb
     ? subscribeToOpenShadowRoots(function (shadowRoot, host) {
         if (stopped) {
@@ -61,16 +79,23 @@ export var initShadowRootsController = function (configuration, data) {
   var nextGenerationId = 0
   var activeGeneration = createGeneration()
   var controllerByShadowRoot = new Map()
-  // Keep this WeakSet across baseline generations. On reset, the bounded
-  // active set is marked skipped before the next serializer starts. Roots are
-  // removed only when the new baseline registers them again, so events from a
-  // discarded/restarted baseline cannot escape with stale serialized ids.
-  var skippedShadowRoots = new WeakSet()
+  // Persist only the latest registration identity. This distinguishes a root
+  // retired by a baseline reset from a never-registered nested root without
+  // walking the retired generation during reset.
+  var latestEntryByShadowRoot = new WeakMap()
   var cleanupQueueHead
   var cleanupQueueTail
   var cleanupScheduled = false
   var retiredControllerCount = 0
   var currentFlush
+  var pendingFlushIterator
+  var pendingFlushGeneration
+  var pendingFlushEntry
+  var disconnectedCleanupIterator
+  var disconnectedCleanupGeneration
+  var disconnectedCleanupScheduled = false
+  var baselineResetIterator
+  var baselineResetGeneration
   var stopped = false
   var recoveryShadowRoots
   var mutationDependencyState = {
@@ -85,21 +110,8 @@ export var initShadowRootsController = function (configuration, data) {
         return false
       }
       if (controllerByShadowRoot.has(shadowRoot)) {
-        skippedShadowRoots.delete(shadowRoot)
         return true
       }
-      if (
-        controllerByShadowRoot.size >=
-        SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT
-      ) {
-        // `null` is distinct from the inactive/stopped `false` result. It lets
-        // the serializer preserve an empty ShadowRoot placeholder while
-        // skipping unobserved content instead of rejecting the whole replay
-        // baseline.
-        skippedShadowRoots.add(shadowRoot)
-        return null
-      }
-
       var entry = {
         active: true,
         registered: false,
@@ -111,6 +123,7 @@ export var initShadowRootsController = function (configuration, data) {
         provisionalOwner: provisionalOwner,
         deactivateMutationObserver: function () {},
         refreshAndFlushPendingRootForNode: function () {},
+        resetMutationObserver: function () {},
         stopMutationObserver: function () {},
         stopInputObserver: function () {}
       }
@@ -120,6 +133,7 @@ export var initShadowRootsController = function (configuration, data) {
         }
         provisionalOwner.provisionalShadowRoots.push(shadowRoot)
       }
+      latestEntryByShadowRoot.set(shadowRoot, entry)
       var mutationObserverController
       try {
         mutationObserverController = startMutationObserverImpl(
@@ -127,12 +141,16 @@ export var initShadowRootsController = function (configuration, data) {
           configuration,
           createGatedShadowRootsController(entry),
           shadowRoot,
-          undefined,
+          data.mutationPerfCb,
           createGatedCallback(entry, 'overflow', mutationOverflowCb),
           createGatedCallback(entry, 'activity', mutationActivityCb),
           mutationNodeSerializationCb,
           isMutationNodeIgnored,
-          isNodePublished
+          isNodePublished,
+          function () {
+            return isEntryActive(entry)
+          },
+          mutationResourceBudget
         )
         entry.flush = mutationObserverController.flush || function () {}
         entry.deactivateMutationObserver =
@@ -140,6 +158,8 @@ export var initShadowRootsController = function (configuration, data) {
         entry.refreshAndFlushPendingRootForNode =
           mutationObserverController.refreshAndFlushPendingRootForNode ||
           function () {}
+        entry.resetMutationObserver =
+          mutationObserverController.reset || function () {}
         entry.stopMutationObserver =
           mutationObserverController.stop || function () {}
 
@@ -148,12 +168,12 @@ export var initShadowRootsController = function (configuration, data) {
         // before the controller becomes visible in the active map.
         var gatedInputCb = createGatedCallback(entry, 'input', inputCb)
         entry.stopInputObserver =
-          (isNodeIgnored
+          (isInputNodeIgnored
             ? initInputObserverImpl(
                 gatedInputCb,
                 configuration,
                 shadowRoot,
-                isNodeIgnored
+                isInputNodeIgnored
               )
             : initInputObserverImpl(
                 gatedInputCb,
@@ -162,11 +182,9 @@ export var initShadowRootsController = function (configuration, data) {
               )) || function () {}
         entry.registered = true
         controllerByShadowRoot.set(shadowRoot, entry)
-        skippedShadowRoots.delete(shadowRoot)
         return true
       } catch (error) {
         entry.active = false
-        skippedShadowRoots.add(shadowRoot)
         stopControllerEntry(entry, false)
         throw error
       }
@@ -180,7 +198,6 @@ export var initShadowRootsController = function (configuration, data) {
       entry.active = false
       entry.registered = false
       controllerByShadowRoot.delete(shadowRoot)
-      skippedShadowRoots.add(shadowRoot)
       stopControllerEntry(entry, true)
     },
 
@@ -188,21 +205,7 @@ export var initShadowRootsController = function (configuration, data) {
       if (stopped || controllerByShadowRoot.size === 0) {
         return
       }
-      var disconnectedShadowRoots = []
-      controllerByShadowRoot.forEach(function (_, shadowRoot) {
-        if (!shadowRootBelongsToObservedDocument(shadowRoot)) {
-          disconnectedShadowRoots.push(shadowRoot)
-        }
-      })
-      disconnectedShadowRoots.forEach(function (shadowRoot) {
-        try {
-          shadowRootsController.removeShadowRoot(shadowRoot)
-        } catch (_) {
-          // removeShadowRoot retires the registry entry before cleanup runs.
-          // Continue through the bounded registry so one faulty observer does
-          // not keep unrelated detached roots alive.
-        }
-      })
+      runDisconnectedShadowRootCleanupSlice()
     },
 
     refreshAndFlushPendingRootForNode: function (node) {
@@ -264,6 +267,8 @@ export var initShadowRootsController = function (configuration, data) {
           continue
         }
         entry.provisionalOwner = undefined
+        entry.active = false
+        entry.registered = false
         controllerByShadowRoot.delete(shadowRoot)
         retiredControllers.set(shadowRoot, entry)
       }
@@ -289,11 +294,11 @@ export var initShadowRootsController = function (configuration, data) {
         if (!current) {
           return false
         }
-        if (
-          isNodeShadowRoot(current) &&
-          skippedShadowRoots.has(current)
-        ) {
-          return true
+        if (isNodeShadowRoot(current)) {
+          var entry = latestEntryByShadowRoot.get(current)
+          if (entry && !isEntryActive(entry)) {
+            return true
+          }
         }
         depth += 1
       }
@@ -321,43 +326,52 @@ export var initShadowRootsController = function (configuration, data) {
 
       var generation = activeGeneration
       var shadowRootCount = controllerByShadowRoot.size
-      if (shadowRootCount > SHADOW_ROOT_FLUSH_MAX_COUNT) {
-        return failFlush(generation, {
-          reason: 'shadow_root_flush_watermark',
-          shadowRootCount: shadowRootCount,
-          flushedShadowRootCount: 0
-        })
-      }
 
-      var flushState = {
-        events: [],
-        generation: generation,
-        overflow: undefined
-      }
+      var flushState =
+        currentFlush && currentFlush.generation === generation
+          ? currentFlush
+          : {
+              events: [],
+              eventApproxBytes: 0,
+              eventCount: 0,
+              eventBudgetReservation: undefined,
+              generation: generation,
+              overflow: undefined
+            }
       currentFlush = flushState
       var deadline = getCurrentTimeImpl() + SHADOW_ROOT_FLUSH_BUDGET_MS
-      var iterator = controllerByShadowRoot.values()
+      if (
+        !pendingFlushIterator ||
+        pendingFlushGeneration !== generation
+      ) {
+        pendingFlushIterator = controllerByShadowRoot.values()
+        pendingFlushGeneration = generation
+      }
+      var iterator = pendingFlushIterator
       var flushedShadowRootCount = 0
       var failure
+      var iteratorCompleted = false
 
-      while (flushedShadowRootCount < shadowRootCount) {
+      while (
+        flushedShadowRootCount < SHADOW_ROOT_FLUSH_MAX_COUNT
+      ) {
         if (
           flushedShadowRootCount > 0 &&
           getCurrentTimeImpl() >= deadline
         ) {
-          failure = {
-            reason: 'shadow_root_flush_budget',
-            shadowRootCount: shadowRootCount,
-            flushedShadowRootCount: flushedShadowRootCount
+          break
+        }
+        var entry = pendingFlushEntry
+        if (!entry) {
+          var nextEntry = iterator.next()
+          if (nextEntry.done) {
+            iteratorCompleted = true
+            break
           }
-          break
+          entry = nextEntry.value
         }
-        var nextEntry = iterator.next()
-        if (nextEntry.done) {
-          break
-        }
-        var entry = nextEntry.value
         if (!isEntryActive(entry)) {
+          pendingFlushEntry = undefined
           continue
         }
         try {
@@ -369,10 +383,25 @@ export var initShadowRootsController = function (configuration, data) {
               cause:
                 flushState.overflow && flushState.overflow.reason,
               shadowRootCount: shadowRootCount,
-              flushedShadowRootCount: flushedShadowRootCount
+              flushedShadowRootCount: flushedShadowRootCount,
+              $rSuppressMutationOverflow:
+                flushState.overflow
+                  ? flushState.overflow.$rSuppressMutationOverflow
+                  : flushSucceeded === false &&
+                    mutationResourceBudget &&
+                    mutationResourceBudget.isFailed()
             }
             break
           }
+          if (flushSucceeded === 'pending') {
+            // A single root can itself own a paged raw-mutation transaction.
+            // Keep the iterator pinned to that root until its final chunk is
+            // committed; advancing here would let a boundary reset/stop drop
+            // the unfinished transaction while reporting a successful flush.
+            pendingFlushEntry = entry
+            break
+          }
+          pendingFlushEntry = undefined
         } catch (error) {
           failure = {
             reason: 'shadow_root_flush_error',
@@ -384,33 +413,99 @@ export var initShadowRootsController = function (configuration, data) {
         }
       }
 
-      currentFlush = undefined
       if (failure) {
+        clearPendingShadowRootFlush()
         return failFlush(generation, failure)
       }
+
+      if (!iteratorCompleted) {
+        // Keep every page buffered in one logical commit. The caller can
+        // yield and invoke flush() again; native callbacks occurring between
+        // pages join the same generation-gated transaction.
+        return 'pending'
+      }
+
+      currentFlush = undefined
 
       var eventsToDispatch = coalesceMutationEvents(
         flushState.events.filter(function (event) {
           return isEntryActive(event.entry)
         })
       )
-      for (
-        var eventIndex = 0;
-        eventIndex < eventsToDispatch.length;
-        eventIndex += 1
-      ) {
-        var event = eventsToDispatch[eventIndex]
-        var eventEntries = event.entries || [event.entry]
-        if (
-          !eventEntries.some(function (entry) {
-            return isEntryActive(entry)
-          })
+      try {
+        for (
+          var eventIndex = 0;
+          eventIndex < eventsToDispatch.length;
+          eventIndex += 1
         ) {
-          continue
+          var event = eventsToDispatch[eventIndex]
+          var eventEntries = event.entries || [event.entry]
+          if (
+            !eventEntries.some(function (entry) {
+              return isEntryActive(entry)
+            })
+          ) {
+            continue
+          }
+          event.callback(event.value)
         }
-        event.callback(event.value)
+      } finally {
+        releaseShadowRootFlushBudget(flushState)
+      }
+      if (iteratorCompleted) {
+        clearPendingShadowRootFlush()
       }
       return isGenerationActive(generation)
+    },
+
+    $rResetPendingMutationsForBaseline: function () {
+      if (stopped || controllerByShadowRoot.size === 0) {
+        clearPendingShadowRootBaselineReset()
+        return true
+      }
+      var generation = activeGeneration
+      if (
+        !baselineResetIterator ||
+        baselineResetGeneration !== generation
+      ) {
+        baselineResetIterator = controllerByShadowRoot.values()
+        baselineResetGeneration = generation
+      }
+      var deadline =
+        getCurrentTimeImpl() + SHADOW_ROOT_FLUSH_BUDGET_MS
+      var resetCount = 0
+      while (resetCount < SHADOW_ROOT_FLUSH_MAX_COUNT) {
+        if (resetCount > 0 && getCurrentTimeImpl() >= deadline) {
+          return 'pending'
+        }
+        var nextEntry = baselineResetIterator.next()
+        if (nextEntry.done) {
+          clearPendingShadowRootBaselineReset()
+          return true
+        }
+        var entry = nextEntry.value
+        if (!isEntryActive(entry)) {
+          continue
+        }
+        try {
+          // reset() performs takeRecords(), reports mutation activity, and
+          // discards the obsolete raw/task generation without serializing it.
+          // The caller restarts the mixed-time FullSnapshot when that activity
+          // advances its DOM version.
+          entry.resetMutationObserver()
+        } catch (error) {
+          clearPendingShadowRootBaselineReset()
+          if (mutationOverflowCb) {
+            mutationOverflowCb({
+              reason: 'shadow_root_baseline_reset_error',
+              error: String(error)
+            })
+          }
+          return false
+        }
+        resetCount += 1
+      }
+      return 'pending'
     },
 
     reset: function () {
@@ -448,8 +543,13 @@ export var initShadowRootsController = function (configuration, data) {
       recoveryShadowRoots = undefined
       // Retire observers registered by the incomplete snapshot before
       // rebuilding the bounded observer set from the previous published
-      // baseline. The active set is capped at 64 roots.
+      // baseline. Observer installation is complete for every registered
+      // root; explicit flushing is independently time-sliced.
       retireActiveGeneration()
+      // This synchronous reinstall is deliberately limited to the abandoned
+      // replacement-baseline path. Paging it would leave a window where
+      // mutations inside a previously published root are not observed, so
+      // correctness takes precedence over latency on this rare failure path.
       shadowRoots.forEach(function (shadowRoot) {
         try {
           if (shadowRootBelongsToObservedDocument(shadowRoot)) {
@@ -494,6 +594,7 @@ export var initShadowRootsController = function (configuration, data) {
     return (
       entry.active &&
       entry.registered &&
+      controllerByShadowRoot.get(entry.shadowRoot) === entry &&
       isGenerationActive(entry.generation)
     )
   }
@@ -539,6 +640,19 @@ export var initShadowRootsController = function (configuration, data) {
             reason: 'shadow_root_observer_overflow'
           }
         } else {
+          if (!reserveShadowRootFlushEvent(currentFlush, type, value)) {
+            var shouldReportOverflow =
+              !mutationResourceBudget ||
+              mutationResourceBudget.failOnce()
+            currentFlush.overflow = {
+              reason: 'aggregate_shadow_flush_watermark',
+              mutationApproxBytes:
+                currentFlush.eventApproxBytes +
+                estimateShadowRootFlushEventApproxBytes(type, value),
+              $rSuppressMutationOverflow: !shouldReportOverflow
+            }
+            return
+          }
           currentFlush.events.push({
             callback: callback,
             entry: entry,
@@ -557,6 +671,10 @@ export var initShadowRootsController = function (configuration, data) {
     var mergedMutationEvent
     events.forEach(function (event) {
       if (event.type !== 'mutation') {
+        // Only adjacent mutation callbacks are one coalescing window. Input
+        // and other state events can arrive between paged root flushes; moving
+        // a later mutation ahead of that event would corrupt replay ordering.
+        mergedMutationEvent = undefined
         result.push(event)
         return
       }
@@ -594,6 +712,64 @@ export var initShadowRootsController = function (configuration, data) {
       )
     })
     return result
+  }
+
+  function reserveShadowRootFlushEvent(flushState, type, value) {
+    var eventApproxBytes =
+      estimateShadowRootFlushEventApproxBytes(type, value)
+    var nextEventCount = flushState.eventCount + 1
+    var nextEventApproxBytes =
+      flushState.eventApproxBytes + eventApproxBytes
+    if (mutationResourceBudget) {
+      if (!flushState.eventBudgetReservation) {
+        flushState.eventBudgetReservation =
+          mutationResourceBudget.reserve('flush', {
+            eventCount: nextEventCount,
+            approxBytes: nextEventApproxBytes
+          })
+        if (!flushState.eventBudgetReservation) {
+          return false
+        }
+      } else if (
+        !flushState.eventBudgetReservation.update({
+          eventCount: nextEventCount,
+          approxBytes: nextEventApproxBytes
+        })
+      ) {
+        return false
+      }
+    }
+    flushState.eventCount = nextEventCount
+    flushState.eventApproxBytes = nextEventApproxBytes
+    return true
+  }
+
+  function releaseShadowRootFlushBudget(flushState) {
+    if (flushState && flushState.eventBudgetReservation) {
+      flushState.eventBudgetReservation()
+      flushState.eventBudgetReservation = undefined
+    }
+  }
+
+  function estimateShadowRootFlushEventApproxBytes(type, value) {
+    if (type === 'mutation') {
+      return getMutationPayloadApproxBytes(value)
+    }
+    var approxBytes = 64
+    if (!value || typeof value !== 'object') {
+      return (
+        approxBytes +
+        (typeof value === 'string' ? value.length * 2 : 0)
+      )
+    }
+    Object.keys(value).slice(0, 64).forEach(function (name) {
+      var propertyValue = value[name]
+      approxBytes += name.length * 2 + 16
+      if (typeof propertyValue === 'string') {
+        approxBytes += propertyValue.length * 2
+      }
+    })
+    return approxBytes
   }
 
   function isEntryShadowRootIgnored(entry) {
@@ -650,17 +826,27 @@ export var initShadowRootsController = function (configuration, data) {
   }
 
   function failFlush(generation, overflow) {
+    releaseShadowRootFlushBudget(currentFlush)
     currentFlush = undefined
     if (generation === activeGeneration) {
       retireActiveGeneration()
     }
-    if (!stopped && mutationOverflowCb) {
+    if (
+      !stopped &&
+      mutationOverflowCb &&
+      !overflow.$rSuppressMutationOverflow
+    ) {
       mutationOverflowCb(overflow)
     }
     return false
   }
 
   function retireActiveGeneration() {
+    releaseShadowRootFlushBudget(currentFlush)
+    currentFlush = undefined
+    clearPendingShadowRootFlush()
+    clearPendingShadowRootBaselineReset()
+    clearDisconnectedShadowRootCleanup()
     var retiredGeneration = activeGeneration
     var retiredControllers = controllerByShadowRoot
     retiredGeneration.active = false
@@ -674,32 +860,74 @@ export var initShadowRootsController = function (configuration, data) {
     retireControllerEntries(retiredControllers)
   }
 
-  function retireControllerEntries(retiredControllers) {
-    if (retiredControllers.size > 0) {
-      // Native MutationObserver callbacks can be much more expensive than the
-      // final generation-gated replay callback. Deactivate their entry guards
-      // synchronously, but leave physical disconnect and listener cleanup in
-      // the bounded asynchronous cleanup slices below.
-      retiredControllers.forEach(function (entry, shadowRoot) {
-        skippedShadowRoots.add(shadowRoot)
-        entry.active = false
-        entry.registered = false
-        var deactivationError = deactivateControllerEntry(entry)
-        if (deactivationError) {
-          reportCleanupError(deactivationError)
-        }
-      })
-      if (
-        retiredControllerCount + retiredControllers.size >
-        SHADOW_ROOT_RETIRED_CONTROLLER_LIMIT
-      ) {
-        // Repeated baseline resets can outrun the sliced cleanup queue. The
-        // active generation is already deactivated and its heavy mutation
-        // buffers were released synchronously, so disconnect this one map now
-        // rather than retaining an unbounded chain of observers/listeners.
-        stopRetiredControllersSynchronously(retiredControllers)
+  function clearPendingShadowRootFlush() {
+    pendingFlushIterator = undefined
+    pendingFlushGeneration = undefined
+    pendingFlushEntry = undefined
+  }
+
+  function clearPendingShadowRootBaselineReset() {
+    baselineResetIterator = undefined
+    baselineResetGeneration = undefined
+  }
+
+  function runDisconnectedShadowRootCleanupSlice() {
+    if (
+      !disconnectedCleanupIterator ||
+      disconnectedCleanupGeneration !== activeGeneration
+    ) {
+      disconnectedCleanupIterator = controllerByShadowRoot.entries()
+      disconnectedCleanupGeneration = activeGeneration
+    }
+    var deadline = getCurrentTimeImpl() + SHADOW_ROOT_CLEANUP_BUDGET_MS
+    var scanned = 0
+    while (scanned < SHADOW_ROOT_CLEANUP_BATCH_SIZE) {
+      var nextEntry = disconnectedCleanupIterator.next()
+      if (nextEntry.done) {
+        clearDisconnectedShadowRootCleanup()
         return
       }
+      scanned += 1
+      var shadowRoot = nextEntry.value[0]
+      if (!shadowRootBelongsToObservedDocument(shadowRoot)) {
+        try {
+          shadowRootsController.removeShadowRoot(shadowRoot)
+        } catch (_) {}
+      }
+      if (getCurrentTimeImpl() >= deadline) {
+        break
+      }
+    }
+    scheduleDisconnectedShadowRootCleanup()
+  }
+
+  function scheduleDisconnectedShadowRootCleanup() {
+    if (
+      disconnectedCleanupScheduled ||
+      !disconnectedCleanupIterator ||
+      stopped
+    ) {
+      return
+    }
+    disconnectedCleanupScheduled = true
+    setTimeout(function () {
+      disconnectedCleanupScheduled = false
+      if (!stopped && disconnectedCleanupIterator) {
+        runDisconnectedShadowRootCleanupSlice()
+      }
+    }, 0)
+  }
+
+  function clearDisconnectedShadowRootCleanup() {
+    disconnectedCleanupIterator = undefined
+    disconnectedCleanupGeneration = undefined
+  }
+
+  function retireControllerEntries(retiredControllers) {
+    if (retiredControllers.size > 0) {
+      // The generation (or provisional map membership) has already been
+      // invalidated, so native observer ingress is gated without walking every
+      // entry here. Physical observer/listener teardown remains bounded below.
       var cleanupItem = {
         controllers: retiredControllers,
         iterator: retiredControllers.entries(),
@@ -777,16 +1005,6 @@ export var initShadowRootsController = function (configuration, data) {
       return
     }
     scheduleCleanup()
-  }
-
-  function stopRetiredControllersSynchronously(retiredControllers) {
-    retiredControllers.forEach(function (entry, shadowRoot) {
-      retiredControllers.delete(shadowRoot)
-      entry.active = false
-      entry.registered = false
-      entry.pendingOverflowAfterReset = false
-      stopControllerEntry(entry, false)
-    })
   }
 
   function deactivateControllerEntry(entry) {

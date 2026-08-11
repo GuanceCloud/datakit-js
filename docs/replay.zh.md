@@ -69,7 +69,11 @@ datafluxRum.startSessionReplayRecording()
 - Web Components
 - Shadow DOM
 
-对于 `canvas`，当前 SDK 已支持 2D canvas 录制，包括手动录制和自动录制。具体配置见 [Canvas 录制使用手册](./replay-canvas.zh.md)。
+对于 `canvas`，当前 SDK 已支持 Canvas 2D 的手动录制和自动录制。WebGL/WebGL2
+实现不在 RUM 主包中；需要时额外安装 `@cloudcare/browser-rum-webgl`，在
+`plugins` 中注册 `webglReplayPlugin()`，并使用 `auto` 模式进行绘制驱动、受预算
+约束的像素快照。WebGL 命令级重放和逐帧视频录制不在支持范围。具体配置见
+[Canvas 录制使用手册](./replay-canvas.md)。
 
 ### 字体或图片显示异常
 

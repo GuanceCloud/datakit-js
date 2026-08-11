@@ -43,6 +43,21 @@ describe('replay/record/canvasEncodeBridge', () => {
     canvas.height = 10
   })
 
+  it('should not send known WebGL canvases through the 2d bridge without the addon', async () => {
+    setReplayCanvasContextType(canvas, 'webgl')
+    var toDataURL = spyOn(canvas, 'toDataURL')
+    var bridge = createCanvasEncodeBridge({
+      replayCanvasMaxConcurrentEncodes: 1
+    })
+
+    expect(await bridge.encode(canvas)).toEqual({
+      ok: false,
+      reason: 'webgl_plugin_missing'
+    })
+    expect(toDataURL).not.toHaveBeenCalled()
+    bridge.stop()
+  })
+
   it('should fallback to main-thread encoding when worker encoding is unavailable', async () => {
     const bridge = createCanvasEncodeBridge(
       {
@@ -65,10 +80,14 @@ describe('replay/record/canvasEncodeBridge', () => {
     expect(result.dataUrl.startsWith('data:image/webp;base64,')).toBeTrue()
   })
 
-  it('should reject an oversized main-thread target before allocating a resize canvas', async () => {
-    canvas.width = 8192
+  it('should preserve an explicit main-thread target above 16 MiB', async () => {
+    canvas.width = 4096
     canvas.height = 4096
-    canvas.toBlob = jasmine.createSpy('toBlob')
+    canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
+      callback
+    ) {
+      callback(new Blob(['ABC'], { type: 'image/webp' }))
+    })
     var createElement = spyOn(document, 'createElement').and.callThrough()
     var bridge = createCanvasEncodeBridge(
       {
@@ -84,11 +103,12 @@ describe('replay/record/canvasEncodeBridge', () => {
       }
     )
 
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWithError(
-      'Canvas encode bridge target memory budget exceeded'
-    )
+    var result = await bridge.encode(canvas)
+
+    expect(result.width).toBe(4096)
+    expect(result.height).toBe(4096)
     expect(createElement).not.toHaveBeenCalledWith('canvas')
-    expect(canvas.toBlob).not.toHaveBeenCalled()
+    expect(canvas.toBlob).toHaveBeenCalledTimes(1)
     bridge.stop()
   })
 
@@ -133,9 +153,10 @@ describe('replay/record/canvasEncodeBridge', () => {
     var originalFileReader = globalThis.FileReader
     var FileReaderSpy = jasmine.createSpy('FileReader')
     globalThis.FileReader = FileReaderSpy
-    canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
-      callback
-    ) {
+    var toBlob = spyOn(
+      HTMLCanvasElement.prototype,
+      'toBlob'
+    ).and.callFake(function (callback) {
       callback({ size: 5, type: 'image/webp' })
     })
     var bridge = createCanvasEncodeBridge(
@@ -159,12 +180,19 @@ describe('replay/record/canvasEncodeBridge', () => {
         reason: 'encode_too_large',
         encodedBytesCount: 5
       })
+      expect(toBlob.calls.count()).toBe(1)
+      expect(toBlob.calls.allArgs().map(function (args) {
+        return args[2]
+      })).toEqual([0.4])
       expect(FileReaderSpy).not.toHaveBeenCalled()
     } finally {
       bridge.stop()
       globalThis.FileReader = originalFileReader
     }
   })
+
+
+
 
   it('should preserve the actual main-thread data url mime type when toDataURL falls back', async () => {
     var originalToDataURL = canvas.toDataURL
@@ -198,45 +226,19 @@ describe('replay/record/canvasEncodeBridge', () => {
     canvas.toDataURL = originalToDataURL
   })
 
-  it('should synchronously copy WebGL pixels before main-thread fallback encoding', async () => {
-    canvas.width = 1
-    canvas.height = 1
-    var originalGetContext = canvas.getContext.bind(canvas)
-    var webGLContext = {
-      FRAMEBUFFER: 36160,
-      FRAMEBUFFER_BINDING: 36006,
-      RGBA: 6408,
-      UNSIGNED_BYTE: 5121,
-      drawingBufferWidth: 1,
-      drawingBufferHeight: 1,
-      getParameter: jasmine.createSpy('getParameter').and.returnValue(null),
-      bindFramebuffer: jasmine.createSpy('bindFramebuffer'),
-      readPixels: jasmine.createSpy('readPixels').and.callFake(function (
-        _x,
-        _y,
-        _width,
-        _height,
-        _format,
-        _type,
-        pixels
-      ) {
-        pixels.set([220, 30, 40, 255])
-      })
-    }
-    canvas.getContext = jasmine.createSpy('getContext').and.callFake(function (
-      contextType
-    ) {
-      return contextType === 'webgl'
-        ? webGLContext
-        : originalGetContext(contextType)
-    })
-    canvas.toDataURL = jasmine.createSpy('sourceToDataURL')
-    setReplayCanvasContextType(canvas, 'webgl')
-    var bridge = createCanvasEncodeBridge(
+  it('should drop an oversized toDataURL fallback before returning it to WebGL retry logic', async () => {
+    var originalToDataURL = canvas.toDataURL
+    canvas.toBlob = undefined
+    canvas.toDataURL = jasmine
+      .createSpy('toDataURL')
+      .and.returnValue('data:image/webp;base64,QUJDRA==')
+
+    const bridge = createCanvasEncodeBridge(
       {
         replayCanvasMimeType: 'image/webp',
         replayCanvasQuality: 0.4,
         replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxEncodedBytes: 5,
         replayCanvasMaxConcurrentEncodes: 1
       },
       {
@@ -246,16 +248,15 @@ describe('replay/record/canvasEncodeBridge', () => {
       }
     )
 
-    var resultPromise = bridge.encode(canvas)
+    expect(await bridge.encode(canvas)).toEqual({
+      ok: false,
+      reason: 'encode_too_large',
+      encodedBytesCount: 6
+    })
 
-    expect(webGLContext.readPixels).not.toHaveBeenCalled()
-    expect(canvas.toDataURL).not.toHaveBeenCalled()
-    var result = await resultPromise
-    expect(result.width).toBe(1)
-    expect(result.height).toBe(1)
-    expect(result.dataUrl).toMatch(/^data:image\/(webp|png);base64,/)
-    bridge.stop()
+    canvas.toDataURL = originalToDataURL
   })
+
 
   it('should use worker encoding when supported', async () => {
     let messageHandler
@@ -304,6 +305,8 @@ describe('replay/record/canvasEncodeBridge', () => {
     expect(worker.postMessage.calls.argsFor(0)[0]).toEqual({ action: 'init' })
     var request = worker.postMessage.calls.argsFor(1)[0]
     expect(request.maxEncodedBytes).toBe(123)
+    expect(request.attemptLevel).toBeUndefined()
+    expect(request.fallbackWidth).toBeUndefined()
     messageHandler({
       data: {
         action: 'initialized',
@@ -331,11 +334,17 @@ describe('replay/record/canvasEncodeBridge', () => {
     expect(worker.terminate).toHaveBeenCalled()
   })
 
-  it('should reject an oversized worker target before creating an ImageBitmap', async () => {
+  it('should preserve an explicit worker target above 16 MiB', async () => {
     canvas.width = 8192
     canvas.height = 4096
-    var createImageBitmap = jasmine.createSpy('createImageBitmap')
-    var createWorker = jasmine.createSpy('createWorker')
+    var bitmap = { close: jasmine.createSpy('close') }
+    var createImageBitmap = jasmine
+      .createSpy('createImageBitmap')
+      .and.returnValue(Promise.resolve(bitmap))
+    var workerHandle = createTestWorker()
+    var createWorker = jasmine
+      .createSpy('createWorker')
+      .and.returnValue(workerHandle.worker)
     var bridge = createCanvasEncodeBridge(
       {
         replayCanvasMimeType: 'image/webp',
@@ -356,11 +365,24 @@ describe('replay/record/canvasEncodeBridge', () => {
       }
     )
 
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWithError(
-      'Canvas encode bridge target memory budget exceeded'
-    )
-    expect(createImageBitmap).not.toHaveBeenCalled()
-    expect(createWorker).not.toHaveBeenCalled()
+    var resultPromise = bridge.encode(canvas)
+    await flushPromises()
+    var request = workerHandle.worker.postMessage.calls.argsFor(1)[0]
+    workerHandle.emitMessage({
+      action: 'encoded',
+      id: request.id,
+      dataUrl: 'data:image/webp;base64,LARGE',
+      width: 4096,
+      height: 2048
+    })
+
+    expect(await resultPromise).toEqual({
+      dataUrl: 'data:image/webp;base64,LARGE',
+      width: 4096,
+      height: 2048
+    })
+    expect(createImageBitmap).toHaveBeenCalledTimes(1)
+    expect(createWorker).toHaveBeenCalledTimes(1)
     bridge.stop()
   })
 
@@ -454,6 +476,8 @@ describe('replay/record/canvasEncodeBridge', () => {
     var request = workerHandle.worker.postMessage.calls.argsFor(1)[0]
     expect(request.width).toBe(1000)
     expect(request.height).toBe(500)
+    expect(request.attemptLevel).toBeUndefined()
+    expect(request.fallbackWidth).toBeUndefined()
 
     workerHandle.emitMessage({
       id: request.id,
@@ -471,709 +495,19 @@ describe('replay/record/canvasEncodeBridge', () => {
     bridge.stop()
   })
 
-  it('should synchronously stage WebGL pixels before resizing them in the worker', async () => {
-    canvas.width = 2000
-    canvas.height = 1000
-    var sourceContext = canvas.getContext('2d')
-    sourceContext.fillStyle = 'rgb(255, 0, 0)'
-    sourceContext.fillRect(0, 0, canvas.width, canvas.height)
-    setReplayCanvasContextType(canvas, 'webgl')
-    var workerHandle = createTestWorker()
-    var bitmap = { close: jasmine.createSpy('close') }
-    var createImageBitmap = jasmine
-      .createSpy('createImageBitmap')
-      .and.returnValue(Promise.resolve(bitmap))
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1000,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: createImageBitmap,
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: jasmine
-          .createSpy('createWorker')
-          .and.returnValue(workerHandle.worker)
-      }
-    )
 
-    var resultPromise = bridge.encode(canvas)
-    await Promise.resolve()
-    await Promise.resolve()
 
-    var stagedCanvas = createImageBitmap.calls.argsFor(0)[0]
-    expect(stagedCanvas).not.toBe(canvas)
-    expect(stagedCanvas.width).toBe(1000)
-    expect(stagedCanvas.height).toBe(500)
-    expect(
-      Array.from(
-        stagedCanvas.getContext('2d').getImageData(0, 0, 1, 1).data
-      )
-    ).toEqual([255, 0, 0, 255])
-    var request = workerHandle.worker.postMessage.calls.argsFor(1)[0]
-    expect(request.width).toBe(1000)
-    expect(request.height).toBe(500)
 
-    workerHandle.emitMessage({
-      id: request.id,
-      action: 'encoded',
-      dataUrl: 'data:image/webp;base64,WEBGL',
-      width: 1000,
-      height: 500
-    })
 
-    expect(await resultPromise).toEqual({
-      dataUrl: 'data:image/webp;base64,WEBGL',
-      width: 1000,
-      height: 500
-    })
-    bridge.stop()
-  })
 
-  it('should stage a queued WebGL frame immediately while another encode is busy', async () => {
-    canvas.width = 1
-    canvas.height = 1
-    var sourceContext = canvas.getContext('2d')
-    sourceContext.fillStyle = 'rgb(255, 0, 0)'
-    sourceContext.fillRect(0, 0, 1, 1)
-    setReplayCanvasContextType(canvas, 'webgl')
-    var bitmapRequests = []
-    var createImageBitmap = jasmine
-      .createSpy('createImageBitmap')
-      .and.callFake(function (stagingCanvas) {
-        return new Promise(function (resolve) {
-          bitmapRequests.push({
-            stagingCanvas: stagingCanvas,
-            resolve: resolve
-          })
-        })
-      })
-    var workerHandle = createTestWorker()
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: createImageBitmap,
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: jasmine
-          .createSpy('createWorker')
-          .and.returnValue(workerHandle.worker)
-      }
-    )
 
-    var firstResultPromise = bridge.encode(canvas)
-    sourceContext.fillStyle = 'rgb(0, 255, 0)'
-    sourceContext.fillRect(0, 0, 1, 1)
-    var secondResultPromise = bridge.encode(canvas)
-    sourceContext.fillStyle = 'rgb(0, 0, 255)'
-    sourceContext.fillRect(0, 0, 1, 1)
 
-    expect(createImageBitmap.calls.count()).toBe(1)
-    bitmapRequests[0].resolve({ close: jasmine.createSpy('close') })
-    await Promise.resolve()
-    await Promise.resolve()
-    var firstRequest = workerHandle.worker.postMessage.calls.argsFor(1)[0]
-    workerHandle.emitMessage({
-      id: firstRequest.id,
-      action: 'encoded',
-      dataUrl: 'data:image/webp;base64,FIRST',
-      width: 1,
-      height: 1
-    })
-    expect(await firstResultPromise).toEqual(
-      jasmine.objectContaining({
-        dataUrl: 'data:image/webp;base64,FIRST'
-      })
-    )
-    await flushPromises()
 
-    expect(createImageBitmap.calls.count()).toBe(2)
-    expect(
-      Array.from(
-        bitmapRequests[1].stagingCanvas
-          .getContext('2d')
-          .getImageData(0, 0, 1, 1).data
-      )
-    ).toEqual([0, 255, 0, 255])
 
-    bitmapRequests[1].resolve({ close: jasmine.createSpy('close') })
-    await Promise.resolve()
-    await Promise.resolve()
-    var secondRequest = workerHandle.worker.postMessage.calls.argsFor(2)[0]
-    workerHandle.emitMessage({
-      id: secondRequest.id,
-      action: 'encoded',
-      dataUrl: 'data:image/webp;base64,SECOND',
-      width: 1,
-      height: 1
-    })
-    expect(await secondResultPromise).toEqual(
-      jasmine.objectContaining({
-        dataUrl: 'data:image/webp;base64,SECOND'
-      })
-    )
-    bridge.stop()
-  })
 
-  it('should cap retained WebGL staging surfaces at twice the encode concurrency', async () => {
-    canvas.width = 1
-    canvas.height = 1
-    canvas.getContext('2d').fillRect(0, 0, 1, 1)
-    setReplayCanvasContextType(canvas, 'webgl')
-    var bitmapRequests = []
-    var workerHandle = createTestWorker()
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: jasmine
-          .createSpy('createImageBitmap')
-          .and.callFake(function () {
-            return new Promise(function (resolve) {
-              bitmapRequests.push({ resolve: resolve })
-            })
-          }),
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: jasmine
-          .createSpy('createWorker')
-          .and.returnValue(workerHandle.worker)
-      }
-    )
 
-    var firstResultPromise = bridge.encode(canvas)
-    var secondResultPromise = bridge.encode(canvas).catch(function (error) {
-      return error
-    })
-    var overflowResults = []
-    for (var requestIndex = 0; requestIndex < 20; requestIndex += 1) {
-      overflowResults.push(
-        bridge.encode(canvas).catch(function (error) {
-          return error
-        })
-      )
-    }
 
-    expect(bitmapRequests.length).toBe(1)
-    var overflowErrors = await Promise.all(overflowResults)
-    overflowErrors.forEach(function (error) {
-      expect(error.message).toBe(
-        'Canvas encode bridge WebGL staging queue full'
-      )
-    })
-
-    bitmapRequests[0].resolve({ close: jasmine.createSpy('close') })
-    await Promise.resolve()
-    await Promise.resolve()
-    var firstRequest = workerHandle.worker.postMessage.calls.argsFor(1)[0]
-    workerHandle.emitMessage({
-      id: firstRequest.id,
-      action: 'encoded',
-      dataUrl: 'data:image/webp;base64,FIRST',
-      width: 1,
-      height: 1
-    })
-    await firstResultPromise
-    await flushPromises()
-
-    expect(bitmapRequests.length).toBe(2)
-    var thirdResultPromise = bridge.encode(canvas).catch(function (error) {
-      return error
-    })
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWithError(
-      'Canvas encode bridge WebGL staging queue full'
-    )
-
-    bridge.stop()
-    expect((await secondResultPromise).message).toBe(
-      'Canvas encode bridge stopped'
-    )
-    expect((await thirdResultPromise).message).toBe(
-      'Canvas encode bridge stopped'
-    )
-    bitmapRequests[1].resolve({ close: jasmine.createSpy('close') })
-    await flushPromises()
-  })
-
-  it('should cap the total WebGL staging backing stores by bytes', async () => {
-    canvas.width = 1500
-    canvas.height = 1000
-    canvas.getContext('2d').fillRect(0, 0, 1, 1)
-    setReplayCanvasContextType(canvas, 'webgl')
-    var bitmapRequests = []
-    var workerHandle = createTestWorker()
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1500,
-        replayCanvasMaxConcurrentEncodes: 2
-      },
-      {
-        createImageBitmap: jasmine
-          .createSpy('createImageBitmap')
-          .and.callFake(function () {
-            return new Promise(function (resolve) {
-              bitmapRequests.push({ resolve: resolve })
-            })
-          }),
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: jasmine
-          .createSpy('createWorker')
-          .and.returnValue(workerHandle.worker)
-      }
-    )
-
-    var firstResultPromise = bridge.encode(canvas).catch(function (error) {
-      return error
-    })
-    var secondResultPromise = bridge.encode(canvas).catch(function (error) {
-      return error
-    })
-
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWithError(
-      'Canvas encode bridge WebGL staging memory budget exceeded'
-    )
-    expect(bitmapRequests.length).toBe(2)
-
-    bridge.stop()
-    bitmapRequests.forEach(function (request) {
-      request.resolve({ close: jasmine.createSpy('close') })
-    })
-    expect((await firstResultPromise).message).toBe(
-      'Canvas encode bridge stopped'
-    )
-    expect((await secondResultPromise).message).toBe(
-      'Canvas encode bridge stopped'
-    )
-    await flushPromises()
-  })
-
-  it('should reject an empty WebGL drawing buffer before reading pixels', async () => {
-    canvas.width = 1
-    canvas.height = 1
-    var originalGetContext = canvas.getContext.bind(canvas)
-    var webGLContext = {
-      drawingBufferWidth: 0,
-      drawingBufferHeight: 0,
-      isContextLost: jasmine
-        .createSpy('isContextLost')
-        .and.returnValue(false),
-      readPixels: jasmine.createSpy('readPixels')
-    }
-    canvas.getContext = jasmine.createSpy('getContext').and.callFake(function (
-      contextType
-    ) {
-      return contextType === 'webgl'
-        ? webGLContext
-        : originalGetContext(contextType)
-    })
-    setReplayCanvasContextType(canvas, 'webgl')
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: undefined,
-        Worker: undefined,
-        url: undefined
-      }
-    )
-
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWithError(
-      'WebGL drawing buffer is empty'
-    )
-    expect(webGLContext.readPixels).not.toHaveBeenCalled()
-    bridge.stop()
-  })
-
-  it('should reject a lost WebGL context before copying its backing store', async () => {
-    var originalGetContext = canvas.getContext.bind(canvas)
-    var webGLContext = {
-      drawingBufferWidth: 20,
-      drawingBufferHeight: 10,
-      isContextLost: jasmine
-        .createSpy('isContextLost')
-        .and.returnValue(true),
-      readPixels: jasmine.createSpy('readPixels')
-    }
-    canvas.getContext = jasmine.createSpy('getContext').and.callFake(function (
-      contextType
-    ) {
-      return contextType === 'webgl'
-        ? webGLContext
-        : originalGetContext(contextType)
-    })
-    setReplayCanvasContextType(canvas, 'webgl')
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: undefined,
-        Worker: undefined,
-        url: undefined
-      }
-    )
-
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWithError(
-      'WebGL context is lost'
-    )
-    expect(webGLContext.readPixels).not.toHaveBeenCalled()
-    bridge.stop()
-  })
-
-  it('should reject a 4K readback before allocating pixel arrays or calling readPixels', async () => {
-    var originalGetContext = canvas.getContext.bind(canvas)
-    var webGLContext = {
-      drawingBufferWidth: 3840,
-      drawingBufferHeight: 2160,
-      isContextLost: jasmine
-        .createSpy('isContextLost')
-        .and.returnValue(false),
-      readPixels: jasmine.createSpy('readPixels')
-    }
-    canvas.getContext = jasmine.createSpy('getContext').and.callFake(function (
-      contextType
-    ) {
-      return contextType === 'webgl'
-        ? webGLContext
-        : originalGetContext(contextType)
-    })
-    spyOn(CanvasRenderingContext2D.prototype, 'drawImage').and.throwError(
-      'WebGL canvas copy is unavailable'
-    )
-    setReplayCanvasContextType(canvas, 'webgl')
-    var createWebGLReadbackState = jasmine.createSpy(
-      'createWebGLReadbackState'
-    )
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: undefined,
-        Worker: undefined,
-        url: undefined,
-        createWebGLReadbackState: createWebGLReadbackState
-      }
-    )
-
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWithError(
-      'WebGL replay readback exceeds the peak memory limit'
-    )
-    expect(createWebGLReadbackState).not.toHaveBeenCalled()
-    expect(webGLContext.readPixels).not.toHaveBeenCalled()
-    bridge.stop()
-  })
-
-  it('should read, vertically flip, and stage the default WebGL framebuffer', async () => {
-    canvas.width = 2
-    canvas.height = 2
-    var originalGetContext = canvas.getContext.bind(canvas)
-    var previousReadFramebuffer = { id: 'read-framebuffer' }
-    var previousPixelPackBuffer = { id: 'pixel-pack-buffer' }
-    var webGLContext = {
-      FRAMEBUFFER: 36160,
-      FRAMEBUFFER_BINDING: 36006,
-      READ_FRAMEBUFFER: 36008,
-      READ_FRAMEBUFFER_BINDING: 36010,
-      PIXEL_PACK_BUFFER: 35051,
-      PIXEL_PACK_BUFFER_BINDING: 35053,
-      PACK_ALIGNMENT: 3333,
-      PACK_ROW_LENGTH: 3330,
-      PACK_SKIP_ROWS: 3331,
-      PACK_SKIP_PIXELS: 3332,
-      RGBA: 6408,
-      UNSIGNED_BYTE: 5121,
-      drawingBufferWidth: 2,
-      drawingBufferHeight: 2,
-      getParameter: jasmine.createSpy('getParameter').and.callFake(function (
-        parameter
-      ) {
-        if (parameter === 36010) {
-          return previousReadFramebuffer
-        }
-        if (parameter === 35053) {
-          return previousPixelPackBuffer
-        }
-        return {
-          3333: 8,
-          3330: 7,
-          3331: 3,
-          3332: 4
-        }[parameter]
-      }),
-      bindFramebuffer: jasmine.createSpy('bindFramebuffer'),
-      bindBuffer: jasmine.createSpy('bindBuffer'),
-      pixelStorei: jasmine.createSpy('pixelStorei'),
-      readPixels: jasmine.createSpy('readPixels').and.callFake(function (
-        _x,
-        _y,
-        _width,
-        _height,
-        _format,
-        _type,
-        pixels
-      ) {
-        pixels.set([
-          0,
-          0,
-          255,
-          255,
-          255,
-          255,
-          255,
-          255,
-          255,
-          0,
-          0,
-          255,
-          0,
-          255,
-          0,
-          255
-        ])
-      })
-    }
-    canvas.getContext = jasmine.createSpy('getContext').and.callFake(function (
-      contextType
-    ) {
-      return contextType === 'webgl'
-        ? webGLContext
-        : originalGetContext(contextType)
-    })
-    spyOn(CanvasRenderingContext2D.prototype, 'drawImage').and.throwError(
-      'WebGL canvas copy is unavailable'
-    )
-    setReplayCanvasContextType(canvas, 'webgl')
-    var workerHandle = createTestWorker()
-    var createImageBitmap = jasmine
-      .createSpy('createImageBitmap')
-      .and.returnValue(Promise.resolve({ close: jasmine.createSpy('close') }))
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 2,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: createImageBitmap,
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: jasmine
-          .createSpy('createWorker')
-          .and.returnValue(workerHandle.worker)
-      }
-    )
-
-    var resultPromise = bridge.encode(canvas)
-    await Promise.resolve()
-    await Promise.resolve()
-
-    var stagedCanvas = createImageBitmap.calls.argsFor(0)[0]
-    var stagedPixels = stagedCanvas
-      .getContext('2d')
-      .getImageData(0, 0, 2, 2).data
-    expect(Array.from(stagedPixels)).toEqual([
-      255,
-      0,
-      0,
-      255,
-      0,
-      255,
-      0,
-      255,
-      0,
-      0,
-      255,
-      255,
-      255,
-      255,
-      255,
-      255
-    ])
-    expect(webGLContext.bindFramebuffer.calls.argsFor(0)).toEqual([
-      webGLContext.READ_FRAMEBUFFER,
-      null
-    ])
-    expect(webGLContext.bindFramebuffer.calls.argsFor(1)).toEqual([
-      webGLContext.READ_FRAMEBUFFER,
-      previousReadFramebuffer
-    ])
-    expect(webGLContext.bindBuffer.calls.argsFor(0)).toEqual([
-      webGLContext.PIXEL_PACK_BUFFER,
-      null
-    ])
-    expect(webGLContext.bindBuffer.calls.argsFor(1)).toEqual([
-      webGLContext.PIXEL_PACK_BUFFER,
-      previousPixelPackBuffer
-    ])
-    expect(webGLContext.pixelStorei.calls.allArgs()).toEqual([
-      [webGLContext.PACK_ALIGNMENT, 1],
-      [webGLContext.PACK_ROW_LENGTH, 0],
-      [webGLContext.PACK_SKIP_ROWS, 0],
-      [webGLContext.PACK_SKIP_PIXELS, 0],
-      [webGLContext.PACK_SKIP_PIXELS, 4],
-      [webGLContext.PACK_SKIP_ROWS, 3],
-      [webGLContext.PACK_ROW_LENGTH, 7],
-      [webGLContext.PACK_ALIGNMENT, 8]
-    ])
-    expect(webGLContext.readPixels.calls.argsFor(0).slice(0, 4)).toEqual([
-      0,
-      0,
-      2,
-      2
-    ])
-
-    var request = workerHandle.worker.postMessage.calls.argsFor(1)[0]
-    workerHandle.emitMessage({
-      id: request.id,
-      action: 'encoded',
-      dataUrl: 'data:image/webp;base64,READBACK',
-      width: 2,
-      height: 2
-    })
-    expect(await resultPromise).toEqual({
-      dataUrl: 'data:image/webp;base64,READBACK',
-      width: 2,
-      height: 2
-    })
-    bridge.stop()
-  })
-
-  it('should not reread a WebGL canvas after an asynchronous worker failure', async () => {
-    setReplayCanvasContextType(canvas, 'webgl')
-    canvas.toDataURL = jasmine
-      .createSpy('toDataURL')
-      .and.returnValue('data:image/webp;base64,BLANK')
-    var workerHandle = createTestWorker()
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: jasmine
-          .createSpy('createImageBitmap')
-          .and.returnValue(
-            Promise.resolve({ close: jasmine.createSpy('close') })
-          ),
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: jasmine
-          .createSpy('createWorker')
-          .and.returnValue(workerHandle.worker)
-      }
-    )
-
-    var resultPromise = bridge.encode(canvas)
-    await Promise.resolve()
-    await Promise.resolve()
-    var request = workerHandle.worker.postMessage.calls.argsFor(1)[0]
-
-    workerHandle.emitMessage({
-      id: request.id,
-      action: 'errored',
-      error: 'worker encode failed'
-    })
-
-    await expectAsync(resultPromise).toBeRejectedWithError(
-      'worker encode failed'
-    )
-    expect(canvas.toDataURL).not.toHaveBeenCalled()
-    bridge.stop()
-  })
-
-  it('should not reread a WebGL canvas after bitmap capture fails', async () => {
-    setReplayCanvasContextType(canvas, 'webgl')
-    canvas.toDataURL = jasmine.createSpy('toDataURL')
-    var captureError = new Error('bitmap capture failed')
-    var createWorker = jasmine.createSpy('createWorker')
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 1
-      },
-      {
-        createImageBitmap: jasmine
-          .createSpy('createImageBitmap')
-          .and.returnValue(Promise.reject(captureError)),
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: createWorker
-      }
-    )
-
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWith(captureError)
-    expect(canvas.toDataURL).not.toHaveBeenCalled()
-    expect(createWorker).not.toHaveBeenCalled()
-    bridge.stop()
-  })
-
-  it('should use bounded resize staging when the ImageBitmap overload is unsupported', async () => {
+  it('should pre-resize before worker encoding when the ImageBitmap overload is unsupported', async () => {
     canvas.width = 2000
     canvas.height = 1000
     var workerHandle = createTestWorker()
@@ -1217,11 +551,8 @@ describe('replay/record/canvasEncodeBridge', () => {
     })
 
     expect(createImageBitmap.calls.count()).toBe(2)
-    var stagingCanvas = createImageBitmap.calls.argsFor(1)[0]
-    expect(stagingCanvas).not.toBe(canvas)
-    expect(stagingCanvas.width).toBe(1000)
-    expect(stagingCanvas.height).toBe(500)
-    expect(createImageBitmap.calls.argsFor(1)).toEqual([stagingCanvas])
+    expect(createImageBitmap.calls.argsFor(1).length).toBe(1)
+    expect(createImageBitmap.calls.argsFor(1)[0]).not.toBe(canvas)
     var request = workerHandle.worker.postMessage.calls.argsFor(1)[0]
     workerHandle.emitMessage({
       id: request.id,
@@ -1239,14 +570,21 @@ describe('replay/record/canvasEncodeBridge', () => {
     bridge.stop()
   })
 
-  it('should reject a resize target above 16 MiB before ImageBitmap allocation', async () => {
+  it('should preserve an explicit resize target above 16 MiB', async () => {
     canvas.width = 8192
     canvas.height = 2050
+    var bitmap = { close: jasmine.createSpy('close') }
     var createImageBitmap = jasmine
       .createSpy('createImageBitmap')
       .and.callFake(function () {
-        return Promise.reject(new TypeError('resize options unsupported'))
+        if (arguments.length > 1) {
+          return Promise.reject(
+            new TypeError('resize options unsupported')
+          )
+        }
+        return Promise.resolve(bitmap)
       })
+    var workerHandle = createTestWorker()
     var bridge = createCanvasEncodeBridge(
       {
         replayCanvasMimeType: 'image/webp',
@@ -1263,14 +601,31 @@ describe('replay/record/canvasEncodeBridge', () => {
             .and.returnValue('blob:test'),
           revokeObjectURL: jasmine.createSpy('revokeObjectURL')
         },
-        createWorker: jasmine.createSpy('createWorker')
+        createWorker: jasmine
+          .createSpy('createWorker')
+          .and.returnValue(workerHandle.worker)
       }
     )
 
-    await expectAsync(bridge.encode(canvas)).toBeRejectedWithError(
-      'Canvas encode bridge target memory budget exceeded'
-    )
-    expect(createImageBitmap).not.toHaveBeenCalled()
+    var resultPromise = bridge.encode(canvas)
+    await flushPromises()
+    var request = workerHandle.worker.postMessage.calls.argsFor(1)[0]
+    workerHandle.emitMessage({
+      action: 'encoded',
+      id: request.id,
+      dataUrl: 'data:image/webp;base64,RESIZE',
+      width: 4096,
+      height: 1025
+    })
+
+    expect(await resultPromise).toEqual({
+      dataUrl: 'data:image/webp;base64,RESIZE',
+      width: 4096,
+      height: 1025
+    })
+    expect(createImageBitmap).toHaveBeenCalledTimes(2)
+    expect(createImageBitmap.calls.argsFor(1).length).toBe(1)
+    expect(createImageBitmap.calls.argsFor(1)[0]).not.toBe(canvas)
     bridge.stop()
   })
 
@@ -1597,84 +952,6 @@ describe('replay/record/canvasEncodeBridge', () => {
     })
   })
 
-  it('should time out all pending worker requests and recover through backoff', async () => {
-    jasmine.clock().install()
-    try {
-      setReplayCanvasContextType(canvas, 'webgl')
-      canvas.toDataURL = jasmine
-        .createSpy('toDataURL')
-        .and.returnValue('data:image/webp;base64,RECOVERED')
-      var workerHandle = createTestWorker()
-      var createWorker = jasmine
-        .createSpy('createWorker')
-        .and.returnValue(workerHandle.worker)
-      var bridge = createCanvasEncodeBridge(
-        {
-          replayCanvasMimeType: 'image/webp',
-          replayCanvasQuality: 0.4,
-          replayCanvasMaxCanvasSize: 1280,
-          replayCanvasMaxConcurrentEncodes: 2
-        },
-        {
-          createImageBitmap: jasmine
-            .createSpy('createImageBitmap')
-            .and.callFake(function () {
-              return Promise.resolve({
-                close: jasmine.createSpy('close')
-              })
-            }),
-          Worker: function FakeWorker() {},
-          url: {
-            createObjectURL: jasmine
-              .createSpy('createObjectURL')
-              .and.returnValue('blob:test'),
-            revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-          },
-          createWorker: createWorker,
-          now: function () {
-            return 0
-          }
-        }
-      )
-
-      var firstErrorPromise = bridge.encode(canvas).catch(function (error) {
-        return error
-      })
-      var secondErrorPromise = bridge.encode(canvas).catch(function (error) {
-        return error
-      })
-      await Promise.resolve()
-      await Promise.resolve()
-      workerHandle.emitMessage({
-        action: 'initialized',
-        version: 'test'
-      })
-
-      jasmine.clock().tick(9999)
-      expect(workerHandle.worker.terminate).not.toHaveBeenCalled()
-      jasmine.clock().tick(1)
-
-      expect((await firstErrorPromise).message).toBe(
-        'Canvas encode worker request timed out'
-      )
-      expect((await secondErrorPromise).message).toBe(
-        'Canvas encode worker request timed out'
-      )
-      expect(workerHandle.worker.terminate).toHaveBeenCalledTimes(1)
-
-      var recoveredResult = await bridge.encode(canvas)
-      expect(recoveredResult.width).toBe(20)
-      expect(recoveredResult.height).toBe(10)
-      expect(recoveredResult.dataUrl).toMatch(
-        /^data:image\/(webp|png);base64,/
-      )
-      expect(canvas.toDataURL).not.toHaveBeenCalled()
-      expect(createWorker).toHaveBeenCalledTimes(1)
-      bridge.stop()
-    } finally {
-      jasmine.clock().uninstall()
-    }
-  })
 
   it('should bound a caller waiting on a hung main-thread canvas encode', async () => {
     jasmine.clock().install()
@@ -1699,8 +976,13 @@ describe('replay/record/canvasEncodeBridge', () => {
           url: undefined
         }
       )
-      var encodeErrorPromise = bridge.encode(canvas).catch(function (error) {
+      var encodeLifecycle = bridge.encodeWithLifecycle(canvas)
+      var encodeErrorPromise = encodeLifecycle.result.catch(function (error) {
         return error
+      })
+      var physicalSettled = false
+      encodeLifecycle.physicalSettled.then(function () {
+        physicalSettled = true
       })
       await Promise.resolve()
       await Promise.resolve()
@@ -1717,21 +999,24 @@ describe('replay/record/canvasEncodeBridge', () => {
       expect((await encodeErrorPromise).message).toBe(
         'Canvas encode request timed out'
       )
+      await Promise.resolve()
+      expect(physicalSettled).toBeFalse()
 
       // Let the uncancellable native work settle so the module-level physical
       // admission is released for later tests.
       blobCallback(new Blob([new Uint8Array(1001)], { type: 'image/webp' }))
-      await Promise.resolve()
-      await Promise.resolve()
+      await encodeLifecycle.physicalSettled
+      expect(physicalSettled).toBeTrue()
       bridge.stop()
     } finally {
       jasmine.clock().uninstall()
     }
   })
 
+
   it('should release the bridge slot when reset cancels hung native work', async () => {
     var blobCallbacks = []
-    canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
+    spyOn(HTMLCanvasElement.prototype, 'toBlob').and.callFake(function (
       callback
     ) {
       blobCallbacks.push(callback)
@@ -1787,60 +1072,6 @@ describe('replay/record/canvasEncodeBridge', () => {
     bridge.stop()
   })
 
-  it('should reject every pending request when worker postMessage throws', async () => {
-    setReplayCanvasContextType(canvas, 'webgl')
-    var workerHandle = createTestWorker()
-    var postMessageError = new Error('postMessage failed')
-    var encodePostCount = 0
-    workerHandle.worker.postMessage.and.callFake(function (message) {
-      if (message.action === 'encode') {
-        encodePostCount += 1
-        if (encodePostCount === 2) {
-          throw postMessageError
-        }
-      }
-    })
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 2
-      },
-      {
-        createImageBitmap: jasmine
-          .createSpy('createImageBitmap')
-          .and.callFake(function () {
-            return Promise.resolve({ close: jasmine.createSpy('close') })
-          }),
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: jasmine
-          .createSpy('createWorker')
-          .and.returnValue(workerHandle.worker)
-      }
-    )
-
-    var firstResultPromise = bridge.encode(canvas).catch(function (error) {
-      return error
-    })
-    var secondResultPromise = bridge.encode(canvas).catch(function (error) {
-      return error
-    })
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(await firstResultPromise).toBe(postMessageError)
-    expect(await secondResultPromise).toBe(postMessageError)
-    expect(workerHandle.worker.terminate).toHaveBeenCalledTimes(1)
-    bridge.stop()
-  })
 
   it('should permanently disable worker encoding after initialization failure', async () => {
     var workerHandle = createTestWorker()
@@ -1948,6 +1179,95 @@ describe('replay/record/canvasEncodeBridge', () => {
     expect(secondResult.dataUrl).toBe('data:image/webp;base64,SECOND')
     expect(thirdResult.dataUrl).toBe('data:image/webp;base64,THIRD')
     expect(canvas.toDataURL.calls.count()).toBe(3)
+  })
+
+  it('should preserve an explicit 2D encode concurrency above four', async () => {
+    var blobCallbacks = []
+    canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
+      callback
+    ) {
+      blobCallbacks.push(callback)
+    })
+    var bridge = createCanvasEncodeBridge(
+      {
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasQuality: 0.4,
+        replayCanvasMaxCanvasSize: 1280,
+        replayCanvasMaxConcurrentEncodes: 6
+      },
+      {
+        createImageBitmap: undefined,
+        Worker: undefined,
+        url: undefined
+      }
+    )
+
+    var resultPromises = []
+    for (var encodeIndex = 0; encodeIndex < 6; encodeIndex += 1) {
+      resultPromises.push(bridge.encode(canvas))
+    }
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(blobCallbacks.length).toBe(6)
+    blobCallbacks.forEach(function (callback) {
+      callback(new Blob(['A'], { type: 'image/webp' }))
+    })
+    expect((await Promise.all(resultPromises)).length).toBe(6)
+    bridge.stop()
+  })
+
+
+
+  it('should not starve an older low-concurrency bridge', async () => {
+    var blobCallbacks = []
+    spyOn(HTMLCanvasElement.prototype, 'toBlob').and.callFake(function (
+      callback
+    ) {
+      blobCallbacks.push(callback)
+    })
+    function createBridge(maxConcurrentEncodes) {
+      return createCanvasEncodeBridge(
+        {
+          replayCanvasMimeType: 'image/webp',
+          replayCanvasQuality: 0.4,
+          replayCanvasMaxCanvasSize: 1280,
+          replayCanvasMaxConcurrentEncodes: maxConcurrentEncodes
+        },
+        {
+          createImageBitmap: undefined,
+          Worker: undefined,
+          url: undefined
+        }
+      )
+    }
+    var highConcurrencyBridge = createBridge(6)
+    var lowConcurrencyBridge = createBridge(1)
+    var highFirst = highConcurrencyBridge.encode(canvas)
+    var highSecond = highConcurrencyBridge.encode(canvas)
+    var lowOldest = lowConcurrencyBridge.encode(canvas)
+    var highLater = highConcurrencyBridge.encode(canvas)
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(blobCallbacks.length).toBe(2)
+
+    blobCallbacks[0](new Blob(['A'], { type: 'image/webp' }))
+    await highFirst
+    expect(blobCallbacks.length).toBe(2)
+
+    blobCallbacks[1](new Blob(['B'], { type: 'image/webp' }))
+    await highSecond
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(blobCallbacks.length).toBe(4)
+
+    blobCallbacks[2](new Blob(['C'], { type: 'image/webp' }))
+    await lowOldest
+    blobCallbacks[3](new Blob(['D'], { type: 'image/webp' }))
+    await highLater
+    highConcurrencyBridge.stop()
+    lowConcurrencyBridge.stop()
   })
 
   it('should reject queued encode requests when stopped', async () => {
@@ -2121,7 +1441,7 @@ describe('replay/record/canvasEncodeBridge', () => {
     bridge.stop()
   })
 
-  it('should share physical encode admission across bridge restarts', async () => {
+  it('should isolate physical encode admission across bridge restarts', async () => {
     var blobCallbacks = []
     canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
       callback
@@ -2172,7 +1492,6 @@ describe('replay/record/canvasEncodeBridge', () => {
       new Blob([new Uint8Array(1001)], { type: 'image/webp' })
     )
     await flushPromises()
-
     expect(blobCallbacks.length).toBe(2)
 
     blobCallbacks[1](new Blob(['FRESH'], { type: 'image/webp' }))
@@ -2184,94 +1503,141 @@ describe('replay/record/canvasEncodeBridge', () => {
     secondBridge.stop()
   })
 
-  it('should keep a held WebGL bitmap capture admitted across repeated resets', async () => {
-    canvas.width = 1
-    canvas.height = 1
-    canvas.getContext('2d').fillRect(0, 0, 1, 1)
-    setReplayCanvasContextType(canvas, 'webgl')
-    var bitmapRequests = []
-    var createImageBitmap = jasmine
-      .createSpy('createImageBitmap')
-      .and.callFake(function (stagingCanvas) {
-        return new Promise(function (resolve) {
-          bitmapRequests.push({
-            resolve: resolve,
-            stagingCanvas: stagingCanvas
-          })
-        })
-      })
-    var workerHandle = createTestWorker()
-    var bridge = createCanvasEncodeBridge(
-      {
-        replayCanvasMimeType: 'image/webp',
-        replayCanvasQuality: 0.4,
-        replayCanvasMaxCanvasSize: 1280,
-        replayCanvasMaxConcurrentEncodes: 1,
-        replayCanvasMaxEncodedBytes: 1000
-      },
-      {
-        createImageBitmap: createImageBitmap,
-        Worker: function FakeWorker() {},
-        url: {
-          createObjectURL: jasmine
-            .createSpy('createObjectURL')
-            .and.returnValue('blob:test'),
-          revokeObjectURL: jasmine.createSpy('revokeObjectURL')
-        },
-        createWorker: jasmine
-          .createSpy('createWorker')
-          .and.returnValue(workerHandle.worker)
-      }
-    )
-
-    var currentPromise = bridge.encode(canvas).catch(function (error) {
+  it('should not grow native work or the shared queue while a quarantined encode is hung', async () => {
+    var blobCallbacks = []
+    canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
+      callback
+    ) {
+      blobCallbacks.push(callback)
+    })
+    var configuration = {
+      replayCanvasMimeType: 'image/webp',
+      replayCanvasQuality: 0.4,
+      replayCanvasMaxCanvasSize: 1280,
+      replayCanvasMaxConcurrentEncodes: 1,
+      replayCanvasMaxEncodedBytes: 1000
+    }
+    var bridgeOptions = {
+      createImageBitmap: undefined,
+      Worker: undefined,
+      url: undefined
+    }
+    var firstBridge = createCanvasEncodeBridge(configuration, bridgeOptions)
+    var firstLifecycle = firstBridge.encodeWithLifecycle(canvas)
+    var firstErrorPromise = firstLifecycle.result.catch(function (error) {
       return error
     })
-    expect(createImageBitmap.calls.count()).toBe(1)
+    var firstPhysicalSettled = false
+    firstLifecycle.physicalSettled.then(function () {
+      firstPhysicalSettled = true
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(blobCallbacks.length).toBe(1)
 
-    for (var resetIndex = 0; resetIndex < 3; resetIndex += 1) {
-      bridge.reset()
-      expect(await currentPromise).toEqual(
-        jasmine.objectContaining({ message: 'Canvas encode bridge reset' })
+    firstBridge.stop()
+    expect(await firstErrorPromise).toEqual(
+      jasmine.objectContaining({ message: 'Canvas encode bridge stopped' })
+    )
+    await Promise.resolve()
+    expect(firstPhysicalSettled).toBeFalse()
+
+    for (var attempt = 0; attempt < 70; attempt += 1) {
+      var blockedBridge = createCanvasEncodeBridge(
+        configuration,
+        bridgeOptions
       )
-      currentPromise = bridge.encode(canvas).catch(function (error) {
+      var blockedErrorPromise = blockedBridge.encode(canvas).catch(function (error) {
         return error
       })
       await Promise.resolve()
-      expect(createImageBitmap.calls.count()).toBe(1)
+      expect(blobCallbacks.length).toBe(1)
+      blockedBridge.stop()
+      expect(await blockedErrorPromise).toEqual(
+        jasmine.objectContaining({ message: 'Canvas encode bridge stopped' })
+      )
     }
+    expect(blobCallbacks.length).toBe(1)
 
-    var staleBitmap = { close: jasmine.createSpy('close') }
-    bitmapRequests[0].resolve(staleBitmap)
-    await flushPromises()
+    blobCallbacks[0](new Blob(['STALE'], { type: 'image/webp' }))
+    await firstLifecycle.physicalSettled
+    expect(firstPhysicalSettled).toBeTrue()
 
-    expect(staleBitmap.close).toHaveBeenCalledTimes(1)
-    expect(createImageBitmap.calls.count()).toBe(2)
-    expect(bitmapRequests[1].stagingCanvas).not.toBe(canvas)
-
-    bitmapRequests[1].resolve({ close: jasmine.createSpy('close') })
+    var recoveredBridge = createCanvasEncodeBridge(
+      configuration,
+      bridgeOptions
+    )
+    var recoveredResultPromise = recoveredBridge.encode(canvas)
     await Promise.resolve()
     await Promise.resolve()
-    var freshRequest = workerHandle.worker.postMessage.calls.argsFor(1)[0]
-    workerHandle.emitMessage({
-      action: 'initialized',
-      version: 'test'
-    })
-    workerHandle.emitMessage({
-      id: freshRequest.id,
-      action: 'encoded',
-      dataUrl: 'data:image/webp;base64,FRESH',
-      width: 1,
-      height: 1
-    })
-
-    expect(await currentPromise).toEqual(
+    expect(blobCallbacks.length).toBe(2)
+    blobCallbacks[1](new Blob(['FRESH'], { type: 'image/webp' }))
+    expect(await recoveredResultPromise).toEqual(
       jasmine.objectContaining({
-        dataUrl: 'data:image/webp;base64,FRESH'
+        dataUrl: 'data:image/webp;base64,RlJFU0g='
       })
     )
-    bridge.stop()
+    recoveredBridge.stop()
   })
+
+  it('should keep quarantined native work in the shared concurrency count until it settles', async () => {
+    var blobCallbacks = []
+    canvas.toBlob = jasmine.createSpy('toBlob').and.callFake(function (
+      callback
+    ) {
+      blobCallbacks.push(callback)
+    })
+    var configuration = {
+      replayCanvasMimeType: 'image/webp',
+      replayCanvasQuality: 0.4,
+      replayCanvasMaxCanvasSize: 1280,
+      replayCanvasMaxConcurrentEncodes: 2,
+      replayCanvasMaxEncodedBytes: 1000
+    }
+    var bridgeOptions = {
+      createImageBitmap: undefined,
+      Worker: undefined,
+      url: undefined
+    }
+    var firstBridge = createCanvasEncodeBridge(configuration, bridgeOptions)
+    var firstLifecycle = firstBridge.encodeWithLifecycle(canvas)
+    var secondLifecycle = firstBridge.encodeWithLifecycle(canvas)
+    var firstResult = firstLifecycle.result.catch(function (error) {
+      return error
+    })
+    var secondResult = secondLifecycle.result.catch(function (error) {
+      return error
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(blobCallbacks.length).toBe(2)
+
+    firstBridge.stop()
+    await Promise.all([firstResult, secondResult])
+
+    blobCallbacks[1](new Blob(['SECOND'], { type: 'image/webp' }))
+    await secondLifecycle.physicalSettled
+    var stillBlockedBridge = createCanvasEncodeBridge(
+      Object.assign({}, configuration, {
+        replayCanvasMaxConcurrentEncodes: 1
+      }),
+      bridgeOptions
+    )
+    var stillBlockedResult = stillBlockedBridge.encode(canvas)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(blobCallbacks.length).toBe(2)
+
+    blobCallbacks[0](new Blob(['FIRST'], { type: 'image/webp' }))
+    await firstLifecycle.physicalSettled
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(blobCallbacks.length).toBe(3)
+    blobCallbacks[2](new Blob(['FRESH'], { type: 'image/webp' }))
+    await expectAsync(stillBlockedResult).toBeResolved()
+    stillBlockedBridge.stop()
+  })
+
 
   it('should ignore a late worker response after reset and use a fresh worker', async () => {
     var firstWorkerHandle = createTestWorker()

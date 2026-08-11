@@ -1,8 +1,8 @@
-import { IncrementalSource, RecordType } from '../../../types'
+import { IncrementalSource, RecordType } from '../../src/types'
 import {
   buildSerializedCanvasImage,
   estimateEncodedBytesFromDataUrl
-} from './canvasSerializeArgs'
+} from '../../src/domain/replay/record/canvasSerializeArgs'
 
 export var CANVAS_REPLAY_SAMPLE_DATA_URLS = {
   manual: 'data:image/webp;base64,QUJD',
@@ -33,7 +33,13 @@ export function createCanvasMutationFixture(options) {
         },
         {
           property: 'drawImage',
-          args: [buildSerializedCanvasImage(dataUrl, mimeType), 0, 0, width, height]
+          args: [
+            buildSerializedCanvasImage(dataUrl, mimeType),
+            0,
+            0,
+            width,
+            height
+          ]
         }
       ],
       encodedBytesCount: estimateEncodedBytesFromDataUrl(dataUrl)

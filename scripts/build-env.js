@@ -14,6 +14,17 @@ const { command } = require('./command')
 //   return env
 // }
 const buildEnvCache = new Map()
+var workerBundlesBuilt = false
+
+function ensureWorkerBundlesBuilt() {
+  if (workerBundlesBuilt) {
+    return
+  }
+
+  const workerPath = path.join(__dirname, '../packages/worker')
+  command`npm run build`.withCurrentWorkingDirectory(workerPath).run()
+  workerBundlesBuilt = true
+}
 
 const buildEnvFactories = {
   SDK_VERSION: (mode) => {
@@ -26,17 +37,14 @@ const buildEnvFactories = {
   REPLAY_DEBUG_ENABLED: (mode) => mode === 'development',
   WORKER_STRING: () => {
     const workerPath = path.join(__dirname, '../packages/worker')
-    // Make sure the worker is built
-    // TODO: Improve overall built time by rebuilding the worker only if its sources have changed?
-    // TODO: Improve developer experience during tests by detecting worker source changes?
-    command`npm run build`.withCurrentWorkingDirectory(workerPath).run()
+    ensureWorkerBundlesBuilt()
     return readFileSync(path.join(workerPath, 'bundle/worker.js'), {
       encoding: 'utf-8'
     })
   },
   CANVAS_WORKER_STRING: () => {
     const workerPath = path.join(__dirname, '../packages/worker')
-    command`npm run build`.withCurrentWorkingDirectory(workerPath).run()
+    ensureWorkerBundlesBuilt()
     return readFileSync(path.join(workerPath, 'bundle/canvas-worker.js'), {
       encoding: 'utf-8'
     })

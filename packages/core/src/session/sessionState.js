@@ -52,7 +52,8 @@ export function toSessionState(sessionString) {
     sessionString.split(SESSION_ENTRY_SEPARATOR).forEach(function (entry) {
       const matches = SESSION_ENTRY_REGEXP.exec(entry)
       if (matches !== null) {
-        const [, key, value] = matches
+        const key = matches[1]
+        const value = matches[2]
         session[key] = value
       }
     })

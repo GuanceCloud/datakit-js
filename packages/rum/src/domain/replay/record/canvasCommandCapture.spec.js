@@ -2190,6 +2190,41 @@ describe('replay/record/canvasCommandCapture', () => {
     recorder.stop()
   })
 
+  it('should retry only the context whose canvas was published', () => {
+    var events = []
+    var unpublishedContext = createFakeContext()
+    var laterContext = createFakeContext()
+    delete unpublishedContext.canvas.__sn
+    laterContext.canvas.__sn = { id: 43 }
+    var recordedFrameCallback
+    var recorder = createCanvas2DCommandRecorder({
+      requestAnimationFrameImpl: function (callback) {
+        recordedFrameCallback = callback
+        return 1
+      },
+      emit: function (event) {
+        events.push(event)
+      }
+    })
+
+    recorder.patchContext(unpublishedContext)
+    recorder.patchContext(laterContext)
+    unpublishedContext.fillRect(1, 2, 3, 4)
+    laterContext.fillRect(5, 6, 7, 8)
+
+    unpublishedContext.canvas.__sn = { id: 42 }
+    expect(recorder.retryPublishedContext(unpublishedContext)).toBe(true)
+    expect(events.map(function (event) {
+      return event.data.id
+    })).toEqual([42])
+
+    recordedFrameCallback()
+    expect(events.map(function (event) {
+      return event.data.id
+    })).toEqual([42, 43])
+    recorder.stop()
+  })
+
   it('should expire detached command batches without blocking a later published canvas', () => {
     var events = []
     var fallbackRequests = []

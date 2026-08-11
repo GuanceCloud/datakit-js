@@ -16,7 +16,8 @@ Canvas recording only works when all of the following are true:
   - call `startSessionReplayRecording()`
 - canvas recording is enabled
   - `replayCanvasEnabled: true`
-- the target is a `2d canvas`, or uses `webgl` / `webgl2` in `auto` mode
+- the target is a `2d canvas`; `webgl` / `webgl2` also requires the optional
+  `@cloudcare/browser-rum-webgl` plugin registered in `auto` mode
 - in `manual` mode, your app must also call `snapshotCanvas(canvas)`
 
 Current capability boundaries:
@@ -26,8 +27,11 @@ Current capability boundaries:
 - automatic recording has two formal paths:
   - snapshot sampling
   - higher-fidelity auto recording
-- `2d canvas` is fully supported
-- `webgl` / `webgl2` use draw-driven automatic pixel snapshots
+- supports `2d canvas`; complex Path2D, Gradient, Pattern, video, or
+  cross-origin `drawImage` scenes may fall back or may not replay with full
+  fidelity
+- the optional `@cloudcare/browser-rum-webgl` plugin provides draw-driven
+  automatic pixel snapshots for `webgl` / `webgl2`
 - recording output is sent through the Session Replay event stream
 
 Current scope limitations:
@@ -35,6 +39,50 @@ Current scope limitations:
 - WebGL command-level replay
 - `OffscreenCanvas`
 - full-fidelity reconstruction for every complex 2D scene
+
+## WebGL Plugin Setup
+
+The WebGL implementation is not part of the `@cloudcare/browser-rum` main
+bundle. DOM and ordinary Canvas 2D replay do not need the addon. Install it only
+for applications that need WebGL replay:
+
+```js
+import { datafluxRum } from '@cloudcare/browser-rum'
+import { webglReplayPlugin } from '@cloudcare/browser-rum-webgl'
+
+datafluxRum.init({
+  // ...
+  sessionReplaySampleRate: 100,
+  replayCanvasEnabled: true,
+  replayCanvasMode: 'auto',
+  replayCanvasSampling: 2,
+  plugins: [webglReplayPlugin()]
+})
+
+datafluxRum.startSessionReplayRecording()
+```
+
+For CDN usage, load both scripts before `init()`:
+
+```html
+<script src="https://static.guance.com/browser-sdk/v3/dataflux-rum.js"></script>
+<script src="https://static.guance.com/browser-sdk/v3/dataflux-rum-webgl.js"></script>
+<script>
+  DATAFLUX_RUM.init({
+    // ...
+    replayCanvasEnabled: true,
+    replayCanvasMode: 'auto',
+    plugins: [DATAFLUX_RUM_WEBGL.webglReplayPlugin()]
+  })
+  DATAFLUX_RUM.startSessionReplayRecording()
+</script>
+```
+
+The plugin must be registered during RUM `init()`. A missing, duplicate,
+incompatible, or failed plugin disables only WebGL capture; DOM, Canvas 2D, and
+the rest of RUM continue normally.
+When `replayCanvasEnabled` is not `true` or `replayCanvasMode` is `manual`, the
+plugin does not install its early WebGL/rAF bootstrap hooks.
 
 ## Minimum Working Configurations
 
@@ -183,6 +231,35 @@ number does not replace the cadence setting. Use
 more frequent and costs more encoding and upload work. Use `'all'` when the
 higher-fidelity 2D command path is worth the extra complexity.
 
+### Quality presets and baseline defaults
+
+The named `replayCanvasQuality` presets change both image quality and the auto
+capture budget; they are not image-quality-only aliases:
+
+| Setting | No named preset | `low` | `medium` | `high` |
+| --- | --- | --- | --- | --- |
+| Snapshot encode quality | `0.4` | `0.25` | `0.4` | `0.5` |
+| `replayCanvasSampling` | `2` | `1` | `2` | `4` |
+| `replayCanvasAutoInterval` | `1000 ms` | `1500 ms` | `1000 ms` | `700 ms` |
+| `replayCanvasAutoCooldown` | `1000 ms` | `3000 ms` | `2000 ms` | `1400 ms` |
+| `replayCanvasAutoUnchangedBackoff` | `3000 ms` | `5000 ms` | `3000 ms` | `2000 ms` |
+| `replayCanvasAutoFailureBackoff` | `5000 ms` | `7000 ms` | `5000 ms` | `4000 ms` |
+| `replayCanvasAutoMaxPerRun` | `2` | `1` | `2` | `4` |
+
+Without `low`, `medium`, or `high`, the “No named preset” column contains the
+runtime baseline defaults. An explicitly configured individual option
+overrides only its matching preset value. For example,
+`replayCanvasQuality: 'medium'` together with
+`replayCanvasAutoCooldown: 800` uses `800 ms` for cooldown and keeps the other
+`medium` values.
+
+If you only want to change image encode quality without changing sampling or
+scheduling, use a number from `0` to `1`, such as
+`replayCanvasQuality: 0.4`. In `replayCanvasSampling: 'all'` mode, command
+frames are not image-encoded, but fallback snapshots still use this quality.
+`replayCanvasFlushImmediately` defaults to `true` in `manual` mode and `false`
+in `auto` mode.
+
 ## Current Fallback Boundaries
 
 In auto high-fidelity mode, some cases may still fall back to snapshot-based recording. Typical examples include:
@@ -202,16 +279,64 @@ This is a current product boundary, not a separate user configuration.
 
 ## WebGL Game Demo
 
-Run `npm run dev`, then open `/webgl-replay-game.html`. The scene continuously
+Run `npm run dev`, then open `/webgl-replay-game.html`. That page additionally
+loads `dataflux-rum-webgl.js`. The scene continuously
 draws a shader background, star field, asteroids, projectiles, and collision
 particles. Its inspector shows `webgl_snapshot` count, encoded bytes, and
 capture latency. `Stress` increases the scene to roughly 800 dynamic objects,
 while `Replay: on/off` makes it possible to compare the same game load with and
 without recording.
 
-For complete draw-driven capture, start Replay before application code creates
-the WebGL context or queries extensions. Draws made through extension objects
-cached before Replay starts can only be captured on a best-effort basis.
+For engines such as Cocos Creator that create a WebGL context, query extensions,
+or cache `draw*` methods during boot, load the WebGL plugin and complete RUM
+`init()` before loading the Cocos engine / `main.js`. The plugin installs a
+lightweight bootstrap hook synchronously during `init()`, so `draw*`, extension
+draw, and rAF methods cached before the asynchronous recorder is ready are
+routed to the active observer once recording starts.
+
+An unclaimed bootstrap hook restores the prototypes after 30 seconds so a
+sampled-out or never-started replay session does not pay a page-lifetime hook
+cost. Start the engine immediately after `init()`. Wrappers cached during that
+window remain routeable after the lease, while a recorder-claimed hook remains
+active until its observer stops.
+
+A draw delayed by cooldown, an in-flight encode, concurrency pressure, or a
+full boundary queue remains dirty, but the addon stages it only after that
+canvas draws again. A timer or asynchronous encode completion never reads the
+source WebGL framebuffer. This avoids stale or blank frames when
+`preserveDrawingBuffer` is `false`. Boundary candidates stay bounded and use
+priority plus last-selection order for fairness. `shouldRecordCanvas()` is
+reevaluated on each real draw; numeric results rank higher values first and are
+also exposed as the canvas replay debug priority.
+
+Deferred state is discarded on hidden/page-exit, and the addon does not start
+new asynchronous WebGL encodes there.
+
+The asynchronous full-snapshot canvas baseline skips canvases identified as
+WebGL. Their first safe replay bitmap comes from the next real draw after the
+observer starts; ordinary static 2D and unknown canvases keep their existing
+baseline behavior.
+
+```js
+datafluxRum.init({
+  // ...
+  plugins: [webglReplayPlugin()]
+})
+datafluxRum.startSessionReplayRecording()
+
+// init() is enough; do not poll isRecording() before booting the game.
+bootCocosCreator()
+```
+
+Do not block game startup by polling `isRecording()`: a session outside
+`sessionReplaySampleRate` never enters recording. If Cocos cached original
+WebGL methods before the plugin/RUM `init()`, the SDK cannot retroactively
+replace those saved function references; that incorrect initialization order
+is outside the supported integration contract.
+This validates the early method-caching contract commonly used by such
+engines; it does not imply that every Cocos Creator version has been tested.
+Run recording and playback acceptance against the target version's real H5
+build before rollout.
 
 For a smoother WebGL animation profile, start with:
 
@@ -230,8 +355,25 @@ size reduces encode latency and payload size, but cadence—not image quality—
 the primary control for temporal smoothness. Snapshot replay does not
 interpolate between captured frames.
 
-`replayCanvasMaxCanvasSize` defaults to `1280` and is capped at `2048`, keeping
-each encode target backing store within `16 MiB`.
+If a WebGL frame exceeds `replayCanvasMaxEncodedBytes`, the SDK reuses the same
+staging frame for one bounded fallback: width and height are scaled to 40%, and
+encoding quality is halved with a floor of 0.12. A successful fallback profile
+is cached for 10 seconds and then probed at the original profile, so a game
+scene change does not leave the canvas permanently downsampled. If the fallback
+is still oversized, that frame is dropped, but subsequent samples avoid doing
+both encodes until the next probe. This policy applies only to WebGL/WebGL2;
+ordinary 2D canvas keeps its existing single-encode path and the byte cap is
+not relaxed.
+
+WebGL staging canvases share an internal `16 MiB` pixel-memory budget. A high-
+DPR, 4K, or concurrent frame that exceeds this budget during staging is skipped
+before the encoded-size fallback above can run. Lower
+`replayCanvasMaxCanvasSize` for those WebGL scenes. This internal budget applies
+only to WebGL staging/readback and does not silently clamp an explicit ordinary
+2D canvas size configuration.
+
+`replayCanvasMaxCanvasSize` defaults to `1280`. Increasing it also increases
+pixel-processing and memory cost substantially.
 
 ## FAQ
 

@@ -23,6 +23,7 @@ import { jsonStringify } from '../helper/serialisation/jsonStringify'
 // https://en.wikipedia.org/wiki/UTF-8
 // eslint-disable-next-line no-control-regex
 var CUSTOM_KEYS = 'custom_keys'
+export var MAX_PENDING_RAW_JOURNAL_BYTES_COUNT = 4 * 1024 * 1024
 export var processedMessageByDataMap = function (message) {
   if (!message || !message.type)
     return {
@@ -135,9 +136,19 @@ export function createBatch(options) {
   var flushController = options.flushController
   var upsertBuffer = {}
   var upsertMessageBytesCountByKey = {}
+  var upsertRawBytesCountByKey = {}
+  var upsertRawBytesCount = 0
   var fallbackMessagesBuffer = []
+  var fallbackMessagesBufferBytesCount = 0
   var rawFallbackBatchActive = false
   var pendingRawBatches = []
+  var pendingRawBatchesBytesCount = 0
+  var maxPendingRawBytes =
+    typeof options.maxPendingRawBytes === 'number'
+      ? options.maxPendingRawBytes
+      : MAX_PENDING_RAW_JOURNAL_BYTES_COUNT
+  var rawJournalLimitReported = false
+  var currentBatchGeneration = 0
   var flushSubscription = flushController.flushObservable.subscribe(function (
     event
   ) {
@@ -161,9 +172,33 @@ export function createBatch(options) {
   function push(serializedMessage, estimatedMessageBytesCount, key) {
     flushController.notifyBeforeAddMessage(estimatedMessageBytesCount)
 
+    var rawMessageBytesCount = computeBytesCount(serializedMessage) + 1
+    if (
+      encoder.isAsync &&
+      encoderFallback &&
+      pendingRawBatchesBytesCount +
+        fallbackMessagesBufferBytesCount +
+        upsertRawBytesCount +
+        rawMessageBytesCount >
+        maxPendingRawBytes
+    ) {
+      if (!rawJournalLimitReported) {
+        rawJournalLimitReported = true
+        display.warn(
+          'Session data compression was disabled because its pending raw journal reached the safety limit.'
+        )
+      }
+      // Preserve the older batches from the raw journal before retiring the
+      // worker encoder. New messages continue through the identity encoder,
+      // so the journal cannot keep growing behind a slow worker.
+      switchToFallbackEncoder(encoder, true)
+    }
+
     if (key !== undefined) {
       upsertBuffer[key] = serializedMessage
       upsertMessageBytesCountByKey[key] = estimatedMessageBytesCount
+      upsertRawBytesCountByKey[key] = rawMessageBytesCount
+      upsertRawBytesCount += rawMessageBytesCount
       flushController.notifyAfterAddMessage()
     } else {
       if (
@@ -172,16 +207,20 @@ export function createBatch(options) {
         rawFallbackBatchActive
       ) {
         fallbackMessagesBuffer.push(serializedMessage)
+        fallbackMessagesBufferBytesCount += rawMessageBytesCount
       }
       var writeEncoder = encoder
+      var writeBatchGeneration = currentBatchGeneration
       writeEncoder.write(
         getMessageText([serializedMessage], writeEncoder.isEmpty()),
         function (realMessageBytesCount, error) {
-          flushController.notifyAfterAddMessage(
-            error
-              ? undefined
-              : realMessageBytesCount - estimatedMessageBytesCount
-          )
+          if (writeBatchGeneration === currentBatchGeneration) {
+            flushController.notifyAfterAddMessage(
+              error
+                ? undefined
+                : realMessageBytesCount - estimatedMessageBytesCount
+            )
+          }
           if (error) {
             // A stream-scoped worker error may recover before finish(). Switch
             // immediately so a later successful compressed chunk cannot hide
@@ -201,6 +240,8 @@ export function createBatch(options) {
     delete upsertBuffer[key]
     var messageBytesCount = upsertMessageBytesCountByKey[key]
     delete upsertMessageBytesCountByKey[key]
+    upsertRawBytesCount -= upsertRawBytesCountByKey[key] || 0
+    delete upsertRawBytesCountByKey[key]
     flushController.notifyAfterRemoveMessage(messageBytesCount)
   }
   function process(message) {
@@ -235,6 +276,17 @@ export function createBatch(options) {
   }
 
   function flush(event) {
+    var hasCurrentRawMessages =
+      fallbackMessagesBuffer.length > 0 || !isEmptyObject(upsertBuffer)
+    if (
+      !hasCurrentRawMessages &&
+      pendingRawBatches.length === 0 &&
+      (!event || !event.messagesCount) &&
+      encoder.isEmpty()
+    ) {
+      return
+    }
+    currentBatchGeneration += 1
     var flushedEncoder = encoder
     var upsertMessageValues = values(upsertBuffer)
     var upsertMessages = upsertMessageValues.join(
@@ -242,12 +294,15 @@ export function createBatch(options) {
     )
     upsertBuffer = {}
     upsertMessageBytesCountByKey = {}
+    upsertRawBytesCountByKey = {}
+    upsertRawBytesCount = 0
     var rawFallbackFlush = rawFallbackBatchActive
     var fallbackMessages =
       flushedEncoder.isAsync || encoderFallback || rawFallbackFlush
       ? fallbackMessagesBuffer.concat(upsertMessageValues)
       : undefined
     fallbackMessagesBuffer = []
+    fallbackMessagesBufferBytesCount = 0
     rawFallbackBatchActive = false
 
     var isPageExit = isPageExitReason(event.reason)
@@ -259,11 +314,10 @@ export function createBatch(options) {
 
     if (
       isPageExit &&
-      // Note: checking that the encoder is async is not strictly needed, but it's an optimization:
-      // if the encoder is async we need to send two requests in some cases (one for encoded data
-      // and the other for non-encoded data). But if it's not async, we don't have to worry about
-      // it and always send a single request.
-      flushedEncoder.isAsync
+      // A previous asynchronous encoder may already have fallen back while
+      // its raw journal is still waiting for finish(). Page exit must promote
+      // that journal even when the current encoder is now synchronous.
+      (flushedEncoder.isAsync || pendingRawBatches.length > 0)
     ) {
       var encoderResult = flushedEncoder.finishSync()
       var pendingMessages = consumePendingRawMessages().concat(
@@ -271,7 +325,7 @@ export function createBatch(options) {
       )
 
       if (encoderResult.error) {
-        switchToFallbackEncoder(flushedEncoder)
+        switchToFallbackEncoder(flushedEncoder, false)
       }
 
       // A synchronous finish can contain a compressed prefix from an older
@@ -348,9 +402,11 @@ export function createBatch(options) {
   function addPendingRawBatch(messages) {
     var batch = {
       messages: messages || [],
+      bytesCount: computeRawMessagesBytesCount(messages),
       isActive: true
     }
     pendingRawBatches.push(batch)
+    pendingRawBatchesBytesCount += batch.bytesCount
     return batch
   }
 
@@ -363,6 +419,10 @@ export function createBatch(options) {
     if (index !== -1) {
       pendingRawBatches.splice(index, 1)
     }
+    pendingRawBatchesBytesCount = Math.max(
+      0,
+      pendingRawBatchesBytesCount - batch.bytesCount
+    )
     return true
   }
 
@@ -373,10 +433,26 @@ export function createBatch(options) {
       messages = messages.concat(batch.messages)
     })
     pendingRawBatches = []
+    pendingRawBatchesBytesCount = 0
     return messages
   }
 
-  function switchToFallbackEncoder(failedEncoder) {
+  function drainPendingRawBatches() {
+    var batches = pendingRawBatches
+    pendingRawBatches = []
+    pendingRawBatchesBytesCount = 0
+    batches.forEach(function (batch) {
+      batch.isActive = false
+      sendMessages(
+        request.send,
+        batch.messages,
+        sendContentTypeByJson,
+        bytesLimit
+      )
+    })
+  }
+
+  function switchToFallbackEncoder(failedEncoder, drainPending = true) {
     if (!encoderFallback || encoder !== failedEncoder) {
       return
     }
@@ -393,6 +469,9 @@ export function createBatch(options) {
         getMessageText(fallbackMessagesBuffer, encoder.isEmpty())
       )
     }
+    if (drainPending) {
+      drainPendingRawBatches()
+    }
     if (failedEncoder.stop) {
       failedEncoder.stop()
     }
@@ -404,6 +483,15 @@ export function createBatch(options) {
     upsert: addOrUpdate,
     stop: flushSubscription.unsubscribe
   }
+}
+
+function computeRawMessagesBytesCount(messages) {
+  if (!messages || !messages.length) {
+    return 0
+  }
+  return messages.reduce(function (bytesCount, message) {
+    return bytesCount + computeBytesCount(message) + 1
+  }, 0)
 }
 
 function sendMessages(

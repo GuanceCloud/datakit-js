@@ -58,7 +58,9 @@ export function createDeflateWorkerController() {
     onInitializationFailure,
     createDeflateWorkerImpl
   ) {
-    if (createDeflateWorkerImpl === undefined) {
+    if (!__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      createDeflateWorkerImpl = createDeflateWorker
+    } else if (createDeflateWorkerImpl === undefined) {
       createDeflateWorkerImpl = createDeflateWorker
     }
     if (state.status === DeflateWorkerStatus.Nil) {
@@ -96,7 +98,9 @@ export function createDeflateWorkerController() {
    * more details: https://bugzilla.mozilla.org/show_bug.cgi?id=1736865#c2
    */
   function doStart(configuration, source, createDeflateWorkerImpl) {
-    if (createDeflateWorkerImpl === undefined) {
+    if (!__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      createDeflateWorkerImpl = createDeflateWorker
+    } else if (createDeflateWorkerImpl === undefined) {
       createDeflateWorkerImpl = createDeflateWorker
     }
     try {

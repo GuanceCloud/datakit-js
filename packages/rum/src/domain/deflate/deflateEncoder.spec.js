@@ -113,6 +113,55 @@ describe('deflateEncoder', () => {
     )
   })
 
+  it('should keep consecutive asynchronous finish generations isolated', () => {
+    const worker = createWorker()
+    const encoder = createDeflateEncoder(
+      worker,
+      DeflateEncoderStreamId.REPLAY
+    )
+    const oldGenerationFinish = jasmine.createSpy('oldGenerationFinish')
+    const newGenerationFinish = jasmine.createSpy('newGenerationFinish')
+
+    encoder.write('old-generation')
+    encoder.finish(oldGenerationFinish)
+    encoder.write('new-generation')
+    encoder.finish(newGenerationFinish)
+
+    expect(
+      worker.postMessage.calls.allArgs().map((args) => args[0].action)
+    ).toEqual(['write', 'reset', 'write', 'reset'])
+
+    emitMessage(worker, {
+      type: 'wrote',
+      id: 0,
+      streamId: DeflateEncoderStreamId.REPLAY,
+      additionalBytesCount: 14,
+      result: new Uint8Array([1, 2]),
+      trailer: new Uint8Array([3])
+    })
+    emitMessage(worker, {
+      type: 'wrote',
+      id: 1,
+      streamId: DeflateEncoderStreamId.REPLAY,
+      additionalBytesCount: 14,
+      result: new Uint8Array([4, 5]),
+      trailer: new Uint8Array([6])
+    })
+
+    expect(oldGenerationFinish).toHaveBeenCalledOnceWith(
+      jasmine.objectContaining({
+        output: new Uint8Array([1, 2, 3]),
+        outputBytesCount: 3
+      })
+    )
+    expect(newGenerationFinish).toHaveBeenCalledOnceWith(
+      jasmine.objectContaining({
+        output: new Uint8Array([4, 5, 6]),
+        outputBytesCount: 3
+      })
+    )
+  })
+
   it('should estimate encoded bytes from either data or a character count', () => {
     const encoder = createDeflateEncoder(
       createWorker(),

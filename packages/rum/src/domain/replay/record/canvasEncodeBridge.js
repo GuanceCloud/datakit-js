@@ -1,18 +1,12 @@
 import { createCanvasEncodeWorkerManager } from './canvasEncodeWorker'
 import {
-  getReplayCanvasContextType,
   isWebGLReplayCanvas,
   markReplayInternalCanvas
 } from './canvasContext'
+import { estimateEncodedBytesFromDataUrl } from './canvasSerializeArgs'
 
 var CANVAS_ENCODE_REQUEST_TIMEOUT = 10000
 var CANVAS_ENCODE_CALLER_TIMEOUT = CANVAS_ENCODE_REQUEST_TIMEOUT + 1000
-var MAX_WEBGL_READBACK_PIXELS = 3840 * 2160
-var MAX_WEBGL_READBACK_CAPTURE_BYTES = 16 * 1024 * 1024
-var MAX_WEBGL_READBACK_CACHE_BYTES = 16 * 1024 * 1024
-var MAX_WEBGL_STAGING_CANVAS_BYTES = 16 * 1024 * 1024
-var MAX_CANVAS_ENCODE_TARGET_BYTES = 16 * 1024 * 1024
-var MAX_CANVAS_ENCODE_CONCURRENCY = 4
 var MAX_SHARED_CANVAS_ENCODE_QUEUE = 64
 // Native canvas work can outlive a recorder because createImageBitmap() and
 // toBlob() cannot be cancelled.  Keep admission at module scope so stopping and
@@ -24,25 +18,35 @@ var sharedCanvasEncodeQueue = []
 
 function drainSharedCanvasEncodeQueue() {
   while (sharedCanvasEncodeQueue.length) {
-    var entry = sharedCanvasEncodeQueue[0]
-    if (entry.$rCancelled) {
-      sharedCanvasEncodeQueue.shift()
-      continue
-    }
-    if (
-      sharedCanvasEncodeInFlightCount >=
-      Math.min(entry.$rMaxConcurrency, MAX_CANVAS_ENCODE_CONCURRENCY)
+    for (
+      var cancelledIndex = sharedCanvasEncodeQueue.length - 1;
+      cancelledIndex >= 0;
+      cancelledIndex -= 1
     ) {
+      if (sharedCanvasEncodeQueue[cancelledIndex].$rCancelled) {
+        sharedCanvasEncodeQueue.splice(cancelledIndex, 1)
+      }
+    }
+    if (!sharedCanvasEncodeQueue.length) {
       return
     }
 
-    sharedCanvasEncodeQueue.shift()
+    var entryIndex = 0
+    var entry = sharedCanvasEncodeQueue[entryIndex]
+    if (sharedCanvasEncodeInFlightCount >= entry.$rMaxConcurrency) {
+      // Do not let a higher-concurrency bridge bypass the oldest lower-limit
+      // entry forever. Pausing admission here lets the shared count drain
+      // until the FIFO head becomes eligible.
+      return
+    }
+    entry = sharedCanvasEncodeQueue.splice(entryIndex, 1)[0]
     entry.$rStarted = true
     sharedCanvasEncodeInFlightCount += 1
     var taskResult
     try {
       taskResult = entry.$rTask()
     } catch (error) {
+      settleSharedCanvasEncodePhysicalWork(entry)
       finishSharedCanvasEncodeEntry(entry, entry.$rReject, error)
       continue
     }
@@ -53,12 +57,51 @@ function drainSharedCanvasEncodeQueue() {
 function observeSharedCanvasEncodeEntry(entry, taskResult) {
   Promise.resolve(taskResult).then(
     function (result) {
+      settleSharedCanvasEncodePhysicalWork(entry)
+      if (entry.$rQuarantined) {
+        releaseQuarantinedSharedCanvasEncodeEntry(entry)
+        return
+      }
       finishSharedCanvasEncodeEntry(entry, entry.$rResolve, result)
     },
     function (error) {
+      settleSharedCanvasEncodePhysicalWork(entry)
+      if (entry.$rQuarantined) {
+        releaseQuarantinedSharedCanvasEncodeEntry(entry)
+        return
+      }
       finishSharedCanvasEncodeEntry(entry, entry.$rReject, error)
     }
   )
+}
+
+function settleSharedCanvasEncodePhysicalWork(entry) {
+  if (entry.$rPhysicalSettled) {
+    return
+  }
+  entry.$rPhysicalSettled = true
+  entry.$rResolvePhysicalSettled()
+}
+
+function releaseQuarantinedSharedCanvasEncodeEntry(entry) {
+  if (entry.$rQuarantined) {
+    entry.$rQuarantined = false
+    sharedCanvasEncodeInFlightCount = Math.max(
+      sharedCanvasEncodeInFlightCount - 1,
+      0
+    )
+  }
+  drainSharedCanvasEncodeQueue()
+}
+
+function quarantineSharedCanvasEncodeEntry(entry, error) {
+  if (!entry || !entry.$rStarted || entry.$rSettled) {
+    return false
+  }
+  entry.$rQuarantined = true
+  entry.$rSettled = true
+  entry.$rReject(error)
+  return true
 }
 
 function finishSharedCanvasEncodeEntry(entry, settle, value) {
@@ -74,20 +117,31 @@ function finishSharedCanvasEncodeEntry(entry, settle, value) {
   drainSharedCanvasEncodeQueue()
 }
 
-function createSharedCanvasEncodeAdmission(maxConcurrency, task) {
+function createSharedCanvasEncodeAdmission(
+  maxConcurrency,
+  task
+) {
   var entry
+  var resolvePhysicalSettled
+  var physicalSettled = new Promise(function (resolve) {
+    resolvePhysicalSettled = resolve
+  })
   var promise = new Promise(function (resolve, reject) {
     entry = {
       $rCancelled: false,
       $rMaxConcurrency: maxConcurrency,
+      $rPhysicalSettled: false,
+      $rQuarantined: false,
       $rReject: reject,
       $rResolve: resolve,
+      $rResolvePhysicalSettled: resolvePhysicalSettled,
       $rSettled: false,
       $rStarted: false,
       $rTask: task
     }
     if (sharedCanvasEncodeQueue.length >= MAX_SHARED_CANVAS_ENCODE_QUEUE) {
       entry.$rSettled = true
+      settleSharedCanvasEncodePhysicalWork(entry)
       reject(new Error('Canvas shared encode queue full'))
       return
     }
@@ -95,8 +149,9 @@ function createSharedCanvasEncodeAdmission(maxConcurrency, task) {
     drainSharedCanvasEncodeQueue()
   })
 
-  return {
+  var bridge = {
     $rPromise: promise,
+    $rPhysicalSettled: physicalSettled,
     $rCancel: function (error) {
       if (!entry || entry.$rStarted || entry.$rSettled) {
         return false
@@ -107,11 +162,16 @@ function createSharedCanvasEncodeAdmission(maxConcurrency, task) {
       if (entryIndex !== -1) {
         sharedCanvasEncodeQueue.splice(entryIndex, 1)
       }
+      settleSharedCanvasEncodePhysicalWork(entry)
       entry.$rReject(error)
       drainSharedCanvasEncodeQueue()
       return true
+    },
+    $rQuarantine: function (error) {
+      return quarantineSharedCanvasEncodeEntry(entry, error)
     }
   }
+  return bridge
 }
 
 function computeTargetSize(width, height, maxSize) {
@@ -125,34 +185,6 @@ function computeTargetSize(width, height, maxSize) {
   return {
     width: Math.max(1, Math.round(width * ratio)),
     height: Math.max(1, Math.round(height * ratio))
-  }
-}
-
-function getCanvasEncodeTargetBytes(targetSize) {
-  var width = Number(targetSize && targetSize.width)
-  var height = Number(targetSize && targetSize.height)
-  if (
-    !isFinite(width) ||
-    !isFinite(height) ||
-    width < 0 ||
-    height < 0
-  ) {
-    return Infinity
-  }
-  var pixelBytes = width * height * 4
-  return isFinite(pixelBytes) ? pixelBytes : Infinity
-}
-
-function assertCanvasEncodeTargetWithinBudget(targetSize) {
-  if (
-    getCanvasEncodeTargetBytes(targetSize) >
-    MAX_CANVAS_ENCODE_TARGET_BYTES
-  ) {
-    var memoryBudgetError = new Error(
-      'Canvas encode bridge target memory budget exceeded'
-    )
-    memoryBudgetError.$rDoNotFallbackToMainThread = true
-    throw memoryBudgetError
   }
 }
 
@@ -193,7 +225,6 @@ function encodeCanvasOnMainThread(canvas, configuration, encodeOptions) {
     canvas.height,
     encodeConfiguration.maxSize
   )
-  assertCanvasEncodeTargetWithinBudget(targetSize)
   var targetCanvas = canvas
 
   if (targetSize.width !== canvas.width || targetSize.height !== canvas.height) {
@@ -227,11 +258,16 @@ function encodeCanvasElementOnMainThread(canvas, encodeConfiguration) {
     typeof canvas.toBlob !== 'function' ||
     typeof FileReader !== 'function'
   ) {
+    var dataUrl = canvas.toDataURL(
+      encodeConfiguration.mimeType,
+      encodeConfiguration.quality
+    )
+    var encodedBytesCount = estimateEncodedBytesFromDataUrl(dataUrl)
     return Promise.resolve(
-      canvas.toDataURL(
-        encodeConfiguration.mimeType,
-        encodeConfiguration.quality
-      )
+      typeof encodeConfiguration.maxEncodedBytes === 'number' &&
+        encodedBytesCount > encodeConfiguration.maxEncodedBytes
+        ? createEncodeTooLargeResult(encodedBytesCount)
+        : dataUrl
     )
   }
 
@@ -309,11 +345,11 @@ function getOption(options, key, fallback) {
     : fallback
 }
 
-function clampInteger(value, fallback, minimum, maximum) {
+function clampInteger(value, fallback, minimum) {
   if (typeof value !== 'number' || !isFinite(value)) {
     return fallback
   }
-  return Math.min(Math.max(Math.floor(value), minimum), maximum)
+  return Math.max(Math.floor(value), minimum)
 }
 
 export function createCanvasEncodeBridge(configuration, options) {
@@ -322,66 +358,39 @@ export function createCanvasEncodeBridge(configuration, options) {
   var generation = 0
   var inFlightCount = 0
   var nextRequestId = 0
-  var now = options.now || Date.now
+  var now = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.now || Date.now
+    : Date.now
   var maxConcurrentEncodes = clampInteger(
     configuration.replayCanvasMaxConcurrentEncodes,
     1,
-    1,
-    MAX_CANVAS_ENCODE_CONCURRENCY
+    1
   )
   var maxQueuedEncodes = Math.max(maxConcurrentEncodes * 20, 50)
-  var maxStagedWebGLFrames = maxConcurrentEncodes * 2
-  var stagedWebGLFrameCount = 0
   var pendingRequests = {}
   var queuedRequests = []
   var activeJobs = []
-  var availableWebGLStagingCanvases = []
-  var webGLStagingCanvasBytes = new WeakMap()
-  var webGLStagingCanvasAllocatedBytes = 0
-  var webGLReadbackStateByStagingCanvas = new WeakMap()
-  var webGLReadbackCachedBytes = 0
   var imageBitmapResizeOptionsSupported
   var workerRuntimeFailureCount = 0
   var workerRetryAt = 0
-  var createWebGLReadbackState =
-    options.createWebGLReadbackState ||
-    function (
-      sourceWidth,
-      sourceHeight,
-      targetWidth,
-      targetHeight,
-      bytesCount
-    ) {
-      return {
-        sourceWidth: sourceWidth,
-        sourceHeight: sourceHeight,
-        targetWidth: targetWidth,
-        targetHeight: targetHeight,
-        sourcePixels: new Uint8Array(sourceWidth * sourceHeight * 4),
-        targetPixels: new Uint8ClampedArray(
-          targetWidth * targetHeight * 4
-        ),
-        sourceXOffsets: createWebGLSourceXOffsets(
-          sourceWidth,
-          targetWidth
-        ),
-        bytesCount: bytesCount
-      }
-    }
-  var createImageBitmapImpl = getOption(
-    options,
-    'createImageBitmap',
-    globalThis.createImageBitmap
-  )
-  var urlObject = getOption(options, 'url', globalThis.URL)
-  var workerCtor = getOption(options, 'Worker', globalThis.Worker)
+  var createImageBitmapImpl = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? getOption(options, 'createImageBitmap', globalThis.createImageBitmap)
+    : globalThis.createImageBitmap
+  var urlObject = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? getOption(options, 'url', globalThis.URL)
+    : globalThis.URL
+  var workerCtor = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? getOption(options, 'Worker', globalThis.Worker)
+    : globalThis.Worker
   var workerEncodingSupported = canUseWorkerEncoding(
     createImageBitmapImpl,
     workerCtor,
     urlObject
   )
   var workerManager = createCanvasEncodeWorkerManager(configuration, {
-    createWorker: options.createWorker,
+    createWorker: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+      ? options.createWorker
+      : undefined,
     Worker: workerCtor,
     url: urlObject,
     onMessage: function (data) {
@@ -472,16 +481,15 @@ export function createCanvasEncodeBridge(configuration, options) {
   }
 
   function encodeWithWorker(job, encodeGeneration) {
-    var encodeConfiguration = job.$rWebGLFrame
-      ? job.$rWebGLFrame.$rEncodeConfiguration
-      : buildEncodeConfiguration(configuration, job.$rEncodeOptions)
-    var targetSize = job.$rWebGLFrame
-      ? job.$rWebGLFrame.$rTargetSize
-      : computeTargetSize(
-          job.$rCanvas.width,
-          job.$rCanvas.height,
-          encodeConfiguration.maxSize
-        )
+    var encodeConfiguration = buildEncodeConfiguration(
+      configuration,
+      job.$rEncodeOptions
+    )
+    var targetSize = computeTargetSize(
+      job.$rCanvas.width,
+      job.$rCanvas.height,
+      encodeConfiguration.maxSize
+    )
     return createImageBitmapForEncoding(job, targetSize).then(function (bitmap) {
       if (stopped || encodeGeneration !== generation) {
         closeBitmap(bitmap)
@@ -547,16 +555,6 @@ export function createCanvasEncodeBridge(configuration, options) {
   }
 
   function createImageBitmapForEncoding(job, targetSize) {
-    try {
-      assertCanvasEncodeTargetWithinBudget(targetSize)
-    } catch (error) {
-      return Promise.reject(error)
-    }
-
-    if (job.$rWebGLFrame) {
-      return createStagedWebGLFrameBitmap(job)
-    }
-
     var canvas = job.$rCanvas
     var shouldResize =
       targetSize.width !== canvas.width || targetSize.height !== canvas.height
@@ -610,21 +608,22 @@ export function createCanvasEncodeBridge(configuration, options) {
   }
 
   function createBoundedResizedCanvasBitmap(canvas, targetSize) {
-    var stagingCanvas =
-      availableWebGLStagingCanvases.pop() ||
-      markReplayInternalCanvas(document.createElement('canvas'))
+    var stagingCanvas = markReplayInternalCanvas(
+      document.createElement('canvas')
+    )
     var bitmapResult
-
     try {
       // Some browsers expose createImageBitmap(canvas) but not its resize
-      // overload. Downsample into the same bounded staging pool used by WebGL
-      // instead of creating a full-size ImageBitmap for a large source canvas.
-      resizeWebGLStagingCanvas(stagingCanvas, targetSize)
+      // overload. Downsample before creating the bitmap so the fallback never
+      // allocates an ImageBitmap at the potentially much larger source size.
+      // The target still honors an explicit customer maxSize without adding a
+      // hidden 2D-only clamp.
+      stagingCanvas.width = targetSize.width
+      stagingCanvas.height = targetSize.height
       var stagingContext = stagingCanvas.getContext('2d')
       if (!stagingContext) {
         throw new Error('Cannot create canvas 2d context for resize staging')
       }
-      stagingContext.clearRect(0, 0, targetSize.width, targetSize.height)
       stagingContext.drawImage(
         canvas,
         0,
@@ -634,508 +633,27 @@ export function createCanvasEncodeBridge(configuration, options) {
       )
       bitmapResult = createImageBitmapImpl(stagingCanvas)
     } catch (error) {
-      discardWebGLStagingCanvas(stagingCanvas)
+      releaseCanvasBackingStore(stagingCanvas)
       return Promise.reject(error)
     }
 
     return Promise.resolve(bitmapResult).then(
       function (bitmap) {
-        releaseWebGLStagingCanvas(stagingCanvas)
+        releaseCanvasBackingStore(stagingCanvas)
         return bitmap
       },
       function (error) {
-        discardWebGLStagingCanvas(stagingCanvas)
+        releaseCanvasBackingStore(stagingCanvas)
         throw error
       }
     )
   }
 
-  function createStagedWebGLFrameBitmap(job) {
-    var stagingCanvas = job.$rWebGLFrame.$rCanvas
-    var bitmapResult
-    try {
-      bitmapResult = createImageBitmapImpl(stagingCanvas)
-    } catch (error) {
-      releaseCapturedWebGLFrame(job)
-      return Promise.reject(error)
-    }
-
-    return Promise.resolve(bitmapResult).then(
-      function (bitmap) {
-        releaseCapturedWebGLFrame(job)
-        return bitmap
-      },
-      function (error) {
-        releaseCapturedWebGLFrame(job)
-        throw error
-      }
-    )
-  }
-
-  function captureWebGLFrame(canvas, encodeOptions) {
-    var encodeConfiguration = buildEncodeConfiguration(
-      configuration,
-      encodeOptions
-    )
-    var targetSize = computeTargetSize(
-      canvas.width,
-      canvas.height,
-      encodeConfiguration.maxSize
-    )
-    var webGLFrame = {
-      $rCanvas: prepareWebGLStagingCanvas(canvas, targetSize),
-      $rEncodeConfiguration: encodeConfiguration,
-      $rTargetSize: targetSize,
-      $rCounted: true
-    }
-    stagedWebGLFrameCount += 1
-    return webGLFrame
-  }
-
-  function releaseCapturedWebGLFrame(job) {
-    if (!job.$rWebGLFrame) {
-      return
-    }
-    if (job.$rWebGLFrame.$rCounted) {
-      job.$rWebGLFrame.$rCounted = false
-      stagedWebGLFrameCount = Math.max(stagedWebGLFrameCount - 1, 0)
-    }
-    if (job.$rWebGLFrame.$rCanvas) {
-      var stagingCanvas = job.$rWebGLFrame.$rCanvas
-      job.$rWebGLFrame.$rCanvas = undefined
-      releaseWebGLStagingCanvas(stagingCanvas)
-    }
-  }
-
-  function prepareWebGLStagingCanvas(canvas, targetSize) {
-    var stagingCanvas =
-      availableWebGLStagingCanvases.pop() ||
-      markReplayInternalCanvas(document.createElement('canvas'))
-
-    try {
-      resizeWebGLStagingCanvas(stagingCanvas, targetSize)
-      var stagingContext = stagingCanvas.getContext('2d')
-      if (!stagingContext) {
-        throw new Error('Cannot create canvas 2d context for WebGL staging')
-      }
-      validateWebGLContextForCapture(canvas)
-      stagingContext.clearRect(0, 0, targetSize.width, targetSize.height)
-      if (!copyWebGLFrameIntoStagingCanvas(canvas, stagingContext, targetSize)) {
-        if (
-          !readWebGLFrameIntoStagingCanvas(
-            canvas,
-            stagingCanvas,
-            stagingContext,
-            targetSize
-          )
-        ) {
-          throw new Error('Cannot copy WebGL canvas for replay encoding')
-        }
-      }
-      return stagingCanvas
-    } catch (error) {
-      discardWebGLStagingCanvas(stagingCanvas)
-      throw error
-    }
-  }
-
-  function getWebGLStagingCanvasBytes(targetSize) {
-    var pixelCount = targetSize.width * targetSize.height
-    if (
-      !isFinite(pixelCount) ||
-      pixelCount <= 0 ||
-      pixelCount >
-        MAX_WEBGL_STAGING_CANVAS_BYTES / 4
-    ) {
-      return Infinity
-    }
-    return pixelCount * 4
-  }
-
-  function resizeWebGLStagingCanvas(stagingCanvas, targetSize) {
-    var previousBytes =
-      webGLStagingCanvasBytes.get(stagingCanvas) || 0
-    var nextBytes = getWebGLStagingCanvasBytes(targetSize)
-    if (
-      nextBytes >
-      MAX_WEBGL_STAGING_CANVAS_BYTES -
-        (webGLStagingCanvasAllocatedBytes - previousBytes)
-    ) {
-      var memoryBudgetError = new Error(
-        'Canvas encode bridge WebGL staging memory budget exceeded'
-      )
-      memoryBudgetError.$rDoNotFallbackToMainThread = true
-      throw memoryBudgetError
-    }
-
-    if (
-      stagingCanvas.width !== targetSize.width ||
-      stagingCanvas.height !== targetSize.height
-    ) {
-      releaseWebGLReadbackState(stagingCanvas)
-      stagingCanvas.width = targetSize.width
-      stagingCanvas.height = targetSize.height
-    }
-    webGLStagingCanvasAllocatedBytes =
-      webGLStagingCanvasAllocatedBytes - previousBytes + nextBytes
-    webGLStagingCanvasBytes.set(stagingCanvas, nextBytes)
-  }
-
-  function validateWebGLContextForCapture(canvas) {
-    var webGLContext = canvas.getContext(getReplayCanvasContextType(canvas))
-    if (
-      !webGLContext ||
-      typeof webGLContext.readPixels !== 'function'
-    ) {
-      return
-    }
-    if (
-      typeof webGLContext.isContextLost === 'function' &&
-      webGLContext.isContextLost()
-    ) {
-      throw new Error('WebGL context is lost')
-    }
-    if (
-      !webGLContext.drawingBufferWidth ||
-      !webGLContext.drawingBufferHeight
-    ) {
-      throw new Error('WebGL drawing buffer is empty')
-    }
-  }
-
-  function copyWebGLFrameIntoStagingCanvas(
-    canvas,
-    stagingContext,
-    targetSize
-  ) {
-    try {
-      // WebGL snapshot scheduling runs synchronously at the end of the draw
-      // task/rAF callback. Copying the backing store at that boundary preserves
-      // preserveDrawingBuffer=false frames while avoiding a synchronous
-      // GPU-to-CPU readPixels round trip.
-      stagingContext.drawImage(
-        canvas,
-        0,
-        0,
-        targetSize.width,
-        targetSize.height
-      )
-      return true
-    } catch (_) {
-      return false
-    }
-  }
-
-  function encodeStagedWebGLFrameOnMainThread(job) {
-    var webGLFrame = job.$rWebGLFrame
-    var stagingCanvas = webGLFrame.$rCanvas
-    return encodeCanvasElementOnMainThread(
-      stagingCanvas,
-      webGLFrame.$rEncodeConfiguration
-    ).then(function (encodedResult) {
-      if (isCanvasEncodeDropResult(encodedResult)) {
-        return encodedResult
-      }
-      return {
-        dataUrl: encodedResult,
-        width: webGLFrame.$rTargetSize.width,
-        height: webGLFrame.$rTargetSize.height
-      }
-    }).finally(function () {
-      releaseCapturedWebGLFrame(job)
-    })
-  }
-
-  function readWebGLFrameIntoStagingCanvas(
-    canvas,
-    stagingCanvas,
-    stagingContext,
-    targetSize
-  ) {
-    var webGLContextType = getReplayCanvasContextType(canvas)
-    var webGLContext = canvas.getContext(webGLContextType)
-    if (
-      !webGLContext ||
-      typeof webGLContext.readPixels !== 'function' ||
-      typeof ImageData !== 'function'
-    ) {
-      return false
-    }
-
-    if (
-      typeof webGLContext.isContextLost === 'function' &&
-      webGLContext.isContextLost()
-    ) {
-      throw new Error('WebGL context is lost')
-    }
-
-    var sourceWidth = webGLContext.drawingBufferWidth
-    var sourceHeight = webGLContext.drawingBufferHeight
-    if (
-      !sourceWidth ||
-      !sourceHeight ||
-      sourceWidth * sourceHeight > MAX_WEBGL_READBACK_PIXELS
-    ) {
-      throw new Error('WebGL canvas exceeds the replay readback pixel limit')
-    }
-
-    var requiredReadbackBytes =
-      sourceWidth * sourceHeight * 4 +
-      targetSize.width * targetSize.height * 4 +
-      targetSize.width * 4
-    if (
-      !isFinite(requiredReadbackBytes) ||
-      requiredReadbackBytes > MAX_WEBGL_READBACK_CAPTURE_BYTES
-    ) {
-      throw new Error(
-        'WebGL replay readback exceeds the peak memory limit'
-      )
-    }
-
-    var readbackState = webGLReadbackStateByStagingCanvas.get(stagingCanvas)
-    if (
-      !readbackState ||
-      readbackState.sourceWidth !== sourceWidth ||
-      readbackState.sourceHeight !== sourceHeight ||
-      readbackState.targetWidth !== targetSize.width ||
-      readbackState.targetHeight !== targetSize.height
-    ) {
-      releaseWebGLReadbackState(stagingCanvas)
-      readbackState = createWebGLReadbackState(
-        sourceWidth,
-        sourceHeight,
-        targetSize.width,
-        targetSize.height,
-        requiredReadbackBytes
-      )
-      if (
-        readbackState.bytesCount <=
-        MAX_WEBGL_READBACK_CACHE_BYTES - webGLReadbackCachedBytes
-      ) {
-        readbackState.cached = true
-        webGLReadbackCachedBytes += readbackState.bytesCount
-        webGLReadbackStateByStagingCanvas.set(
-          stagingCanvas,
-          readbackState
-        )
-      }
-    }
-
-    readDefaultWebGLFramebuffer(
-      webGLContext,
-      readbackState.sourcePixels,
-      sourceWidth,
-      sourceHeight
-    )
-    if (
-      typeof webGLContext.isContextLost === 'function' &&
-      webGLContext.isContextLost()
-    ) {
-      throw new Error('WebGL context was lost during replay readback')
-    }
-    downsampleAndFlipWebGLPixels(readbackState)
-    stagingContext.putImageData(
-      new ImageData(
-        readbackState.targetPixels,
-        targetSize.width,
-        targetSize.height
-      ),
-      0,
-      0
-    )
-    return true
-  }
-
-  function createWebGLSourceXOffsets(sourceWidth, targetWidth) {
-    var offsets = new Uint32Array(targetWidth)
-    for (var targetX = 0; targetX < targetWidth; targetX += 1) {
-      offsets[targetX] =
-        Math.min(
-          sourceWidth - 1,
-          Math.floor(((targetX + 0.5) * sourceWidth) / targetWidth)
-        ) * 4
-    }
-    return offsets
-  }
-
-  function readDefaultWebGLFramebuffer(
-    webGLContext,
-    sourcePixels,
-    sourceWidth,
-    sourceHeight
-  ) {
-    var usesSeparateReadFramebuffer =
-      webGLContext.READ_FRAMEBUFFER !== undefined &&
-      webGLContext.READ_FRAMEBUFFER_BINDING !== undefined
-    var framebufferTarget = usesSeparateReadFramebuffer
-      ? webGLContext.READ_FRAMEBUFFER
-      : webGLContext.FRAMEBUFFER
-    var framebufferBinding = usesSeparateReadFramebuffer
-      ? webGLContext.READ_FRAMEBUFFER_BINDING
-      : webGLContext.FRAMEBUFFER_BINDING
-    var previousFramebuffer
-    var framebufferChanged = false
-    var pixelPackBufferTarget = webGLContext.PIXEL_PACK_BUFFER
-    var pixelPackBufferBinding = webGLContext.PIXEL_PACK_BUFFER_BINDING
-    var previousPixelPackBuffer
-    var pixelPackBufferChanged = false
-    var changedPixelStoreParameters = []
-
-    function normalizePixelStore(parameter, value) {
-      if (
-        parameter === undefined ||
-        typeof webGLContext.getParameter !== 'function' ||
-        typeof webGLContext.pixelStorei !== 'function'
-      ) {
-        return
-      }
-      var previousValue = webGLContext.getParameter(parameter)
-      webGLContext.pixelStorei(parameter, value)
-      changedPixelStoreParameters.push({
-        $rParameter: parameter,
-        $rPreviousValue: previousValue
-      })
-    }
-
-    try {
-      if (
-        typeof webGLContext.getParameter === 'function' &&
-        typeof webGLContext.bindFramebuffer === 'function'
-      ) {
-        previousFramebuffer = webGLContext.getParameter(framebufferBinding)
-        webGLContext.bindFramebuffer(framebufferTarget, null)
-        framebufferChanged = true
-      }
-      if (
-        pixelPackBufferTarget !== undefined &&
-        pixelPackBufferBinding !== undefined &&
-        typeof webGLContext.getParameter === 'function' &&
-        typeof webGLContext.bindBuffer === 'function'
-      ) {
-        previousPixelPackBuffer = webGLContext.getParameter(
-          pixelPackBufferBinding
-        )
-        webGLContext.bindBuffer(pixelPackBufferTarget, null)
-        pixelPackBufferChanged = true
-      }
-      normalizePixelStore(webGLContext.PACK_ALIGNMENT, 1)
-      normalizePixelStore(webGLContext.PACK_ROW_LENGTH, 0)
-      normalizePixelStore(webGLContext.PACK_SKIP_ROWS, 0)
-      normalizePixelStore(webGLContext.PACK_SKIP_PIXELS, 0)
-      webGLContext.readPixels(
-        0,
-        0,
-        sourceWidth,
-        sourceHeight,
-        webGLContext.RGBA,
-        webGLContext.UNSIGNED_BYTE,
-        sourcePixels
-      )
-    } finally {
-      for (
-        var pixelStoreIndex = changedPixelStoreParameters.length - 1;
-        pixelStoreIndex >= 0;
-        pixelStoreIndex -= 1
-      ) {
-        var changedPixelStoreParameter =
-          changedPixelStoreParameters[pixelStoreIndex]
-        try {
-          webGLContext.pixelStorei(
-            changedPixelStoreParameter.$rParameter,
-            changedPixelStoreParameter.$rPreviousValue
-          )
-        } catch (_) {}
-      }
-      if (pixelPackBufferChanged) {
-        try {
-          webGLContext.bindBuffer(
-            pixelPackBufferTarget,
-            previousPixelPackBuffer
-          )
-        } catch (_) {}
-      }
-      if (framebufferChanged) {
-        try {
-          webGLContext.bindFramebuffer(
-            framebufferTarget,
-            previousFramebuffer
-          )
-        } catch (_) {}
-      }
-    }
-  }
-
-  function downsampleAndFlipWebGLPixels(readbackState) {
-    var sourcePixels = readbackState.sourcePixels
-    var targetPixels = readbackState.targetPixels
-    var sourceWidth = readbackState.sourceWidth
-    var sourceHeight = readbackState.sourceHeight
-    var targetWidth = readbackState.targetWidth
-    var targetHeight = readbackState.targetHeight
-
-    for (var targetY = 0; targetY < targetHeight; targetY += 1) {
-      var sourceY = Math.min(
-        sourceHeight - 1,
-        Math.floor(
-          ((targetHeight - targetY - 0.5) * sourceHeight) / targetHeight
-        )
-      )
-      var sourceRowOffset = sourceY * sourceWidth * 4
-      var targetRowOffset = targetY * targetWidth * 4
-
-      for (var targetX = 0; targetX < targetWidth; targetX += 1) {
-        var sourceOffset =
-          sourceRowOffset + readbackState.sourceXOffsets[targetX]
-        var targetOffset = targetRowOffset + targetX * 4
-        targetPixels[targetOffset] = sourcePixels[sourceOffset]
-        targetPixels[targetOffset + 1] = sourcePixels[sourceOffset + 1]
-        targetPixels[targetOffset + 2] = sourcePixels[sourceOffset + 2]
-        targetPixels[targetOffset + 3] = sourcePixels[sourceOffset + 3]
-      }
-    }
-  }
-
-  function releaseWebGLStagingCanvas(canvas) {
-    if (
-      !stopped &&
-      canvas &&
-      availableWebGLStagingCanvases.length < maxConcurrentEncodes
-    ) {
-      availableWebGLStagingCanvases.push(canvas)
-    } else {
-      discardWebGLStagingCanvas(canvas)
-    }
-  }
-
-  function discardWebGLStagingCanvas(canvas) {
-    if (!canvas) {
-      return
-    }
-    releaseWebGLReadbackState(canvas)
-    var canvasBytes = webGLStagingCanvasBytes.get(canvas) || 0
-    webGLStagingCanvasBytes.delete(canvas)
-    webGLStagingCanvasAllocatedBytes = Math.max(
-      webGLStagingCanvasAllocatedBytes - canvasBytes,
-      0
-    )
+  function releaseCanvasBackingStore(canvas) {
     try {
       canvas.width = 0
       canvas.height = 0
     } catch (_) {}
-  }
-
-  function releaseWebGLReadbackState(canvas) {
-    var readbackState = webGLReadbackStateByStagingCanvas.get(canvas)
-    if (!readbackState) {
-      return
-    }
-    webGLReadbackStateByStagingCanvas.delete(canvas)
-    if (readbackState.cached) {
-      webGLReadbackCachedBytes = Math.max(
-        webGLReadbackCachedBytes - readbackState.bytesCount,
-        0
-      )
-    }
   }
 
   function isUnsupportedImageBitmapResizeError(error) {
@@ -1158,35 +676,23 @@ export function createCanvasEncodeBridge(configuration, options) {
   function runEncodeJob(job, encodeGeneration) {
     var shouldUseWorker =
       workerEncodingSupported && now() >= workerRetryAt
-
     if (shouldUseWorker) {
-      return encodeWithWorker(job, encodeGeneration).catch(function (
-        error
-      ) {
-        if (
-          stopped ||
-          job.$rCancelled ||
-          encodeGeneration !== generation ||
-          job.$rWebGLFrame ||
-          (error && error.$rDoNotFallbackToMainThread)
-        ) {
-          throw error
+      return encodeWithWorker(job, encodeGeneration).catch(
+        function (error) {
+          if (
+            stopped ||
+            job.$rCancelled ||
+            encodeGeneration !== generation
+          ) {
+            throw error
+          }
+          return encodeCanvasOnMainThread(
+            job.$rCanvas,
+            configuration,
+            job.$rEncodeOptions
+          )
         }
-        return encodeCanvasOnMainThread(
-          job.$rCanvas,
-          configuration,
-          job.$rEncodeOptions
-        )
-      })
-    }
-    if (job.$rWebGLFrame) {
-      try {
-        return Promise.resolve(
-          encodeStagedWebGLFrameOnMainThread(job)
-        )
-      } catch (error) {
-        return Promise.reject(error)
-      }
+      )
     }
 
     return Promise.resolve().then(function () {
@@ -1216,6 +722,9 @@ export function createCanvasEncodeBridge(configuration, options) {
         return runEncodeJob(job, encodeGeneration)
       }
     )
+    job.$rSharedAdmission.$rPhysicalSettled.then(function () {
+      settleJobPhysicalWork(job)
+    })
     job.$rCallerTimeoutId = setTimeout(function () {
       if (job.$rCancelled) {
         return
@@ -1223,14 +732,16 @@ export function createCanvasEncodeBridge(configuration, options) {
       var timeoutError = new Error('Canvas encode request timed out')
       job.$rCancelled = true
       if (job.$rSharedAdmission) {
-        job.$rSharedAdmission.$rCancel(timeoutError)
+        if (!job.$rSharedAdmission.$rCancel(timeoutError)) {
+          job.$rSharedAdmission.$rQuarantine(timeoutError)
+        }
       }
       job.$rReject(timeoutError)
 
-      // Native canvas work cannot be cancelled and keeps its module-level
-      // physical admission until it really settles. Release only this bridge's
-      // logical slot so one hung createImageBitmap/toBlob cannot leave every
-      // caller and scheduler pending forever.
+      // The native operation itself remains uncancellable. Its admission is
+      // quarantined and the shared circuit opens, so a never-settling browser
+      // callback cannot block every future recorder while repeated native work
+      // is still bounded during the recovery window.
       var activeJobIndex = activeJobs.indexOf(job)
       if (activeJobIndex !== -1) {
         activeJobs.splice(activeJobIndex, 1)
@@ -1254,7 +765,6 @@ export function createCanvasEncodeBridge(configuration, options) {
       })
       .finally(function () {
         clearJobCallerTimeout(job)
-        releaseCapturedWebGLFrame(job)
         job.$rSharedAdmission = undefined
         var activeJobIndex = activeJobs.indexOf(job)
         if (activeJobIndex !== -1) {
@@ -1263,6 +773,14 @@ export function createCanvasEncodeBridge(configuration, options) {
         releaseJobSlot(job)
         runNextQueuedRequest()
       })
+  }
+
+  function settleJobPhysicalWork(job) {
+    if (job.$rPhysicalSettled) {
+      return
+    }
+    job.$rPhysicalSettled = true
+    job.$rResolvePhysicalSettled()
   }
 
   function clearJobCallerTimeout(job) {
@@ -1286,8 +804,8 @@ export function createCanvasEncodeBridge(configuration, options) {
     queuedRequests.forEach(function (job) {
       job.$rCancelled = true
       clearJobCallerTimeout(job)
-      releaseCapturedWebGLFrame(job)
       job.$rReject(error)
+      settleJobPhysicalWork(job)
     })
     queuedRequests = []
 
@@ -1295,27 +813,20 @@ export function createCanvasEncodeBridge(configuration, options) {
       job.$rCancelled = true
       clearJobCallerTimeout(job)
       // Main-thread canvas APIs such as createImageBitmap() and toBlob() cannot
-      // be cancelled.  Reject the caller immediately, but keep the physical
-      // encode admitted until its real promise settles.  Releasing the slot or
-      // staged-frame count here would let repeated replay resets bypass both
-      // concurrency watermarks and retain an unbounded number of native
-      // encodes/staging surfaces.
-      var cancelledBeforePhysicalStart = false
+      // be cancelled. Reject the caller immediately. On final stop, quarantine
+      // a started task so it cannot permanently occupy the module-level slot;
+      // reset keeps the physical admission because this same recorder is still
+      // active and can safely wait for it.
       if (job.$rSharedAdmission) {
-        cancelledBeforePhysicalStart =
-          job.$rSharedAdmission.$rCancel(error)
-      }
-      if (cancelledBeforePhysicalStart) {
-        // A queued shared admission has not handed its staging surface to any
-        // native API yet, so it is safe to release immediately. Waiting for a
-        // promise finally turn here lets repeated reset/encode calls fill the
-        // bounded WebGL staging queue with already-cancelled jobs.
-        releaseCapturedWebGLFrame(job)
+        var cancelledBeforeStart = job.$rSharedAdmission.$rCancel(error)
+        if (!cancelledBeforeStart && stopped) {
+          job.$rSharedAdmission.$rQuarantine(error)
+        }
       }
       job.$rReject(error)
-      // Keep the shared physical admission until the native promise settles,
-      // but free this bridge's logical slot so a reset cannot strand every
-      // future request behind an uncancellable hung job.
+      // Physical settlement remains tied to the real native promise, which
+      // prevents a WebGL staging surface from being reused while the browser
+      // may still read it.
       releaseJobSlot(job)
     })
     activeJobs = []
@@ -1326,47 +837,54 @@ export function createCanvasEncodeBridge(configuration, options) {
     }
   }
 
-  return {
+  function encodeWithLifecycle(canvas, encodeOptions) {
+    var job
+    var result = new Promise(function (resolve, reject) {
+      job = {
+        $rCanvas: canvas,
+        $rEncodeOptions: encodeOptions,
+        $rResolve: resolve,
+        $rReject: reject,
+        $rCancelled: false,
+        $rOccupiesSlot: false,
+        $rSharedAdmission: undefined,
+        $rCallerTimeoutId: undefined,
+        $rPhysicalSettled: false,
+        $rResolvePhysicalSettled: undefined
+      }
+    })
+    var physicalSettled = new Promise(function (resolve) {
+      job.$rResolvePhysicalSettled = resolve
+    })
+
+    if (stopped) {
+      job.$rReject(new Error('Canvas encode bridge stopped'))
+      settleJobPhysicalWork(job)
+    } else if (queuedRequests.length >= maxQueuedEncodes) {
+      job.$rReject(new Error('Canvas encode bridge queue full'))
+      settleJobPhysicalWork(job)
+    } else {
+      queuedRequests.push(job)
+      runNextQueuedRequest()
+    }
+
+    return {
+      result: result,
+      physicalSettled: physicalSettled
+    }
+  }
+
+  var bridge = {
     encode: function (canvas, encodeOptions) {
-      return new Promise(function (resolve, reject) {
-        if (stopped) {
-          reject(new Error('Canvas encode bridge stopped'))
-          return
-        }
-        if (queuedRequests.length >= maxQueuedEncodes) {
-          reject(new Error('Canvas encode bridge queue full'))
-          return
-        }
-        var job = {
-          $rCanvas: undefined,
-          $rEncodeOptions: encodeOptions,
-          $rResolve: resolve,
-          $rReject: reject,
-          $rCancelled: false,
-          $rOccupiesSlot: false,
-          $rSharedAdmission: undefined,
-          $rCallerTimeoutId: undefined
-        }
-        if (isWebGLReplayCanvas(canvas)) {
-          if (stagedWebGLFrameCount >= maxStagedWebGLFrames) {
-            reject(
-              new Error('Canvas encode bridge WebGL staging queue full')
-            )
-            return
-          }
-          try {
-            job.$rWebGLFrame = captureWebGLFrame(canvas, encodeOptions)
-          } catch (error) {
-            reject(error)
-            return
-          }
-        } else {
-          job.$rCanvas = canvas
-        }
-        queuedRequests.push(job)
-        runNextQueuedRequest()
-      })
+      if (isWebGLReplayCanvas(canvas)) {
+        return Promise.resolve({
+          ok: false,
+          reason: 'webgl_plugin_missing'
+        })
+      }
+      return encodeWithLifecycle(canvas, encodeOptions).result
     },
+    encodeWithLifecycle: encodeWithLifecycle,
     reset: function () {
       generation += 1
       cancelOutstandingJobs(new Error('Canvas encode bridge reset'))
@@ -1375,17 +893,12 @@ export function createCanvasEncodeBridge(configuration, options) {
       stopped = true
       generation += 1
       cancelOutstandingJobs(new Error('Canvas encode bridge stopped'))
-      availableWebGLStagingCanvases.forEach(function (canvas) {
-        discardWebGLStagingCanvas(canvas)
-      })
-      availableWebGLStagingCanvases = []
-      webGLStagingCanvasBytes = new WeakMap()
-      webGLStagingCanvasAllocatedBytes = 0
-      webGLReadbackStateByStagingCanvas = new WeakMap()
-      webGLReadbackCachedBytes = 0
-    },
-    getWorkerStatus: function () {
+    }
+  }
+  if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+    bridge.getWorkerStatus = function () {
       return workerManager.getStatus()
     }
   }
+  return bridge
 }

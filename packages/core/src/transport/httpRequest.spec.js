@@ -152,7 +152,7 @@ describe('httpRequest', () => {
       jasmine.createSpy('reportError')
     )
 
-    request.sendOnExit({
+    const beaconResult = request.sendOnExit({
       data: 'payload',
       bytesCount: 10
     })
@@ -162,9 +162,10 @@ describe('httpRequest', () => {
       'payload'
     )
     expect(FakeXMLHttpRequest.instances.length).toBe(0)
+    expect(beaconResult).toBeUndefined()
 
     navigator.sendBeacon.and.returnValue(false)
-    request.sendOnExit({
+    const xhrResult = request.sendOnExit({
       data: 'payload',
       bytesCount: 10,
       type: 'text/plain'
@@ -177,6 +178,7 @@ describe('httpRequest', () => {
       true
     )
     expect(xhrRequest.send).toHaveBeenCalledWith('payload')
+    expect(xhrResult).toBeUndefined()
   })
 
   it('should keep using beacon for FormData on exit', () => {
@@ -234,14 +236,59 @@ describe('httpRequest', () => {
     expect(navigator.sendBeacon.calls.allArgs()).toEqual([
       ['https://example.com/rum?precision=ms', 'current-exit']
     ])
-    expect(result).toEqual({
-      $rBytesCount: 10,
-      $rCurrentPayloadSent: true
-    })
+    expect(result).toBeUndefined()
 
     resolveOngoingRequest({ status: 200, type: 'basic' })
     await Promise.resolve()
     await Promise.resolve()
+  })
+
+  it('should not beacon an ordered non-terminal exit past an older in-flight payload', async () => {
+    var resolveOlderRequest
+    var generationValid = true
+    const onPermanentDrop = jasmine
+      .createSpy('onPermanentDrop')
+      .and.callFake(function () {
+        generationValid = false
+      })
+    window.fetch = jasmine.createSpy('fetch').and.callFake(function () {
+      return new Promise(function (resolve) {
+        resolveOlderRequest = resolve
+      })
+    })
+    navigator.sendBeacon = jasmine.createSpy('sendBeacon').and.returnValue(true)
+    const request = createHttpRequest(
+      'https://example.com/replay',
+      200000,
+      -1,
+      jasmine.createSpy('reportError')
+    )
+    const orderedProperties = {
+      bytesCount: 10,
+      $rEnforceOrder: true,
+      $rIsValid: () => generationValid
+    }
+
+    request.send({
+      ...orderedProperties,
+      data: 'older-segment',
+      $rOnPermanentDrop: onPermanentDrop
+    })
+    request.sendOnExit({
+      ...orderedProperties,
+      data: 'hidden-dependent-tail'
+    })
+
+    expect(window.fetch).toHaveBeenCalledTimes(1)
+    expect(navigator.sendBeacon).not.toHaveBeenCalled()
+
+    resolveOlderRequest({ status: 400, type: 'basic' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(onPermanentDrop).toHaveBeenCalledOnceWith('http_400')
+    expect(window.fetch).toHaveBeenCalledTimes(1)
+    expect(navigator.sendBeacon).not.toHaveBeenCalled()
   })
 
   it('should explicitly drain retry payloads once without a current exit payload', () => {

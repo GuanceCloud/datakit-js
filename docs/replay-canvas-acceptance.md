@@ -31,11 +31,18 @@
 - Session Replay 已被采样到
 - 已调用 `startSessionReplayRecording()`
 - `replayCanvasEnabled: true`
-- 目标元素是 `2d canvas`，或在 `auto` 模式下使用 `webgl` / `webgl2`
+- 目标元素是 `2d canvas`；WebGL/WebGL2 还必须在 `auto` 模式下注册
+  `@cloudcare/browser-rum-webgl`
+- Cocos 或其他 WebGL 引擎要在插件/RUM `init()` 完成后再启动
 - demo 或业务页面已切到待验收模式
 
-WebGL/WebGL2 验收时，目标必须使用 `auto` 模式；SDK 会在 draw 后、浏览器
-合成前采集受预算控制的像素快照。
+WebGL/WebGL2 验收时，目标必须使用 `auto` 模式并加载独立插件；插件会在 draw 后、浏览器
+合成前采集受预算控制的像素快照。还必须验证引擎在 recorder ready 前缓存
+`draw*` 方法后仍能采集，不得通过等待 `isRecording()` 来规避这条路径。
+对 cooldown、编码中和并发受限的 draw，还必须确认 timer/编码完成不会自行补采；
+只有下一次真实 draw 才能启动新的像素 staging。
+异步 full-snapshot baseline 不会读取 WebGL；首张 WebGL 验收画面必须来自 observer
+启动后的真实 draw，普通静态 2D baseline 不受影响。
 
 ## 核心验收项
 

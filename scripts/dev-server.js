@@ -7,6 +7,7 @@ const { WebSocketServer } = require('ws')
 
 const logsConfig = require('../packages/logs/webpack.config')
 const rumConfig = require('../packages/rum/webpack.config')
+const rumWebGLConfig = require('../packages/rum-webgl/webpack.config')
 const rumSlimConfig = require('../packages/rum-slim/webpack.config')
 const workerConfig = require('../packages/worker/webpack.config')
 const reactDemoConfig = require('../packages/rum-react/demo/webpack.config')
@@ -91,6 +92,7 @@ app.use(
 )
 for (const config of [
   rumConfig,
+  rumWebGLConfig,
   rumSlimConfig,
   logsConfig,
   workerConfig,

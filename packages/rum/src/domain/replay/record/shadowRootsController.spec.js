@@ -5,6 +5,7 @@ import {
   SHADOW_ROOT_FLUSH_MAX_COUNT,
   SHADOW_ROOT_RETIRED_CONTROLLER_LIMIT
 } from './shadowRootsController'
+import { createMutationResourceBudget } from './mutationResourceBudget'
 import { setSerializedNodeId } from './serializationUtils'
 
 describe('replay/record/shadowRootsController', () => {
@@ -417,6 +418,46 @@ describe('replay/record/shadowRootsController', () => {
     host.remove()
   })
 
+  it('should restore more than 1000 published roots on failure-only recovery rollback', () => {
+    const cleanupScheduler = createCleanupScheduler()
+    const startMutationObserver = jasmine
+      .createSpy('startMutationObserver')
+      .and.callFake(() => ({
+        deactivate: () => {},
+        flush: () => true,
+        stop: () => {}
+      }))
+    const controller = initShadowRootsController(
+      {},
+      {
+        mutationCb: () => {},
+        inputCb: () => {},
+        scheduleCleanup: cleanupScheduler.schedule,
+        startMutationObserver,
+        initInputObserver: () => () => {}
+      }
+    )
+    const rootCount = 1025
+    for (let index = 0; index < rootCount; index += 1) {
+      expect(
+        controller.addShadowRoot({
+          host: { isConnected: true, ownerDocument: document },
+          index
+        })
+      ).toBeTrue()
+    }
+
+    controller.$rBeginRecovery()
+    controller.reset()
+    controller.$rRollbackRecovery()
+
+    // Rollback is the only path that reinstalls the previous observer set.
+    // It is synchronous so no mutation can fall into an unobserved gap.
+    expect(startMutationObserver).toHaveBeenCalledTimes(rootCount * 2)
+    controller.stop()
+    cleanupScheduler.drain()
+  })
+
   it('should route a pending nested host refresh to its active shadow mutation controller', () => {
     const refreshAndFlushPendingRootForNode = jasmine
       .createSpy('refreshAndFlushPendingRootForNode')
@@ -530,7 +571,7 @@ describe('replay/record/shadowRootsController', () => {
 
     controller.rollbackProvisionalShadowRoots(rejectedOwner)
 
-    expect(deactivateMutationObserver).toHaveBeenCalledTimes(1)
+    expect(deactivateMutationObserver).not.toHaveBeenCalled()
     expect(controller.addShadowRoot(existingRoot)).toBeTrue()
     expect(startMutationObserver).toHaveBeenCalledTimes(2)
     expect(controller.addShadowRoot(rejectedRoot)).toBeTrue()
@@ -545,12 +586,13 @@ describe('replay/record/shadowRootsController', () => {
     expect(startMutationObserver).toHaveBeenCalledTimes(4)
 
     cleanupScheduler.drain()
+    expect(deactivateMutationObserver).toHaveBeenCalledTimes(1)
     expect(stopMutationObserver).toHaveBeenCalledTimes(1)
     controller.stop()
     cleanupScheduler.drain()
   })
 
-  it('should release provisional shadow-root capacity before sliced cleanup', () => {
+  it('should retire every provisional shadow root before sliced cleanup', () => {
     const cleanupScheduler = createCleanupScheduler()
     const startMutationObserver = jasmine
       .createSpy('startMutationObserver')
@@ -584,7 +626,7 @@ describe('replay/record/shadowRootsController', () => {
         createFakeShadowRoot(SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT),
         owner
       )
-    ).toBeNull()
+    ).toBeTrue()
 
     controller.rollbackProvisionalShadowRoots(owner)
 
@@ -594,7 +636,7 @@ describe('replay/record/shadowRootsController', () => {
       )
     ).toBeTrue()
     expect(startMutationObserver).toHaveBeenCalledTimes(
-      SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT + 1
+      SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT + 2
     )
     expect(cleanupScheduler.pendingCount()).toBeGreaterThan(0)
 
@@ -602,7 +644,7 @@ describe('replay/record/shadowRootsController', () => {
     cleanupScheduler.drain()
   })
 
-  it('should skip the 65th root and descendants behind a nested skipped ancestor', () => {
+  it('should observe roots beyond one flush page without marking descendants skipped', () => {
     const cleanupScheduler = createCleanupScheduler()
     const controller = createStubbedController({
       scheduleCleanup: cleanupScheduler.schedule
@@ -632,14 +674,14 @@ describe('replay/record/shadowRootsController', () => {
     const nestedDescendant = document.createElement('span')
     nestedShadowRoot.appendChild(nestedDescendant)
 
-    expect(controller.addShadowRoot(skippedShadowRoot)).toBeNull()
+    expect(controller.addShadowRoot(skippedShadowRoot)).toBeTrue()
     expect(
       controller.isNodeInSkippedShadowRoot(skippedShadowRoot)
     ).toBeFalse()
-    expect(controller.isNodeInSkippedShadowRoot(nestedShadowRoot)).toBeTrue()
+    expect(controller.isNodeInSkippedShadowRoot(nestedShadowRoot)).toBeFalse()
     expect(
       controller.isNodeInSkippedShadowRoot(nestedDescendant)
-    ).toBeTrue()
+    ).toBeFalse()
     expect(
       controller.isNodeInSkippedShadowRoot(admittedDescendant)
     ).toBeFalse()
@@ -700,6 +742,7 @@ describe('replay/record/shadowRootsController', () => {
     const cleanupScheduler = createCleanupScheduler()
     const callbacks = []
     const mutationCb = jasmine.createSpy('mutationCb')
+    const mutationPerfCb = jasmine.createSpy('mutationPerfCb')
     const mutationOverflowCb = jasmine.createSpy('mutationOverflowCb')
     const mutationActivityCb = jasmine.createSpy('mutationActivityCb')
     const inputCb = jasmine.createSpy('inputCb')
@@ -707,6 +750,7 @@ describe('replay/record/shadowRootsController', () => {
       {},
       {
         mutationCb,
+        mutationPerfCb,
         mutationOverflowCb,
         mutationActivityCb,
         inputCb,
@@ -716,7 +760,7 @@ describe('replay/record/shadowRootsController', () => {
           _configuration,
           nextShadowRootsController,
           _shadowRoot,
-          _mutationPerfCb,
+          nextMutationPerfCb,
           nextOverflowCb,
           nextActivityCb
         ) {
@@ -724,6 +768,7 @@ describe('replay/record/shadowRootsController', () => {
             activity: nextActivityCb,
             controller: nextShadowRootsController,
             mutation: nextMutationCb,
+            perf: nextMutationPerfCb,
             overflow: nextOverflowCb
           })
           return {
@@ -749,6 +794,7 @@ describe('replay/record/shadowRootsController', () => {
     retiredCallbacks.activity()
     retiredCallbacks.input({ id: 1 })
     expect(mutationCb).not.toHaveBeenCalled()
+    expect(mutationPerfCb).not.toHaveBeenCalled()
     expect(mutationOverflowCb).not.toHaveBeenCalled()
     expect(mutationActivityCb).not.toHaveBeenCalled()
     expect(inputCb).not.toHaveBeenCalled()
@@ -756,6 +802,7 @@ describe('replay/record/shadowRootsController', () => {
     const activeShadowRoot = createFakeShadowRoot(2)
     controller.addShadowRoot(activeShadowRoot)
     const activeCallbacks = callbacks[1]
+    expect(activeCallbacks.perf).toBe(mutationPerfCb)
     expect(
       retiredCallbacks.controller.addShadowRoot(createFakeShadowRoot(3))
     ).toBeFalse()
@@ -764,10 +811,14 @@ describe('replay/record/shadowRootsController', () => {
     expect(callbacks.length).toBe(2)
 
     activeCallbacks.mutation({ adds: [2] })
+    activeCallbacks.perf({ mutationLocalDropCount: 1 })
     activeCallbacks.overflow({ reason: 'active' })
     activeCallbacks.activity()
     activeCallbacks.input({ id: 2 })
     expect(mutationCb).toHaveBeenCalledWith({ adds: [2] })
+    expect(mutationPerfCb).toHaveBeenCalledOnceWith({
+      mutationLocalDropCount: 1
+    })
     expect(mutationOverflowCb).toHaveBeenCalledWith({ reason: 'active' })
     expect(mutationActivityCb).toHaveBeenCalled()
     expect(inputCb).toHaveBeenCalledWith({ id: 2 })
@@ -805,19 +856,28 @@ describe('replay/record/shadowRootsController', () => {
         mutationCb,
         inputCb: function () {},
         scheduleCleanup: cleanupScheduler.schedule,
-        startMutationObserver: function (nextMutationCb) {
-          let active = true
+        startMutationObserver: function (
+          nextMutationCb,
+          _configuration,
+          _shadowRootsController,
+          _shadowRoot,
+          _mutationPerfCb,
+          _mutationOverflowCb,
+          _mutationActivityCb,
+          _mutationNodeSerializationCb,
+          _isNodeIgnored,
+          _isNodePublished,
+          isSourceActive
+        ) {
           nativeMutationEntries.push(function () {
-            if (!active) {
+            if (!isSourceActive()) {
               return
             }
             nativeWorkCount += 1
             nextMutationCb({ adds: [nativeWorkCount] })
           })
           return {
-            deactivate: function () {
-              active = false
-            },
+            deactivate: function () {},
             flush: function () {
               return true
             },
@@ -898,9 +958,9 @@ describe('replay/record/shadowRootsController', () => {
     cleanupScheduler.drain()
   })
 
-  it('should release a full active controller generation in bounded async slices', () => {
+  it('should release more than 1000 active controllers in bounded async slices', () => {
     const cleanupScheduler = createCleanupScheduler()
-    const rootCount = SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT
+    const rootCount = 1025
     let mutationDeactivateCount = 0
     let mutationStopCount = 0
     let inputStopCount = 0
@@ -939,15 +999,19 @@ describe('replay/record/shadowRootsController', () => {
     }
     controller.reset()
 
-    expect(mutationDeactivateCount).toBe(rootCount)
+    expect(mutationDeactivateCount).toBe(0)
     expect(mutationStopCount).toBe(0)
     expect(inputStopCount).toBe(0)
     expect(cleanupScheduler.pendingCount()).toBe(1)
     cleanupScheduler.runNext()
+    expect(mutationDeactivateCount).toBe(
+      SHADOW_ROOT_CLEANUP_BATCH_SIZE
+    )
     expect(mutationStopCount).toBe(SHADOW_ROOT_CLEANUP_BATCH_SIZE)
     expect(inputStopCount).toBe(SHADOW_ROOT_CLEANUP_BATCH_SIZE)
 
     cleanupScheduler.drain()
+    expect(mutationDeactivateCount).toBe(rootCount)
     expect(mutationStopCount).toBe(rootCount)
     expect(inputStopCount).toBe(rootCount)
   })
@@ -1067,7 +1131,7 @@ describe('replay/record/shadowRootsController', () => {
     }
   })
 
-  it('should atomically discard buffered shadow mutations when the flush time budget is exceeded', () => {
+  it('should preserve buffered shadow mutations across time-sliced flush pages', () => {
     const cleanupScheduler = createCleanupScheduler()
     const mutationCb = jasmine.createSpy('mutationCb')
     const mutationOverflowCb = jasmine.createSpy('mutationOverflowCb')
@@ -1104,18 +1168,133 @@ describe('replay/record/shadowRootsController', () => {
     controller.addShadowRoot(createFakeShadowRoot(1))
     controller.addShadowRoot(createFakeShadowRoot(2))
 
-    expect(controller.flush()).toBeFalse()
+    expect(controller.flush()).toBe('pending')
     expect(flushes[0]).toHaveBeenCalled()
     expect(flushes[1]).not.toHaveBeenCalled()
     expect(mutationCb).not.toHaveBeenCalled()
-    expect(mutationOverflowCb).toHaveBeenCalledTimes(1)
-    expect(mutationOverflowCb.calls.mostRecent().args[0].reason).toBe(
-      'shadow_root_flush_budget'
-    )
+    expect(mutationOverflowCb).not.toHaveBeenCalled()
+
+    expect(controller.flush()).toBe('pending')
+    expect(flushes[1]).toHaveBeenCalled()
+    expect(mutationCb).not.toHaveBeenCalled()
+
+    expect(controller.flush()).toBeTrue()
+    expect(mutationCb).toHaveBeenCalledTimes(1)
+    expect(mutationOverflowCb).not.toHaveBeenCalled()
     cleanupScheduler.drain()
   })
 
-  it('should align admission with the flush limit and keep admitted roots recoverable', () => {
+  it('should keep flushing one root until its paged mutation transaction completes', () => {
+    const cleanupScheduler = createCleanupScheduler()
+    const mutationCb = jasmine.createSpy('mutationCb')
+    const rootFlush = jasmine.createSpy('flush')
+    let flushCount = 0
+    const controller = initShadowRootsController(
+      {},
+      {
+        mutationCb,
+        inputCb: function () {},
+        getCurrentTime: function () {
+          return 0
+        },
+        scheduleCleanup: cleanupScheduler.schedule,
+        startMutationObserver: function (nextMutationCb) {
+          rootFlush.and.callFake(function () {
+            flushCount += 1
+            nextMutationCb({
+              adds: [flushCount],
+              removes: [],
+              texts: [],
+              attributes: []
+            })
+            return flushCount === 1 ? 'pending' : true
+          })
+          return {
+            flush: rootFlush,
+            stop: function () {}
+          }
+        },
+        initInputObserver: function () {
+          return function () {}
+        }
+      }
+    )
+    controller.addShadowRoot(createFakeShadowRoot(1))
+
+    expect(controller.flush()).toBe('pending')
+    expect(rootFlush).toHaveBeenCalledTimes(1)
+    expect(mutationCb).not.toHaveBeenCalled()
+
+    expect(controller.flush()).toBeTrue()
+    expect(rootFlush).toHaveBeenCalledTimes(2)
+    expect(mutationCb).toHaveBeenCalledOnceWith({
+      adds: [1, 2],
+      removes: [],
+      texts: [],
+      attributes: []
+    })
+    cleanupScheduler.drain()
+  })
+
+  it('should not coalesce shadow mutations across an input event between flush pages', () => {
+    const cleanupScheduler = createCleanupScheduler()
+    const dispatchedEvents = []
+    const inputCallbacks = []
+    let observerIndex = 0
+    let now = 0
+    const controller = initShadowRootsController(
+      {},
+      {
+        mutationCb: function (mutation) {
+          dispatchedEvents.push('mutation:' + mutation.adds.join(','))
+        },
+        inputCb: function () {
+          dispatchedEvents.push('input')
+        },
+        getCurrentTime: function () {
+          const current = now
+          now += 5
+          return current
+        },
+        scheduleCleanup: cleanupScheduler.schedule,
+        startMutationObserver: function (nextMutationCb) {
+          const currentObserverIndex = ++observerIndex
+          return {
+            flush: function () {
+              nextMutationCb({
+                adds: [currentObserverIndex],
+                removes: [],
+                texts: [],
+                attributes: []
+              })
+              return true
+            },
+            stop: function () {}
+          }
+        },
+        initInputObserver: function (nextInputCb) {
+          inputCallbacks.push(nextInputCb)
+          return function () {}
+        }
+      }
+    )
+    controller.addShadowRoot(createFakeShadowRoot(1))
+    controller.addShadowRoot(createFakeShadowRoot(2))
+
+    expect(controller.flush()).toBe('pending')
+    inputCallbacks[0]({ id: 1, text: 'between-pages' })
+    expect(controller.flush()).toBe('pending')
+    expect(controller.flush()).toBeTrue()
+
+    expect(dispatchedEvents).toEqual([
+      'mutation:1',
+      'input',
+      'mutation:2'
+    ])
+    cleanupScheduler.drain()
+  })
+
+  it('should flush roots beyond one page as one atomic mutation transaction', () => {
     const cleanupScheduler = createCleanupScheduler()
     const flush = jasmine.createSpy('flush').and.returnValue(true)
     const callbacks = []
@@ -1156,13 +1335,75 @@ describe('replay/record/shadowRootsController', () => {
       controller.addShadowRoot(
         createFakeShadowRoot(SHADOW_ROOT_FLUSH_MAX_COUNT)
       )
-    ).toBeNull()
+    ).toBeTrue()
 
-    expect(controller.flush()).toBeTrue()
+    expect(controller.flush()).toBe('pending')
     expect(flush).toHaveBeenCalledTimes(SHADOW_ROOT_FLUSH_MAX_COUNT)
     expect(mutationOverflowCb).not.toHaveBeenCalled()
     callbacks[0]({ adds: [1] })
-    expect(mutationCb).toHaveBeenCalledOnceWith({ adds: [1] })
+
+    expect(mutationCb).not.toHaveBeenCalled()
+    expect(controller.flush()).toBeTrue()
+    expect(flush).toHaveBeenCalledTimes(
+      SHADOW_ROOT_FLUSH_MAX_COUNT + 1
+    )
+    expect(mutationCb).toHaveBeenCalledOnceWith({
+      adds: [1],
+      removes: [],
+      texts: [],
+      attributes: []
+    })
+    cleanupScheduler.drain()
+  })
+
+  it('should reset native shadow mutation queues in bounded baseline pages', () => {
+    const cleanupScheduler = createCleanupScheduler()
+    const resetMutationObserver = jasmine.createSpy(
+      'resetMutationObserver'
+    )
+    const controller = initShadowRootsController(
+      {},
+      {
+        mutationCb: function () {},
+        inputCb: function () {},
+        getCurrentTime: function () {
+          return 0
+        },
+        scheduleCleanup: cleanupScheduler.schedule,
+        startMutationObserver: function () {
+          return {
+            flush: function () {
+              return true
+            },
+            reset: resetMutationObserver,
+            stop: function () {}
+          }
+        },
+        initInputObserver: function () {
+          return function () {}
+        }
+      }
+    )
+    for (
+      let index = 0;
+      index < SHADOW_ROOT_FLUSH_MAX_COUNT + 1;
+      index += 1
+    ) {
+      controller.addShadowRoot(createFakeShadowRoot(index))
+    }
+
+    expect(
+      controller.$rResetPendingMutationsForBaseline()
+    ).toBe('pending')
+    expect(resetMutationObserver).toHaveBeenCalledTimes(
+      SHADOW_ROOT_FLUSH_MAX_COUNT
+    )
+    expect(
+      controller.$rResetPendingMutationsForBaseline()
+    ).toBeTrue()
+    expect(resetMutationObserver).toHaveBeenCalledTimes(
+      SHADOW_ROOT_FLUSH_MAX_COUNT + 1
+    )
     cleanupScheduler.drain()
   })
 
@@ -1266,10 +1507,7 @@ describe('replay/record/shadowRootsController', () => {
     expect(mutationCb).not.toHaveBeenCalled()
     expect(mutationOverflowCb).toHaveBeenCalledTimes(1)
     expect(mutationOverflowCb.calls.mostRecent().args[0]).toEqual(
-      jasmine.objectContaining({
-        reason: 'shadow_root_flush_overflow',
-        cause: 'removed_subtree_watermark'
-      })
+      { reason: 'removed_subtree_watermark' }
     )
     cleanupScheduler.drain()
   })
@@ -1411,7 +1649,7 @@ describe('replay/record/shadowRootsController', () => {
     expect(cleanupErrorCb).toHaveBeenCalledOnceWith(deactivationError)
   })
 
-  it('should fail closed before creating an unbounded active observer set', () => {
+  it('should install observers beyond one flush page', () => {
     const cleanupScheduler = createCleanupScheduler()
     const startMutationObserver = jasmine
       .createSpy('startMutationObserver')
@@ -1441,16 +1679,60 @@ describe('replay/record/shadowRootsController', () => {
       controller.addShadowRoot(
         createFakeShadowRoot(SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT)
       )
-    ).toBeNull()
+    ).toBeTrue()
     expect(startMutationObserver).toHaveBeenCalledTimes(
-      SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT
+      SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT + 1
     )
 
     controller.stop()
     cleanupScheduler.drain()
   })
 
-  it('should synchronously disconnect a retired generation when the cleanup queue is full', () => {
+  it('should clean more than 1000 disconnected roots in bounded slices', () => {
+    jasmine.clock().install()
+    const cleanupScheduler = createCleanupScheduler()
+    const deactivateMutationObserver = jasmine.createSpy(
+      'deactivateMutationObserver'
+    )
+    const rootCount = 1025
+    const controller = initShadowRootsController(
+      {},
+      {
+        mutationCb: () => {},
+        inputCb: () => {},
+        getCurrentTime: () => 0,
+        scheduleCleanup: cleanupScheduler.schedule,
+        startMutationObserver: () => ({
+          deactivate: deactivateMutationObserver,
+          flush: () => true,
+          stop: () => {}
+        }),
+        initInputObserver: () => () => {}
+      }
+    )
+
+    try {
+      for (let index = 0; index < rootCount; index += 1) {
+        expect(
+          controller.addShadowRoot(createFakeShadowRoot(index))
+        ).toBeTrue()
+      }
+
+      controller.cleanupDisconnectedShadowRoots()
+      expect(deactivateMutationObserver).toHaveBeenCalledTimes(
+        SHADOW_ROOT_CLEANUP_BATCH_SIZE
+      )
+
+      jasmine.clock().tick(1)
+      expect(deactivateMutationObserver).toHaveBeenCalledTimes(rootCount)
+    } finally {
+      controller.stop()
+      cleanupScheduler.drain()
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should keep cleanup sliced after the retired diagnostic threshold', () => {
     const cleanupScheduler = createCleanupScheduler()
     const stopMutationObserver = jasmine.createSpy('stopMutationObserver')
     const controller = initShadowRootsController(
@@ -1492,8 +1774,11 @@ describe('replay/record/shadowRootsController', () => {
       controller.reset()
     }
 
+    expect(stopMutationObserver).not.toHaveBeenCalled()
+    expect(cleanupScheduler.pendingCount()).toBe(1)
+    cleanupScheduler.runNext()
     expect(stopMutationObserver).toHaveBeenCalledTimes(
-      SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT
+      SHADOW_ROOT_CLEANUP_BATCH_SIZE
     )
     cleanupScheduler.drain()
     expect(stopMutationObserver).toHaveBeenCalledTimes(
@@ -1501,6 +1786,62 @@ describe('replay/record/shadowRootsController', () => {
         SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT
     )
     controller.stop()
+  })
+
+  it('should bound aggregate flush payloads across 1024 shadow roots', () => {
+    const cleanupScheduler = createCleanupScheduler()
+    const mutationOverflowCb = jasmine.createSpy('mutationOverflowCb')
+    const mutationResourceBudget = createMutationResourceBudget()
+    const largeText = 'x'.repeat(20000)
+    const controller = initShadowRootsController(
+      {},
+      {
+        mutationCb: function () {},
+        mutationOverflowCb,
+        mutationResourceBudget,
+        inputCb: function () {},
+        scheduleCleanup: cleanupScheduler.schedule,
+        startMutationObserver: function (nextMutationCb) {
+          return {
+            flush: function () {
+              nextMutationCb({
+                adds: [],
+                removes: [],
+                texts: [{ id: 1, value: largeText }],
+                attributes: []
+              })
+              return true
+            },
+            stop: function () {}
+          }
+        },
+        initInputObserver: function () {
+          return function () {}
+        }
+      }
+    )
+
+    for (let rootIndex = 0; rootIndex < 1024; rootIndex += 1) {
+      controller.addShadowRoot(createFakeShadowRoot(rootIndex))
+    }
+
+    let flushResult
+    do {
+      flushResult = controller.flush()
+    } while (flushResult === 'pending')
+
+    expect(flushResult).toBeFalse()
+    expect(mutationOverflowCb).toHaveBeenCalledTimes(1)
+    expect(mutationOverflowCb).toHaveBeenCalledWith(
+      jasmine.objectContaining({
+        reason: 'shadow_root_flush_overflow',
+        cause: 'aggregate_shadow_flush_watermark'
+      })
+    )
+    expect(mutationResourceBudget.getUsage().totalApproxBytes).toBe(0)
+
+    controller.stop()
+    cleanupScheduler.drain()
   })
 })
 

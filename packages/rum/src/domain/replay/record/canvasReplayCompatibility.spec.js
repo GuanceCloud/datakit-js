@@ -3,7 +3,7 @@ import {
   CANVAS_REPLAY_SAMPLE_DATA_URLS,
   createCanvasMutationFixture,
   createCanvasReplayFixtureTimeline
-} from './canvasReplayFixtures'
+} from '../../../../test/replay/canvasReplayFixtures'
 
 function getBase64FromSerializedImage(serialisedImage) {
   return serialisedImage.args[0].data[0].base64

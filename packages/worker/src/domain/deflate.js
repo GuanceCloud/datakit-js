@@ -221,8 +221,8 @@ var d_code = function d_code(dist) {
 var put_short = function put_short(s, w) {
   //    put_byte(s, (uch)((w) & 0xff));
   //    put_byte(s, (uch)((ush)(w) >> 8));
-  s.pending_buf[s.pending++] = w & 0xff
-  s.pending_buf[s.pending++] = (w >>> 8) & 0xff
+  s.pending_buf[s.$rPending++] = w & 0xff
+  s.pending_buf[s.$rPending++] = (w >>> 8) & 0xff
 }
 /* ===========================================================================
  * Send a value on a given number of bits.
@@ -277,7 +277,7 @@ var bi_flush = function bi_flush(s) {
     s.bi_buf = 0
     s.bi_valid = 0
   } else if (s.bi_valid >= 8) {
-    s.pending_buf[s.pending++] = s.bi_buf & 0xff
+    s.pending_buf[s.$rPending++] = s.bi_buf & 0xff
     s.bi_buf >>= 8
     s.bi_valid -= 8
   }
@@ -690,7 +690,7 @@ var init_block = function init_block(s) {
     /* .Freq */
     1
   s.opt_len = s.static_len = 0
-  s.last_lit = s.matches = 0
+  s.last_lit = s.$rMatches = 0
 }
 /* ===========================================================================
  * Flush the bit buffer and align the output on a byte boundary
@@ -701,7 +701,7 @@ var bi_windup = function bi_windup(s) {
     put_short(s, s.bi_buf)
   } else if (s.bi_valid > 0) {
     // put_byte(s, (Byte)s->bi_buf);
-    s.pending_buf[s.pending++] = s.bi_buf
+    s.pending_buf[s.$rPending++] = s.bi_buf
   }
 
   s.bi_buf = 0
@@ -733,8 +733,8 @@ var copy_block = function copy_block(
   //    put_byte(s, *buf++);
   //  }
 
-  s.pending_buf.set(s.window.subarray(buf, buf + len), s.pending)
-  s.pending += len
+  s.pending_buf.set(s.$rWindow.subarray(buf, buf + len), s.$rPending)
+  s.$rPending += len
 }
 /* ===========================================================================
  * Compares to subtrees, using the tree depth as tie breaker when
@@ -1423,7 +1423,7 @@ var _tr_flush_block = function _tr_flush_block(
 
   /* Build the Huffman trees unless a stored block is forced */
 
-  if (s.level > 0) {
+  if (s.$rLevel > 0) {
     /* Check if the file is binary or text */
     if (s.strm.data_type === Z_UNKNOWN) {
       s.strm.data_type = detect_data_type(s)
@@ -1519,7 +1519,7 @@ var _tr_tally = function _tr_tally(
     /* lc is the unmatched char */
     s.dyn_ltree[lc * 2] /* .Freq */++
   } else {
-    s.matches++
+    s.$rMatches++
     /* Here, lc is the match length - MIN_MATCH */
 
     dist--
@@ -1534,7 +1534,7 @@ var _tr_tally = function _tr_tally(
   // don't enable it for binary compatibility
   // #ifdef TRUNCATE_BLOCK
   //  /* Try to guess if it is profitable to stop the current block here */
-  //  if ((s.last_lit & 0x1fff) === 0 && s.level > 2) {
+  //  if ((s.last_lit & 0x1fff) === 0 && s.$rLevel > 2) {
   //    /* Compute an upper bound for the compressed length */
   //    out_length = s.last_lit*8;
   //    in_length = s.strstart - s.block_start;
@@ -1546,7 +1546,7 @@ var _tr_tally = function _tr_tally(
   //    //Tracev((stderr,"\nlast_lit %u, in %ld, out ~%ld(%ld%%) ",
   //    //       s->last_lit, in_length, out_length,
   //    //       100L - out_length*100L/in_length));
-  //    if (s.matches < (s.last_lit>>1)/*int /2*/ && out_length < (in_length>>1)/*int /2*/) {
+  //    if (s.$rMatches < (s.last_lit>>1)/*int /2*/ && out_length < (in_length>>1)/*int /2*/) {
   //      return true;
   //    }
   //  }
@@ -1693,32 +1693,10 @@ var crc32_1 = crc32
 // 3. This notice may not be removed or altered from any source distribution.
 
 var messages = {
-  2: 'need dictionary',
-
-  /* Z_NEED_DICT       2  */
-  1: 'stream end',
-
-  /* Z_STREAM_END      1  */
   0: '',
-
-  /* Z_OK              0  */
-  '-1': 'file error',
-
-  /* Z_ERRNO         (-1) */
   '-2': 'stream error',
-
-  /* Z_STREAM_ERROR  (-2) */
   '-3': 'data error',
-
-  /* Z_DATA_ERROR    (-3) */
-  '-4': 'insufficient memory',
-
-  /* Z_MEM_ERROR     (-4) */
-  '-5': 'buffer error',
-
-  /* Z_BUF_ERROR     (-5) */
-  '-6': 'incompatible version'
-  /* Z_VERSION_ERROR (-6) */
+  '-5': 'buffer error'
 }
 
 // (C) 2014-2017 Vitaly Puzrin and Andrey Tupitsin
@@ -1861,7 +1839,6 @@ var MAX_BITS$1 = 15
 var MIN_MATCH$1 = 3
 var MAX_MATCH$1 = 258
 var MIN_LOOKAHEAD = MAX_MATCH$1 + MIN_MATCH$1 + 1
-var PRESET_DICT = 0x20
 var INIT_STATE = 42
 var EXTRA_STATE = 69
 var NAME_STATE = 73
@@ -1881,7 +1858,11 @@ var BS_FINISH_STARTED = 3
 var BS_FINISH_DONE = 4
 /* finish done, accept no more input or output */
 
-var OS_CODE = 0x03 // Unix :) . Don't detect, use this default.
+// The SDK worker only exposes the default zlib stream. Keeping the original
+// gzip header branches disabled here makes that boundary explicit while
+// preserving the upstream state-machine layout for maintainability.
+var SUPPORTS_GZIP_WRAPPER = false
+var OS_CODE = 0x03
 
 var err = function err(strm, errorCode) {
   strm.msg = messages[errorCode]
@@ -1915,9 +1896,9 @@ var HASH = HASH_ZLIB
  */
 
 var flush_pending = function flush_pending(strm) {
-  var s = strm.state // _tr_flush_bits(s);
+  var s = strm.$rState // _tr_flush_bits(s);
 
-  var len = s.pending
+  var len = s.$rPending
 
   if (len > strm.avail_out) {
     len = strm.avail_out
@@ -1935,9 +1916,9 @@ var flush_pending = function flush_pending(strm) {
   s.pending_out += len
   strm.total_out += len
   strm.avail_out -= len
-  s.pending -= len
+  s.$rPending -= len
 
-  if (s.pending === 0) {
+  if (s.$rPending === 0) {
     s.pending_out = 0
   }
 }
@@ -1955,7 +1936,7 @@ var flush_block_only = function flush_block_only(s, last) {
 }
 
 var put_byte = function put_byte(s, b) {
-  s.pending_buf[s.pending++] = b
+  s.pending_buf[s.$rPending++] = b
 }
 /* =========================================================================
  * Put a short in the pending buffer. The 16-bit value is put in MSB order.
@@ -1966,8 +1947,8 @@ var put_byte = function put_byte(s, b) {
 var putShortMSB = function putShortMSB(s, b) {
   //  put_byte(s, (Byte)(b >> 8));
   //  put_byte(s, (Byte)(b & 0xff));
-  s.pending_buf[s.pending++] = (b >>> 8) & 0xff
-  s.pending_buf[s.pending++] = b & 0xff
+  s.pending_buf[s.$rPending++] = (b >>> 8) & 0xff
+  s.pending_buf[s.$rPending++] = b & 0xff
 }
 /* ===========================================================================
  * Read a new buffer from the current input stream, update the adler32
@@ -1990,13 +1971,9 @@ var read_buf = function read_buf(strm, buf, start, size) {
 
   strm.avail_in -= len // zmemcpy(buf, strm->next_in, len);
 
-  buf.set(strm.input.subarray(strm.next_in, strm.next_in + len), start)
+  buf.set(strm.$rInput.subarray(strm.next_in, strm.next_in + len), start)
 
-  if (strm.state.wrap === 1) {
-    strm.adler = adler32_1(strm.adler, buf, len, start)
-  } else if (strm.state.wrap === 2) {
-    strm.adler = crc32_1(strm.adler, buf, len, start)
-  }
+  strm.adler = adler32_1(strm.adler, buf, len, start)
 
   strm.next_in += len
   strm.total_in += len
@@ -2036,7 +2013,7 @@ var longest_match = function longest_match(s, cur_match) {
       ? s.strstart - (s.w_size - MIN_LOOKAHEAD)
       : 0
   /* NIL */
-  var _win = s.window // shortcut
+  var _win = s.$rWindow // shortcut
 
   var wmask = s.w_mask
   var prev = s.prev
@@ -2178,7 +2155,7 @@ var fill_window = function fill_window(s) {
      */
 
     if (s.strstart >= _w_size + (_w_size - MIN_LOOKAHEAD)) {
-      s.window.set(s.window.subarray(_w_size, _w_size + _w_size), 0)
+      s.$rWindow.set(s.$rWindow.subarray(_w_size, _w_size + _w_size), 0)
       s.match_start -= _w_size
       s.strstart -= _w_size
       /* we now have strstart >= MAX_DIST */
@@ -2195,8 +2172,8 @@ var fill_window = function fill_window(s) {
       p = n
 
       do {
-        m = s.head[--p]
-        s.head[p] = m >= _w_size ? m - _w_size : 0
+        m = s.$rHead[--p]
+        s.$rHead[p] = m >= _w_size ? m - _w_size : 0
       } while (--n)
 
       n = _w_size
@@ -2229,24 +2206,24 @@ var fill_window = function fill_window(s) {
      */
     // Assert(more >= 2, "more < 2");
 
-    n = read_buf(s.strm, s.window, s.strstart + s.lookahead, more)
+    n = read_buf(s.strm, s.$rWindow, s.strstart + s.lookahead, more)
     s.lookahead += n
     /* Initialize the hash value now that we have some input: */
 
     if (s.lookahead + s.insert >= MIN_MATCH$1) {
       str = s.strstart - s.insert
-      s.ins_h = s.window[str]
+      s.ins_h = s.$rWindow[str]
       /* UPDATE_HASH(s, s->ins_h, s->window[str + 1]); */
 
-      s.ins_h = HASH(s, s.ins_h, s.window[str + 1]) // #if MIN_MATCH != 3
+      s.ins_h = HASH(s, s.ins_h, s.$rWindow[str + 1]) // #if MIN_MATCH != 3
       //        Call update_hash() MIN_MATCH-3 more times
       // #endif
 
       while (s.insert) {
         /* UPDATE_HASH(s, s->ins_h, s->window[str + MIN_MATCH-1]); */
-        s.ins_h = HASH(s, s.ins_h, s.window[str + MIN_MATCH$1 - 1])
-        s.prev[str & s.w_mask] = s.head[s.ins_h]
-        s.head[s.ins_h] = str
+        s.ins_h = HASH(s, s.ins_h, s.$rWindow[str + MIN_MATCH$1 - 1])
+        s.prev[str & s.w_mask] = s.$rHead[s.ins_h]
+        s.$rHead[s.ins_h] = str
         str++
         s.insert--
 
@@ -2441,9 +2418,9 @@ var deflate_fast = function deflate_fast(s, flush) {
 
     if (s.lookahead >= MIN_MATCH$1) {
       /** * INSERT_STRING(s, s.strstart, hash_head); ** */
-      s.ins_h = HASH(s, s.ins_h, s.window[s.strstart + MIN_MATCH$1 - 1])
-      hash_head = s.prev[s.strstart & s.w_mask] = s.head[s.ins_h]
-      s.head[s.ins_h] = s.strstart
+      s.ins_h = HASH(s, s.ins_h, s.$rWindow[s.strstart + MIN_MATCH$1 - 1])
+      hash_head = s.prev[s.strstart & s.w_mask] = s.$rHead[s.ins_h]
+      s.$rHead[s.ins_h] = s.strstart
       /***/
     }
     /* Find the longest match, discarding those <= prev_length.
@@ -2490,9 +2467,9 @@ var deflate_fast = function deflate_fast(s, flush) {
           s.strstart++
           /** * INSERT_STRING(s, s.strstart, hash_head); ** */
 
-          s.ins_h = HASH(s, s.ins_h, s.window[s.strstart + MIN_MATCH$1 - 1])
-          hash_head = s.prev[s.strstart & s.w_mask] = s.head[s.ins_h]
-          s.head[s.ins_h] = s.strstart
+          s.ins_h = HASH(s, s.ins_h, s.$rWindow[s.strstart + MIN_MATCH$1 - 1])
+          hash_head = s.prev[s.strstart & s.w_mask] = s.$rHead[s.ins_h]
+          s.$rHead[s.ins_h] = s.strstart
           /***/
 
           /* strstart never exceeds WSIZE-MAX_MATCH, so there are
@@ -2504,10 +2481,10 @@ var deflate_fast = function deflate_fast(s, flush) {
       } else {
         s.strstart += s.match_length
         s.match_length = 0
-        s.ins_h = s.window[s.strstart]
-        /* UPDATE_HASH(s, s.ins_h, s.window[s.strstart+1]); */
+        s.ins_h = s.$rWindow[s.strstart]
+        /* UPDATE_HASH(s, s.ins_h, s.$rWindow[s.strstart+1]); */
 
-        s.ins_h = HASH(s, s.ins_h, s.window[s.strstart + 1]) // #if MIN_MATCH != 3
+        s.ins_h = HASH(s, s.ins_h, s.$rWindow[s.strstart + 1]) // #if MIN_MATCH != 3
         //                Call UPDATE_HASH() MIN_MATCH-3 more times
         // #endif
 
@@ -2517,10 +2494,10 @@ var deflate_fast = function deflate_fast(s, flush) {
       }
     } else {
       /* No match, output a literal byte */
-      // Tracevv((stderr,"%c", s.window[s.strstart]));
+      // Tracevv((stderr,"%c", s.$rWindow[s.strstart]));
 
-      /** * _tr_tally_lit(s, s.window[s.strstart], bflush); ** */
-      bflush = _tr_tally$1(s, 0, s.window[s.strstart])
+      /** * _tr_tally_lit(s, s.$rWindow[s.strstart], bflush); ** */
+      bflush = _tr_tally$1(s, 0, s.$rWindow[s.strstart])
       s.lookahead--
       s.strstart++
     }
@@ -2605,9 +2582,9 @@ var deflate_slow = function deflate_slow(s, flush) {
 
     if (s.lookahead >= MIN_MATCH$1) {
       /** * INSERT_STRING(s, s.strstart, hash_head); ** */
-      s.ins_h = HASH(s, s.ins_h, s.window[s.strstart + MIN_MATCH$1 - 1])
-      hash_head = s.prev[s.strstart & s.w_mask] = s.head[s.ins_h]
-      s.head[s.ins_h] = s.strstart
+      s.ins_h = HASH(s, s.ins_h, s.$rWindow[s.strstart + MIN_MATCH$1 - 1])
+      hash_head = s.prev[s.strstart & s.w_mask] = s.$rHead[s.ins_h]
+      s.$rHead[s.ins_h] = s.strstart
       /***/
     }
     /* Find the longest match, discarding those <= prev_length.
@@ -2672,9 +2649,9 @@ var deflate_slow = function deflate_slow(s, flush) {
       do {
         if (++s.strstart <= max_insert) {
           /** * INSERT_STRING(s, s.strstart, hash_head); ** */
-          s.ins_h = HASH(s, s.ins_h, s.window[s.strstart + MIN_MATCH$1 - 1])
-          hash_head = s.prev[s.strstart & s.w_mask] = s.head[s.ins_h]
-          s.head[s.ins_h] = s.strstart
+          s.ins_h = HASH(s, s.ins_h, s.$rWindow[s.strstart + MIN_MATCH$1 - 1])
+          hash_head = s.prev[s.strstart & s.w_mask] = s.$rHead[s.ins_h]
+          s.$rHead[s.ins_h] = s.strstart
           /***/
         }
       } while (--s.prev_length !== 0)
@@ -2699,8 +2676,8 @@ var deflate_slow = function deflate_slow(s, flush) {
        */
       // Tracevv((stderr,"%c", s->window[s->strstart-1]));
 
-      /** * _tr_tally_lit(s, s.window[s.strstart-1], bflush); ** */
-      bflush = _tr_tally$1(s, 0, s.window[s.strstart - 1])
+      /** * _tr_tally_lit(s, s.$rWindow[s.strstart-1], bflush); ** */
+      bflush = _tr_tally$1(s, 0, s.$rWindow[s.strstart - 1])
 
       if (bflush) {
         /** * FLUSH_BLOCK_ONLY(s, 0) ** */
@@ -2727,8 +2704,8 @@ var deflate_slow = function deflate_slow(s, flush) {
   if (s.match_available) {
     // Tracevv((stderr,"%c", s->window[s->strstart-1]));
 
-    /** * _tr_tally_lit(s, s.window[s.strstart-1], bflush); ** */
-    bflush = _tr_tally$1(s, 0, s.window[s.strstart - 1])
+    /** * _tr_tally_lit(s, s.$rWindow[s.strstart-1], bflush); ** */
+    bflush = _tr_tally$1(s, 0, s.$rWindow[s.strstart - 1])
     s.match_available = 0
   }
 
@@ -2775,7 +2752,7 @@ var deflate_rle = function deflate_rle(s, flush) {
   var strend
   /* scan goes up to strend for length of run */
 
-  var _win = s.window
+  var _win = s.$rWindow
 
   for (;;) {
     /* Make sure that we always have enough lookahead, except
@@ -2844,8 +2821,8 @@ var deflate_rle = function deflate_rle(s, flush) {
       /* No match, output a literal byte */
       // Tracevv((stderr,"%c", s->window[s->strstart]));
 
-      /** * _tr_tally_lit(s, s.window[s.strstart], bflush); ** */
-      bflush = _tr_tally$1(s, 0, s.window[s.strstart])
+      /** * _tr_tally_lit(s, s.$rWindow[s.strstart], bflush); ** */
+      bflush = _tr_tally$1(s, 0, s.$rWindow[s.strstart])
       s.lookahead--
       s.strstart++
     }
@@ -2914,9 +2891,9 @@ var deflate_huff = function deflate_huff(s, flush) {
 
     s.match_length = 0 // Tracevv((stderr,"%c", s->window[s->strstart]));
 
-    /** * _tr_tally_lit(s, s.window[s.strstart], bflush); ** */
+    /** * _tr_tally_lit(s, s.$rWindow[s.strstart], bflush); ** */
 
-    bflush = _tr_tally$1(s, 0, s.window[s.strstart])
+    bflush = _tr_tally$1(s, 0, s.$rWindow[s.strstart])
     s.lookahead--
     s.strstart++
 
@@ -2963,54 +2940,19 @@ var deflate_huff = function deflate_huff(s, flush) {
  * found for specific files.
  */
 
-function Config(good_length, max_lazy, nice_length, max_chain, func) {
-  this.good_length = good_length
-  this.max_lazy = max_lazy
-  this.nice_length = nice_length
-  this.max_chain = max_chain
-  this.func = func
-}
-
-var configuration_table = [
-  /*      good lazy nice chain */
-  new Config(0, 0, 0, 0, deflate_stored),
-  /* 0 store only */
-  new Config(4, 4, 8, 4, deflate_fast),
-  /* 1 max speed, no lazy matches */
-  new Config(4, 5, 16, 8, deflate_fast),
-  /* 2 */
-  new Config(4, 6, 32, 32, deflate_fast),
-  /* 3 */
-  new Config(4, 4, 16, 16, deflate_slow),
-  /* 4 lazy matches */
-  new Config(8, 16, 32, 32, deflate_slow),
-  /* 5 */
-  new Config(8, 16, 128, 128, deflate_slow),
-  /* 6 */
-  new Config(8, 32, 128, 256, deflate_slow),
-  /* 7 */
-  new Config(32, 128, 258, 1024, deflate_slow),
-  /* 8 */
-  new Config(32, 258, 258, 4096, deflate_slow)
-  /* 9 max compression */
-]
-/* ===========================================================================
- * Initialize the "longest match" routines for a new zlib stream
- */
-
 var lm_init = function lm_init(s) {
   s.window_size = 2 * s.w_size
   /** * CLEAR_HASH(s); ** */
 
-  zero$1(s.head) // Fill with NIL (= 0);
+  zero$1(s.$rHead) // Fill with NIL (= 0);
 
   /* Set the default configuration parameters:
    */
 
-  s.max_lazy_match = configuration_table[s.level].max_lazy
-  s.good_match = configuration_table[s.level].good_length
-  s.nice_match = configuration_table[s.level].nice_length
-  s.max_chain_length = configuration_table[s.level].max_chain
+  s.max_lazy_match = 16
+  s.good_match = 8
+  s.nice_match = 128
+  s.max_chain_length = 128
   s.strstart = 0
   s.block_start = 0
   s.lookahead = 0
@@ -3024,7 +2966,7 @@ function DeflateState() {
   this.strm = null
   /* pointer back to this zlib stream */
 
-  this.status = 0
+  this.$rStatus = 0
   /* as the name implies */
 
   this.pending_buf = null
@@ -3036,20 +2978,11 @@ function DeflateState() {
   this.pending_out = 0
   /* next pending byte to output to the stream */
 
-  this.pending = 0
+  this.$rPending = 0
   /* nb of bytes in the pending buffer */
 
-  this.wrap = 0
+  this.$rWrap = 0
   /* bit 0 true for zlib, bit 1 true for gzip */
-
-  this.gzhead = null
-  /* gzip header information to write */
-
-  this.gzindex = 0
-  /* where in extra, name, or comment */
-
-  this.method = Z_DEFLATED
-  /* can only be DEFLATED */
 
   this.last_flush = -1
   /* value of flush param for previous deflate call */
@@ -3057,13 +2990,10 @@ function DeflateState() {
   this.w_size = 0
   /* LZ77 window size (32K by default) */
 
-  this.w_bits = 0
-  /* log2(w_size)  (8..16) */
-
   this.w_mask = 0
   /* w_size - 1 */
 
-  this.window = null
+  this.$rWindow = null
   /* Sliding window. Input bytes are read into the second half of the window,
    * and move to the first half later to keep a dictionary of at least wSize
    * bytes. With this organization, matches are limited to a distance of
@@ -3082,7 +3012,7 @@ function DeflateState() {
    * An index in this array is thus a window index modulo 32K.
    */
 
-  this.head = null
+  this.$rHead = null
   /* Heads of the hash chains or NIL. */
 
   this.ins_h = 0
@@ -3090,9 +3020,6 @@ function DeflateState() {
 
   this.hash_size = 0
   /* number of elements in hash table */
-
-  this.hash_bits = 0
-  /* log2(hash_size) */
 
   this.hash_mask = 0
   /* hash_size-1 */
@@ -3151,7 +3078,7 @@ function DeflateState() {
    * max_insert_length is used only for compression levels <= 3.
    */
 
-  this.level = 0
+  this.$rLevel = 0
   /* compression level (1..9) */
 
   this.strategy = 0
@@ -3250,7 +3177,7 @@ function DeflateState() {
   this.static_len = 0
   /* bit length of current block with static trees */
 
-  this.matches = 0
+  this.$rMatches = 0
   /* number of string matches in current block */
 
   this.insert = 0
@@ -3277,26 +3204,19 @@ function DeflateState() {
 }
 
 var deflateResetKeep = function deflateResetKeep(strm) {
-  if (!strm || !strm.state) {
+  if (!strm || !strm.$rState) {
     return err(strm, Z_STREAM_ERROR)
   }
 
   strm.total_in = strm.total_out = 0
   strm.data_type = Z_UNKNOWN$1
-  var s = strm.state
-  s.pending = 0
+  var s = strm.$rState
+  s.$rPending = 0
   s.pending_out = 0
 
-  if (s.wrap < 0) {
-    s.wrap = -s.wrap
-    /* was made negative by deflate(..., Z_FINISH); */
-  }
-
-  s.status = s.wrap ? INIT_STATE : BUSY_STATE
-  strm.adler =
-    s.wrap === 2
-      ? 0 // crc32(0, Z_NULL, 0)
-      : 1 // adler32(0, Z_NULL, 0)
+  s.$rWrap = 1
+  s.$rStatus = INIT_STATE
+  strm.adler = 1
 
   s.last_flush = Z_NO_FLUSH
 
@@ -3309,92 +3229,32 @@ var deflateReset = function deflateReset(strm) {
   var ret = deflateResetKeep(strm)
 
   if (ret === Z_OK) {
-    lm_init(strm.state)
+    lm_init(strm.$rState)
   }
 
   return ret
 }
 
-var deflateSetHeader = function deflateSetHeader(strm, head) {
-  if (!strm || !strm.state) {
-    return Z_STREAM_ERROR
-  }
-
-  if (strm.state.wrap !== 2) {
-    return Z_STREAM_ERROR
-  }
-
-  strm.state.gzhead = head
-  return Z_OK
-}
-
-var deflateInit2 = function deflateInit2(
-  strm,
-  level,
-  method,
-  windowBits,
-  memLevel,
-  strategy
-) {
+var deflateInit = function deflateInit(strm) {
   if (!strm) {
-    // === Z_NULL
     return Z_STREAM_ERROR
   }
-
-  var wrap = 1
-
-  if (level === Z_DEFAULT_COMPRESSION) {
-    level = 6
-  }
-
-  if (windowBits < 0) {
-    /* suppress zlib wrapper */
-    wrap = 0
-    windowBits = -windowBits
-  } else if (windowBits > 15) {
-    wrap = 2
-    /* write gzip wrapper instead */
-
-    windowBits -= 16
-  }
-
-  if (
-    memLevel < 1 ||
-    memLevel > MAX_MEM_LEVEL ||
-    method !== Z_DEFLATED ||
-    windowBits < 8 ||
-    windowBits > 15 ||
-    level < 0 ||
-    level > 9 ||
-    strategy < 0 ||
-    strategy > Z_FIXED$1
-  ) {
-    return err(strm, Z_STREAM_ERROR)
-  }
-
-  if (windowBits === 8) {
-    windowBits = 9
-  }
-  /* until 256-byte window bug fixed */
 
   var s = new DeflateState()
-  strm.state = s
+  strm.$rState = s
   s.strm = strm
-  s.wrap = wrap
-  s.gzhead = null
-  s.w_bits = windowBits
-  s.w_size = 1 << s.w_bits
-  s.w_mask = s.w_size - 1
-  s.hash_bits = memLevel + 7
-  s.hash_size = 1 << s.hash_bits
-  s.hash_mask = s.hash_size - 1
-  s.hash_shift = ~~((s.hash_bits + MIN_MATCH$1 - 1) / MIN_MATCH$1)
-  s.window = new Uint8Array(s.w_size * 2)
-  s.head = new Uint16Array(s.hash_size)
+  s.$rWrap = 1
+  s.w_size = 32768
+  s.w_mask = 32767
+  s.hash_size = 32768
+  s.hash_mask = 32767
+  s.hash_shift = 5
+  s.$rWindow = new Uint8Array(s.w_size * 2)
+  s.$rHead = new Uint16Array(s.hash_size)
   s.prev = new Uint16Array(s.w_size) // Don't need mem init magic for JS.
   // s.high_water = 0;  /* nothing written to s->window yet */
 
-  s.lit_bufsize = 1 << (memLevel + 6)
+  s.lit_bufsize = 16384
   /* 16K elements by default */
 
   s.pending_buf_size = s.lit_bufsize * 4
@@ -3408,37 +3268,25 @@ var deflateInit2 = function deflateInit2(
   s.d_buf = 1 * s.lit_bufsize // s->l_buf = s->pending_buf + (1+sizeof(ush))*s->lit_bufsize;
 
   s.l_buf = (1 + 2) * s.lit_bufsize
-  s.level = level
-  s.strategy = strategy
-  s.method = method
+  s.$rLevel = 6
+  s.strategy = Z_DEFAULT_STRATEGY
   return deflateReset(strm)
-}
-
-var deflateInit = function deflateInit(strm, level) {
-  return deflateInit2(
-    strm,
-    level,
-    Z_DEFLATED,
-    MAX_WBITS,
-    DEF_MEM_LEVEL,
-    Z_DEFAULT_STRATEGY
-  )
 }
 
 var deflate = function deflate(strm, flush) {
   var beg
   var val // for gzip header write only
 
-  if (!strm || !strm.state || flush > Z_BLOCK || flush < 0) {
+  if (!strm || !strm.$rState || flush > Z_BLOCK || flush < 0) {
     return strm ? err(strm, Z_STREAM_ERROR) : Z_STREAM_ERROR
   }
 
-  var s = strm.state
+  var s = strm.$rState
 
   if (
     !strm.output ||
-    (!strm.input && strm.avail_in !== 0) ||
-    (s.status === FINISH_STATE && flush !== Z_FINISH)
+    (!strm.$rInput && strm.avail_in !== 0) ||
+    (s.$rStatus === FINISH_STATE && flush !== Z_FINISH)
   ) {
     return err(strm, strm.avail_out === 0 ? Z_BUF_ERROR : Z_STREAM_ERROR)
   }
@@ -3450,8 +3298,8 @@ var deflate = function deflate(strm, flush) {
   s.last_flush = flush
   /* Write the header */
 
-  if (s.status === INIT_STATE) {
-    if (s.wrap === 2) {
+  if (s.$rStatus === INIT_STATE) {
+    if (SUPPORTS_GZIP_WRAPPER && s.$rWrap === 2) {
       // GZIP header
       strm.adler = 0 // crc32(0L, Z_NULL, 0);
 
@@ -3468,14 +3316,14 @@ var deflate = function deflate(strm, flush) {
         put_byte(s, 0)
         put_byte(
           s,
-          s.level === 9
+          s.$rLevel === 9
             ? 2
-            : s.strategy >= Z_HUFFMAN_ONLY || s.level < 2
+            : s.strategy >= Z_HUFFMAN_ONLY || s.$rLevel < 2
             ? 4
             : 0
         )
         put_byte(s, OS_CODE)
-        s.status = BUSY_STATE
+        s.$rStatus = BUSY_STATE
       } else {
         put_byte(
           s,
@@ -3491,9 +3339,9 @@ var deflate = function deflate(strm, flush) {
         put_byte(s, (s.gzhead.time >> 24) & 0xff)
         put_byte(
           s,
-          s.level === 9
+          s.$rLevel === 9
             ? 2
-            : s.strategy >= Z_HUFFMAN_ONLY || s.level < 2
+            : s.strategy >= Z_HUFFMAN_ONLY || s.$rLevel < 2
             ? 4
             : 0
         )
@@ -3505,70 +3353,42 @@ var deflate = function deflate(strm, flush) {
         }
 
         if (s.gzhead.hcrc) {
-          strm.adler = crc32_1(strm.adler, s.pending_buf, s.pending, 0)
+          strm.adler = crc32_1(strm.adler, s.pending_buf, s.$rPending, 0)
         }
 
         s.gzindex = 0
-        s.status = EXTRA_STATE
+        s.$rStatus = EXTRA_STATE
       }
-    } // DEFLATE header
-    else {
-      var header = (Z_DEFLATED + ((s.w_bits - 8) << 4)) << 8
-      var level_flags = -1
-
-      if (s.strategy >= Z_HUFFMAN_ONLY || s.level < 2) {
-        level_flags = 0
-      } else if (s.level < 6) {
-        level_flags = 1
-      } else if (s.level === 6) {
-        level_flags = 2
-      } else {
-        level_flags = 3
-      }
-
-      header |= level_flags << 6
-
-      if (s.strstart !== 0) {
-        header |= PRESET_DICT
-      }
-
-      header += 31 - (header % 31)
-      s.status = BUSY_STATE
-      putShortMSB(s, header)
-      /* Save the adler32 of the preset dictionary: */
-
-      if (s.strstart !== 0) {
-        putShortMSB(s, strm.adler >>> 16)
-        putShortMSB(s, strm.adler & 0xffff)
-      }
-
-      strm.adler = 1 // adler32(0L, Z_NULL, 0);
+    } else {
+      s.$rStatus = BUSY_STATE
+      putShortMSB(s, 0x789c)
+      strm.adler = 1
     }
   } // #ifdef GZIP
 
-  if (s.status === EXTRA_STATE) {
+  if (SUPPORTS_GZIP_WRAPPER && s.$rStatus === EXTRA_STATE) {
     if (
       s.gzhead.extra
       /* != Z_NULL */
     ) {
-      beg = s.pending
+      beg = s.$rPending
       /* start of bytes to update crc */
 
       while (s.gzindex < (s.gzhead.extra.length & 0xffff)) {
-        if (s.pending === s.pending_buf_size) {
-          if (s.gzhead.hcrc && s.pending > beg) {
+        if (s.$rPending === s.pending_buf_size) {
+          if (s.gzhead.hcrc && s.$rPending > beg) {
             strm.adler = crc32_1(
               strm.adler,
               s.pending_buf,
-              s.pending - beg,
+              s.$rPending - beg,
               beg
             )
           }
 
           flush_pending(strm)
-          beg = s.pending
+          beg = s.$rPending
 
-          if (s.pending === s.pending_buf_size) {
+          if (s.$rPending === s.pending_buf_size) {
             break
           }
         }
@@ -3577,43 +3397,43 @@ var deflate = function deflate(strm, flush) {
         s.gzindex++
       }
 
-      if (s.gzhead.hcrc && s.pending > beg) {
-        strm.adler = crc32_1(strm.adler, s.pending_buf, s.pending - beg, beg)
+      if (s.gzhead.hcrc && s.$rPending > beg) {
+        strm.adler = crc32_1(strm.adler, s.pending_buf, s.$rPending - beg, beg)
       }
 
       if (s.gzindex === s.gzhead.extra.length) {
         s.gzindex = 0
-        s.status = NAME_STATE
+        s.$rStatus = NAME_STATE
       }
     } else {
-      s.status = NAME_STATE
+      s.$rStatus = NAME_STATE
     }
   }
 
-  if (s.status === NAME_STATE) {
+  if (SUPPORTS_GZIP_WRAPPER && s.$rStatus === NAME_STATE) {
     if (
       s.gzhead.name
       /* != Z_NULL */
     ) {
-      beg = s.pending
+      beg = s.$rPending
       /* start of bytes to update crc */
       // int val;
 
       do {
-        if (s.pending === s.pending_buf_size) {
-          if (s.gzhead.hcrc && s.pending > beg) {
+        if (s.$rPending === s.pending_buf_size) {
+          if (s.gzhead.hcrc && s.$rPending > beg) {
             strm.adler = crc32_1(
               strm.adler,
               s.pending_buf,
-              s.pending - beg,
+              s.$rPending - beg,
               beg
             )
           }
 
           flush_pending(strm)
-          beg = s.pending
+          beg = s.$rPending
 
-          if (s.pending === s.pending_buf_size) {
+          if (s.$rPending === s.pending_buf_size) {
             val = 1
             break
           }
@@ -3628,43 +3448,43 @@ var deflate = function deflate(strm, flush) {
         put_byte(s, val)
       } while (val !== 0)
 
-      if (s.gzhead.hcrc && s.pending > beg) {
-        strm.adler = crc32_1(strm.adler, s.pending_buf, s.pending - beg, beg)
+      if (s.gzhead.hcrc && s.$rPending > beg) {
+        strm.adler = crc32_1(strm.adler, s.pending_buf, s.$rPending - beg, beg)
       }
 
       if (val === 0) {
         s.gzindex = 0
-        s.status = COMMENT_STATE
+        s.$rStatus = COMMENT_STATE
       }
     } else {
-      s.status = COMMENT_STATE
+      s.$rStatus = COMMENT_STATE
     }
   }
 
-  if (s.status === COMMENT_STATE) {
+  if (SUPPORTS_GZIP_WRAPPER && s.$rStatus === COMMENT_STATE) {
     if (
       s.gzhead.comment
       /* != Z_NULL */
     ) {
-      beg = s.pending
+      beg = s.$rPending
       /* start of bytes to update crc */
       // int val;
 
       do {
-        if (s.pending === s.pending_buf_size) {
-          if (s.gzhead.hcrc && s.pending > beg) {
+        if (s.$rPending === s.pending_buf_size) {
+          if (s.gzhead.hcrc && s.$rPending > beg) {
             strm.adler = crc32_1(
               strm.adler,
               s.pending_buf,
-              s.pending - beg,
+              s.$rPending - beg,
               beg
             )
           }
 
           flush_pending(strm)
-          beg = s.pending
+          beg = s.$rPending
 
-          if (s.pending === s.pending_buf_size) {
+          if (s.$rPending === s.pending_buf_size) {
             val = 1
             break
           }
@@ -3679,39 +3499,39 @@ var deflate = function deflate(strm, flush) {
         put_byte(s, val)
       } while (val !== 0)
 
-      if (s.gzhead.hcrc && s.pending > beg) {
-        strm.adler = crc32_1(strm.adler, s.pending_buf, s.pending - beg, beg)
+      if (s.gzhead.hcrc && s.$rPending > beg) {
+        strm.adler = crc32_1(strm.adler, s.pending_buf, s.$rPending - beg, beg)
       }
 
       if (val === 0) {
-        s.status = HCRC_STATE
+        s.$rStatus = HCRC_STATE
       }
     } else {
-      s.status = HCRC_STATE
+      s.$rStatus = HCRC_STATE
     }
   }
 
-  if (s.status === HCRC_STATE) {
+  if (SUPPORTS_GZIP_WRAPPER && s.$rStatus === HCRC_STATE) {
     if (s.gzhead.hcrc) {
-      if (s.pending + 2 > s.pending_buf_size) {
+      if (s.$rPending + 2 > s.pending_buf_size) {
         flush_pending(strm)
       }
 
-      if (s.pending + 2 <= s.pending_buf_size) {
+      if (s.$rPending + 2 <= s.pending_buf_size) {
         put_byte(s, strm.adler & 0xff)
         put_byte(s, (strm.adler >> 8) & 0xff)
         strm.adler = 0 // crc32(0L, Z_NULL, 0);
 
-        s.status = BUSY_STATE
+        s.$rStatus = BUSY_STATE
       }
     } else {
-      s.status = BUSY_STATE
+      s.$rStatus = BUSY_STATE
     }
   } // #endif
 
   /* Flush as much pending output as possible */
 
-  if (s.pending !== 0) {
+  if (s.$rPending !== 0) {
     flush_pending(strm)
 
     if (strm.avail_out === 0) {
@@ -3737,7 +3557,7 @@ var deflate = function deflate(strm, flush) {
   }
   /* User must not provide more input after the first FINISH: */
 
-  if (s.status === FINISH_STATE && strm.avail_in !== 0) {
+  if (s.$rStatus === FINISH_STATE && strm.avail_in !== 0) {
     return err(strm, Z_BUF_ERROR)
   }
   /* Start a new block or continue the current one.
@@ -3746,17 +3566,12 @@ var deflate = function deflate(strm, flush) {
   if (
     strm.avail_in !== 0 ||
     s.lookahead !== 0 ||
-    (flush !== Z_NO_FLUSH && s.status !== FINISH_STATE)
+    (flush !== Z_NO_FLUSH && s.$rStatus !== FINISH_STATE)
   ) {
-    var bstate =
-      s.strategy === Z_HUFFMAN_ONLY
-        ? deflate_huff(s, flush)
-        : s.strategy === Z_RLE
-        ? deflate_rle(s, flush)
-        : configuration_table[s.level].func(s, flush)
+    var bstate = deflate_slow(s, flush)
 
     if (bstate === BS_FINISH_STARTED || bstate === BS_FINISH_DONE) {
-      s.status = FINISH_STATE
+      s.$rStatus = FINISH_STATE
     }
 
     if (bstate === BS_NEED_MORE || bstate === BS_FINISH_STARTED) {
@@ -3789,7 +3604,7 @@ var deflate = function deflate(strm, flush) {
           /** * CLEAR_HASH(s); ** */
 
           /* forget history */
-          zero$1(s.head) // Fill with NIL (= 0);
+          zero$1(s.$rHead) // Fill with NIL (= 0);
 
           if (s.lookahead === 0) {
             s.strstart = 0
@@ -3815,63 +3630,43 @@ var deflate = function deflate(strm, flush) {
     return Z_OK
   }
 
-  if (s.wrap <= 0) {
-    return Z_STREAM_END
-  }
   /* Write the trailer */
 
-  if (s.wrap === 2) {
-    put_byte(s, strm.adler & 0xff)
-    put_byte(s, (strm.adler >> 8) & 0xff)
-    put_byte(s, (strm.adler >> 16) & 0xff)
-    put_byte(s, (strm.adler >> 24) & 0xff)
-    put_byte(s, strm.total_in & 0xff)
-    put_byte(s, (strm.total_in >> 8) & 0xff)
-    put_byte(s, (strm.total_in >> 16) & 0xff)
-    put_byte(s, (strm.total_in >> 24) & 0xff)
-  } else {
-    putShortMSB(s, strm.adler >>> 16)
-    putShortMSB(s, strm.adler & 0xffff)
-  }
+  putShortMSB(s, strm.adler >>> 16)
+  putShortMSB(s, strm.adler & 0xffff)
 
   flush_pending(strm)
   /* If avail_out is zero, the application will call deflate again
    * to flush the rest.
    */
 
-  if (s.wrap > 0) {
-    s.wrap = -s.wrap
-  }
+  s.$rWrap = -1
   /* write the trailer only once! */
 
-  return s.pending !== 0 ? Z_OK : Z_STREAM_END
+  return s.$rPending !== 0 ? Z_OK : Z_STREAM_END
 }
 
 var deflateEnd = function deflateEnd(strm) {
   if (
     !strm ||
     /* == Z_NULL */
-    !strm.state
+    !strm.$rState
     /* == Z_NULL */
   ) {
     return Z_STREAM_ERROR
   }
 
-  var status = strm.state.status
+  var status = strm.$rState.$rStatus
 
   if (
     status !== INIT_STATE &&
-    status !== EXTRA_STATE &&
-    status !== NAME_STATE &&
-    status !== COMMENT_STATE &&
-    status !== HCRC_STATE &&
     status !== BUSY_STATE &&
     status !== FINISH_STATE
   ) {
     return err(strm, Z_STREAM_ERROR)
   }
 
-  strm.state = null
+  strm.$rState = null
   return status === BUSY_STATE ? err(strm, Z_DATA_ERROR) : Z_OK
 }
 /* =========================================================================
@@ -3885,16 +3680,16 @@ var deflateSetDictionary = function deflateSetDictionary(strm, dictionary) {
   if (
     !strm ||
     /* == Z_NULL */
-    !strm.state
+    !strm.$rState
     /* == Z_NULL */
   ) {
     return Z_STREAM_ERROR
   }
 
-  var s = strm.state
-  var wrap = s.wrap
+  var s = strm.$rState
+  var wrap = s.$rWrap
 
-  if (wrap === 2 || (wrap === 1 && s.status !== INIT_STATE) || s.lookahead) {
+  if (wrap === 2 || (wrap === 1 && s.$rStatus !== INIT_STATE) || s.lookahead) {
     return Z_STREAM_ERROR
   }
   /* when using zlib wrappers, compute Adler-32 for provided dictionary */
@@ -3904,7 +3699,7 @@ var deflateSetDictionary = function deflateSetDictionary(strm, dictionary) {
     strm.adler = adler32_1(strm.adler, dictionary, dictLength, 0)
   }
 
-  s.wrap = 0
+  s.$rWrap = 0
   /* avoid computing Adler-32 in read_buf */
 
   /* if dictionary would fill window, just replace the history */
@@ -3914,7 +3709,7 @@ var deflateSetDictionary = function deflateSetDictionary(strm, dictionary) {
       /* already empty otherwise */
 
       /** * CLEAR_HASH(s); ** */
-      zero$1(s.head) // Fill with NIL (= 0);
+      zero$1(s.$rHead) // Fill with NIL (= 0);
 
       s.strstart = 0
       s.block_start = 0
@@ -3932,10 +3727,10 @@ var deflateSetDictionary = function deflateSetDictionary(strm, dictionary) {
 
   var avail = strm.avail_in
   var next = strm.next_in
-  var input = strm.input
+  var input = strm.$rInput
   strm.avail_in = dictLength
   strm.next_in = 0
-  strm.input = dictionary
+  strm.$rInput = dictionary
   fill_window(s)
 
   while (s.lookahead >= MIN_MATCH$1) {
@@ -3944,9 +3739,9 @@ var deflateSetDictionary = function deflateSetDictionary(strm, dictionary) {
 
     do {
       /* UPDATE_HASH(s, s->ins_h, s->window[str + MIN_MATCH-1]); */
-      s.ins_h = HASH(s, s.ins_h, s.window[str + MIN_MATCH$1 - 1])
-      s.prev[str & s.w_mask] = s.head[s.ins_h]
-      s.head[s.ins_h] = str
+      s.ins_h = HASH(s, s.ins_h, s.$rWindow[str + MIN_MATCH$1 - 1])
+      s.prev[str & s.w_mask] = s.$rHead[s.ins_h]
+      s.$rHead[s.ins_h] = str
       str++
     } while (--n)
 
@@ -3962,40 +3757,10 @@ var deflateSetDictionary = function deflateSetDictionary(strm, dictionary) {
   s.match_length = s.prev_length = MIN_MATCH$1 - 1
   s.match_available = 0
   strm.next_in = next
-  strm.input = input
+  strm.$rInput = input
   strm.avail_in = avail
-  s.wrap = wrap
+  s.$rWrap = wrap
   return Z_OK
-}
-
-var deflateInit_1 = deflateInit
-var deflateInit2_1 = deflateInit2
-var deflateReset_1 = deflateReset
-var deflateResetKeep_1 = deflateResetKeep
-var deflateSetHeader_1 = deflateSetHeader
-var deflate_2 = deflate
-var deflateEnd_1 = deflateEnd
-var deflateSetDictionary_1 = deflateSetDictionary
-var deflateInfo = 'pako deflate (from Nodeca project)'
-/* Not implemented
-  module.exports.deflateBound = deflateBound;
-  module.exports.deflateCopy = deflateCopy;
-  module.exports.deflateParams = deflateParams;
-  module.exports.deflatePending = deflatePending;
-  module.exports.deflatePrime = deflatePrime;
-  module.exports.deflateTune = deflateTune;
-  */
-
-var deflate_1 = {
-  deflateInit: deflateInit_1,
-  deflateInit2: deflateInit2_1,
-  deflateReset: deflateReset_1,
-  deflateResetKeep: deflateResetKeep_1,
-  deflateSetHeader: deflateSetHeader_1,
-  deflate: deflate_2,
-  deflateEnd: deflateEnd_1,
-  deflateSetDictionary: deflateSetDictionary_1,
-  deflateInfo
 }
 
 // Join array of chunks to single array.
@@ -4058,7 +3823,7 @@ _utf8len[254] = _utf8len[254] = 1 // Invalid sequence start
 
 function ZStream() {
   /* next input byte */
-  this.input = null // JS specific, because we have no pointers
+  this.$rInput = null // JS specific, because we have no pointers
 
   this.next_in = 0
   /* number of bytes available at input */
@@ -4084,7 +3849,7 @@ function ZStream() {
   /* Z_NULL */
   /* not visible by applications */
 
-  this.state = null
+  this.$rState = null
   /* best guess about the data type: binary or text */
 
   this.data_type = 2
@@ -4200,19 +3965,7 @@ var Z_DEFLATED$1 = constants.Z_DEFLATED
 
 export function Deflate() {
   this.options = {
-    level: Z_DEFAULT_COMPRESSION$1,
-    method: Z_DEFLATED$1,
-    chunkSize: 16384,
-    windowBits: 15,
-    memLevel: 8,
-    strategy: Z_DEFAULT_STRATEGY$1
-  }
-  var opt = this.options
-
-  if (opt.raw && opt.windowBits > 0) {
-    opt.windowBits = -opt.windowBits
-  } else if (opt.gzip && opt.windowBits > 0 && opt.windowBits < 16) {
-    opt.windowBits += 16
+    chunkSize: 16384
   }
 
   this.err = 0 // error code, if happens (0 = Z_OK)
@@ -4225,40 +3978,12 @@ export function Deflate() {
 
   this.strm = new zstream()
   this.strm.avail_out = 0
-  var status = deflate_1.deflateInit2(
-    this.strm,
-    opt.level,
-    opt.method,
-    opt.windowBits,
-    opt.memLevel,
-    opt.strategy
-  )
+  var status = deflateInit(this.strm)
 
   if (status !== Z_OK$1) {
     throw new Error(messages[status])
   }
 
-  if (opt.header) {
-    deflate_1.deflateSetHeader(this.strm, opt.header)
-  }
-
-  if (opt.dictionary) {
-    var dict // Convert data if needed
-
-    if (toString.call(opt.dictionary) === '[object ArrayBuffer]') {
-      dict = new Uint8Array(opt.dictionary)
-    } else {
-      dict = opt.dictionary
-    }
-
-    status = deflate_1.deflateSetDictionary(this.strm, dict)
-
-    if (status !== Z_OK$1) {
-      throw new Error(messages[status])
-    }
-
-    this._dict_set = true
-  }
 }
 /**
  * Deflate#push(data[, flush_mode]) -> Boolean
@@ -4301,13 +4026,13 @@ Deflate.prototype.push = function (data, flush_mode) {
   } // Convert data if needed
 
   if (toString.call(data) === '[object ArrayBuffer]') {
-    strm.input = new Uint8Array(data)
+    strm.$rInput = new Uint8Array(data)
   } else {
-    strm.input = data
+    strm.$rInput = data
   }
 
   strm.next_in = 0
-  strm.avail_in = strm.input.length
+  strm.avail_in = strm.$rInput.length
 
   for (;;) {
     if (strm.avail_out === 0) {
@@ -4325,14 +4050,14 @@ Deflate.prototype.push = function (data, flush_mode) {
       continue
     }
 
-    status = deflate_1.deflate(strm, _flush_mode) // Ended => flush and finish
+    status = deflate(strm, _flush_mode) // Ended => flush and finish
 
     if (status === Z_STREAM_END$1) {
       if (strm.next_out > 0) {
         this.onData(strm.output.subarray(0, strm.next_out))
       }
 
-      status = deflate_1.deflateEnd(this.strm)
+      status = deflateEnd(this.strm)
       this.onEnd(status)
       this.ended = true
       return status === Z_OK$1

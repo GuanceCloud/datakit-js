@@ -152,8 +152,14 @@ Web 应用接入支持三种方式：
 | `replayCanvasWorkerUrl` | `string` | 否 |  | canvas snapshot 编码专用 worker 地址，不替代 `workerUrl`。 |
 | `replayCanvasEnabled` | `boolean` | 否 | `false` | 是否开启 canvas 录制。不开启则不会采集 canvas。 |
 | `replayCanvasMode` | `'manual' \| 'auto'` | 否 | `auto` | canvas 录制模式。`manual` 需要手动调用 `snapshotCanvas(canvas)`；`auto` 为自动录制。 |
-| `replayCanvasSampling` | `number \| 'all'` | 否 |  | 仅在 `replayCanvasMode: 'auto'` 下生效。<br>填 `number`：走自动 snapshot 采样，数值越小采样越频繁，编码和上报成本也越高；建议从 `2` 开始。<br>填 `'all'`：走更高还原度的自动录制，尽量保留绘制过程；复杂场景下仍可能自动回退为 snapshot。 |
-| `replayCanvasQuality` | `'low' \| 'medium' \| 'high' \| number` | 否 |  | canvas snapshot 编码质量。 |
+| `replayCanvasSampling` | `number \| 'all'` | 否 | `2` | 仅在 `replayCanvasMode: 'auto'` 下生效。<br>填正数（建议从 `2` 开始）：选择更稳健的自动 snapshot 路径；数值本身不控制采集频率，采集节奏由 `replayCanvasAutoInterval` 及 cooldown/backoff 配置控制。<br>填 `'all'`：走更高还原度的自动录制，尽量保留绘制过程；复杂场景下仍可能自动回退为 snapshot。 |
+| `replayCanvasQuality` | `'low' \| 'medium' \| 'high' \| number` | 否 | `0.4` | canvas snapshot 编码质量。字符串预设还会同时调整采样与自动调度预算。 |
+| `replayCanvasAutoInterval` | `number` | 否 | `1000` | 自动 snapshot 调度间隔，单位为毫秒。 |
+| `replayCanvasAutoCooldown` | `number` | 否 | `1000` | 同一 canvas 自动 snapshot 的最小冷却时间，单位为毫秒。 |
+| `replayCanvasAutoUnchangedBackoff` | `number` | 否 | `3000` | 画面未变化时的退避时间，单位为毫秒。 |
+| `replayCanvasAutoFailureBackoff` | `number` | 否 | `5000` | 自动采集失败后的退避时间，单位为毫秒。 |
+| `replayCanvasAutoMaxPerRun` | `number` | 否 | `2` | 单次自动调度最多处理的 canvas 数。 |
+| `replayCanvasFlushImmediately` | `boolean` | 否 | `manual: true`<br>`auto: false` | canvas 帧成功进入 replay 后是否优先 flush。 |
 | `trackBfcacheViews` | `boolean` | 否 |  | 是否采集浏览器前进后退缓存（BFCache）恢复的页面访问。 |
 | `silentMultipleInit` | `boolean` | 否 |  | 是否静默忽略重复初始化。 |
 
@@ -165,7 +171,8 @@ canvas 录制默认不会自动生效。要让它真正工作，至少需要同�
   - 也就是 `sessionReplaySampleRate > 0`，或者命中 `sessionReplayOnErrorSampleRate`
 - 已调用 `startSessionReplayRecording()`
 - 已配置 `replayCanvasEnabled: true`
-- 目标元素确实是 `2d canvas`
+- 目标元素是 `2d canvas`；WebGL/WebGL2 还需要在 `auto` 模式注册可选的
+  `@cloudcare/browser-rum-webgl` 插件
 
 如果使用 `manual` 模式，还必须由业务代码主动调用：
 
@@ -185,8 +192,18 @@ datafluxRum.snapshotCanvas(canvas)
 
 - `replayCanvasSampling`
   - `2`：推荐默认值，适合作为大多数页面的自动 snapshot 起点
-  - `1`：更频繁的自动 snapshot，成本更高
+  - 其他正数：同样选择自动 snapshot 路径，不用于调节采集频率
   - `'all'`：更高还原度的自动录制，适合更看重绘制过程还原的页面
+
+自动 snapshot 的采集节奏由 `replayCanvasAutoInterval` 以及 cooldown/backoff 配置控制。
+WebGL/WebGL2 始终使用可选插件的有预算像素快照；`'all'` 只让 Canvas 2D
+尝试 command capture。
+
+上表是没有使用 `low`、`medium`、`high` 字符串预设时的运行时基线默认值。
+字符串预设会同时替换质量、sampling、interval、cooldown、unchanged/failure
+backoff 和 max-per-run；显式传入的单项配置会覆盖预设中的对应值。如果只想改变
+图片质量而不改变调度预算，请给 `replayCanvasQuality` 传 `0` 到 `1` 之间的数字。
+完整预设矩阵见 [Canvas 录制使用手册](../replay-canvas.md)。
 
 ### 三套推荐最小配置
 

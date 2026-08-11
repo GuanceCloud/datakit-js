@@ -11,6 +11,7 @@ import {
   SERIALIZATION_MAX_ATTRIBUTE_COUNT,
   SERIALIZATION_MAX_APPROX_BYTES,
   SERIALIZATION_MAX_DEPTH,
+  SERIALIZATION_MAX_MUTATION_SOURCE_LENGTH,
   SERIALIZATION_MAX_NODE_SOURCE_LENGTH,
   SERIALIZATION_MAX_STRING_LENGTH,
   createMutationSerializerTask,
@@ -20,6 +21,7 @@ import {
   serializeNodeWithId,
   serializeNodeWithIdForMutation
 } from './serialize'
+import { STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES } from './serializationUtils'
 
 describe('replay/record/serialize', () => {
   let originalStyleSheetsDescriptor
@@ -298,7 +300,7 @@ describe('replay/record/serialize', () => {
     expect(task.isMaxApproxBytesReached).toBeTrue()
   })
 
-  it('should reject a single serialized string before scanning or stringifying an unbounded value', () => {
+  it('should truncate a single serialized attribute without rejecting its node', () => {
     const root = document.createElement('div')
     root.setAttribute(
       'data-payload',
@@ -320,11 +322,17 @@ describe('replay/record/serialize', () => {
 
     expect(
       task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)
-    ).toBeFalse()
-    expect(task.isMaxNodeComplexityReached).toBeTrue()
+    ).toBeTrue()
+    expect(task.isMaxNodeComplexityReached).toBeFalsy()
+    expect(
+      task.serializedNode.attributes['data-payload'].length
+    ).toBeLessThanOrEqual(SERIALIZATION_MAX_NODE_SOURCE_LENGTH)
+    expect(
+      task.serializedNode.attributes['data-payload'].endsWith('…')
+    ).toBeTrue()
   })
 
-  it('should reject an element with an unbounded attribute list before describing it', () => {
+  it('should serialize only the bounded prefix of a large attribute list', () => {
     const root = document.createElement('div')
     for (
       let index = 0;
@@ -345,9 +353,12 @@ describe('replay/record/serialize', () => {
       }
     })
 
-    expect(task.serializedNode).toBeNull()
-    expect(task.isMaxNodeComplexityReached).toBeTrue()
-    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeFalse()
+    expect(task.serializedNode).not.toBeNull()
+    expect(task.isMaxNodeComplexityReached).toBeFalsy()
+    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeTrue()
+    expect(Object.keys(task.serializedNode.attributes).length).toBe(
+      SERIALIZATION_MAX_ATTRIBUTE_COUNT
+    )
   })
 
   it('should reject a shadow-root baseline when its observer cannot be registered', () => {
@@ -372,15 +383,14 @@ describe('replay/record/serialize', () => {
     expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeFalse()
   })
 
-  it('should preserve an empty shadow-root placeholder when observation capacity is reached', () => {
+  it('should serialize a shadow root when its controller defers bookkeeping', () => {
+    spyOn(performance, 'now').and.returnValue(0)
     const host = document.createElement('div')
     const shadowRoot = host.attachShadow({ mode: 'open' })
     shadowRoot.appendChild(document.createElement('span'))
     Object.defineProperty(shadowRoot, 'adoptedStyleSheets', {
       configurable: true,
-      get: jasmine
-        .createSpy('getAdoptedStyleSheets')
-        .and.throwError('should not inspect skipped shadow styles')
+      value: []
     })
     const task = createMutationSerializerTask(shadowRoot, {
       configuration: {},
@@ -405,12 +415,14 @@ describe('replay/record/serialize', () => {
         type: NodeType.DocumentFragment,
         isShadowRoot: true,
         adoptedStyleSheets: undefined,
-        childNodes: []
+        childNodes: [
+          jasmine.objectContaining({ tagName: 'span' })
+        ]
       })
     )
   })
 
-  it('should stop a task when one child text node exceeds the source watermark', () => {
+  it('should truncate one oversized child text node without stopping the task', () => {
     const root = document.createElement('div')
     root.appendChild(
       document.createTextNode(
@@ -430,9 +442,43 @@ describe('replay/record/serialize', () => {
       }
     })
 
-    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeFalse()
-    expect(task.isMaxNodeComplexityReached).toBeTrue()
-    expect(task.processedNodeCount).toBe(1)
+    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeTrue()
+    expect(task.isMaxNodeComplexityReached).toBeFalsy()
+    expect(task.processedNodeCount).toBe(2)
+    expect(task.serializedNode.childNodes[0].textContent.length).toBe(
+      SERIALIZATION_MAX_MUTATION_SOURCE_LENGTH
+    )
+    expect(
+      task.serializedNode.childNodes[0].textContent.endsWith('…')
+    ).toBeTrue()
+  })
+
+  it('should apply privacy before truncating oversized text', () => {
+    const root = document.createElement('div')
+    root.appendChild(
+      document.createTextNode(
+        'private-value '.repeat(SERIALIZATION_MAX_NODE_SOURCE_LENGTH)
+      )
+    )
+    spyOn(performance, 'now').and.returnValue(0)
+
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.MASK,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeTrue()
+    const serializedText = task.serializedNode.childNodes[0].textContent
+    expect(serializedText.length).toBeLessThanOrEqual(
+      SERIALIZATION_MAX_MUTATION_SOURCE_LENGTH
+    )
+    expect(serializedText).not.toContain('private-value')
   })
 
   it('should report overflow when a partial task exactly reaches its byte watermark', () => {
@@ -646,6 +692,151 @@ describe('replay/record/serialize', () => {
         childNodes: jasmine.any(Array)
       })
     )
+  })
+
+  it('should resume an adopted stylesheet after a full snapshot slice byte yield', () => {
+    const host = document.createElement('div')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const cssText = '.pending-rule { color: rebeccapurple; }'
+    Object.defineProperty(shadowRoot, 'adoptedStyleSheets', {
+      configurable: true,
+      value: [{ cssRules: [{ cssText }] }]
+    })
+    spyOn(performance, 'now').and.returnValue(0)
+    const task = createMutationSerializerTask(shadowRoot, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine
+            .createSpy('addShadowRoot')
+            .and.returnValue(true)
+        }
+      }
+    })
+
+    const firstSliceMaxApproxBytes = task.approxBytes + 40
+    expect(
+      task.advance(Infinity, 50000, firstSliceMaxApproxBytes)
+    ).toBeFalse()
+    expect(task.isMaxApproxBytesReached).toBeTrue()
+    expect(task.serializedNode.adoptedStyleSheets[0].cssRules).toEqual([])
+    expect(
+      task.serializedNode.adoptedStyleSheets[0].isTruncated
+    ).toBeUndefined()
+
+    expect(
+      task.advance(Infinity, 50000, task.approxBytes + 1024)
+    ).toBeTrue()
+    expect(task.isMaxApproxBytesReached).toBeFalse()
+    expect(task.serializedNode.adoptedStyleSheets[0].cssRules).toEqual([
+      cssText
+    ])
+    expect(
+      task.serializedNode.adoptedStyleSheets[0].isTruncated
+    ).toBeUndefined()
+  })
+
+  it('should truncate an adopted stylesheet at the mutation byte hard limit', () => {
+    const host = document.createElement('div')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    Object.defineProperty(shadowRoot, 'adoptedStyleSheets', {
+      configurable: true,
+      value: [
+        {
+          cssRules: [
+            { cssText: '.oversized-rule { color: rebeccapurple; }' }
+          ]
+        }
+      ]
+    })
+    spyOn(performance, 'now').and.returnValue(0)
+    const task = createMutationSerializerTask(shadowRoot, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.MUTATION,
+        shadowRootsController: {
+          addShadowRoot: jasmine
+            .createSpy('addShadowRoot')
+            .and.returnValue(true)
+        }
+      }
+    })
+
+    expect(
+      task.advance(Infinity, 50000, task.approxBytes + 56)
+    ).toBeTrue()
+    expect(task.isMaxApproxBytesReached).toBeFalse()
+    expect(task.serializedNode.adoptedStyleSheets).toEqual([
+      {
+        cssRules: [],
+        disabled: undefined,
+        media: undefined,
+        isTruncated: true
+      }
+    ])
+  })
+
+  it('should share one adopted stylesheet budget across shadow roots', () => {
+    const root = document.createElement('div')
+    const cssText = 'x'.repeat(
+      Math.floor(STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES / 3)
+    )
+    for (let index = 0; index < 2; index += 1) {
+      const host = document.createElement('div')
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      Object.defineProperty(shadowRoot, 'adoptedStyleSheets', {
+        configurable: true,
+        value: [{ cssRules: [{ cssText }] }]
+      })
+      root.appendChild(host)
+    }
+    spyOn(performance, 'now').and.returnValue(0)
+    const task = createMutationSerializerTask(root, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine
+            .createSpy('addShadowRoot')
+            .and.returnValue(true)
+        }
+      }
+    })
+
+    expect(task.advance(1000, 50000, SERIALIZATION_MAX_APPROX_BYTES)).toBeTrue()
+    const shadowNodes = []
+    const visit = function (node) {
+      if (node.isShadowRoot) {
+        shadowNodes.push(node)
+      }
+      ;(node.childNodes || []).forEach(visit)
+    }
+    visit(task.serializedNode)
+    const serializedSheets = [].concat.apply(
+      [],
+      shadowNodes.map((node) => node.adoptedStyleSheets || [])
+    )
+    const serializedCssLength = serializedSheets.reduce(
+      (length, styleSheet) =>
+        length +
+        styleSheet.cssRules.reduce(
+          (rulesLength, rule) => rulesLength + rule.length,
+          0
+        ),
+      0
+    )
+    expect(serializedCssLength * 2).toBeLessThanOrEqual(
+      STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES
+    )
+    expect(
+      serializedSheets.some((styleSheet) => styleSheet.isTruncated)
+    ).toBeTrue()
   })
 
   it('should serialize regular document fragments without shadow metadata', () => {
@@ -933,6 +1124,49 @@ describe('replay/record/serialize', () => {
     })
 
     expect(serializedNode.attributes._cssText).toBeUndefined()
+    expect(serializedNode.attributes.href).toBe(
+      'https://example.com/app.css'
+    )
+  })
+
+  it('should keep a bounded complete-rule prefix and href for a large linked stylesheet', () => {
+    const link = document.createElement('link')
+    link.href = 'https://example.com/large.css'
+    Object.defineProperty(document, 'styleSheets', {
+      configurable: true,
+      value: [
+        {
+          href: 'https://example.com/large.css',
+          cssRules: [
+            { cssText: 'body { color: red; }' },
+            { cssText: 'x'.repeat(SERIALIZATION_MAX_STRING_LENGTH) }
+          ]
+        }
+      ]
+    })
+
+    const serializedNode = serializeElementNode(link, {
+      configuration: {},
+      parentNodePrivacyLevel: NodePrivacyLevel.ALLOW,
+      serializationContext: {
+        status: SerializationContextStatus.INITIAL_FULL_SNAPSHOT,
+        elementsScrollPositions: new Map(),
+        shadowRootsController: {
+          addShadowRoot: jasmine.createSpy('addShadowRoot')
+        }
+      }
+    })
+
+    expect(serializedNode.attributes.href).toBe(
+      'https://example.com/large.css'
+    )
+    expect(serializedNode.attributes._cssText).toContain('color: red')
+    expect(serializedNode.attributes._cssText).toContain(
+      'session-replay:stylesheet-truncated'
+    )
+    expect(serializedNode.attributes._cssText.length).toBeLessThanOrEqual(
+      SERIALIZATION_MAX_STRING_LENGTH
+    )
   })
 
   it('should serialize css text from style element sheets', () => {
@@ -1010,7 +1244,16 @@ describe('replay/record/serialize', () => {
 
     expect(serializedNode).not.toBeNull()
     expect(serializedNode.attributes._cssText).toBeUndefined()
-    expect(serializedNode.childNodes).toEqual([])
+    expect(serializedNode.childNodes).toEqual([
+      jasmine.objectContaining({
+        type: NodeType.Text,
+        textContent: jasmine.any(String)
+      })
+    ])
+    expect(serializedNode.childNodes[0].textContent.length).toBe(
+      SERIALIZATION_MAX_NODE_SOURCE_LENGTH
+    )
+    expect(serializedNode.childNodes[0].textContent.endsWith('…')).toBeTrue()
   })
 
   it('should serialize media playback state for video elements', () => {

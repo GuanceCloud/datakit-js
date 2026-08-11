@@ -4,7 +4,7 @@ import {
   createCanvasMutationFixture,
   createCanvasReplayFixturePayload,
   createCanvasReplayFixtureTimeline
-} from './canvasReplayFixtures'
+} from '../../../../test/replay/canvasReplayFixtures'
 
 describe('replay/record/canvasReplayFixtures', () => {
   it('should build rrweb-compatible canvas mutation fixtures', () => {

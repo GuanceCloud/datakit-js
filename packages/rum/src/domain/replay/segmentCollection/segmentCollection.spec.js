@@ -1223,7 +1223,7 @@ describe('segmentCollection', () => {
     expect(sendOnExit).not.toHaveBeenCalled()
   })
 
-  it('should synchronously settle a deferred segment finish before stop returns', () => {
+  it('should let a deferred segment finish asynchronously after a normal stop', () => {
     const lifeCycle = new LifeCycle()
     const send = jasmine.createSpy('send')
     const encoder = createDeferredEncoder()
@@ -1247,10 +1247,113 @@ describe('segmentCollection', () => {
     })
     segmentCollection.stop('manual_stop')
 
-    expect(encoder.flushPendingActionsSync).toHaveBeenCalledOnceWith(
-      SEGMENT_BYTES_LIMIT
-    )
+    expect(encoder.flushPendingActionsSync).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+
+    encoder.resolve(0)
+
     expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('should keep async encoder boundaries ordered across recorder generations', () => {
+    const listeners = {}
+    const worker = {
+      postMessage: jasmine.createSpy('postMessage'),
+      addEventListener: (type, listener) => {
+        listeners[type] = listener
+      },
+      removeEventListener: jasmine.createSpy('removeEventListener')
+    }
+    const encoder = createDeflateEncoder(
+      worker,
+      DeflateEncoderStreamId.REPLAY
+    )
+    const send = jasmine.createSpy('send')
+    const request = {
+      send,
+      sendOnExit: jasmine.createSpy('sendOnExit')
+    }
+    const startCollection = (sessionId) =>
+      doStartSegmentCollection(
+        new LifeCycle(),
+        () => ({
+          session: { id: sessionId },
+          view: { id: 'view-1' }
+        }),
+        request,
+        encoder,
+        false
+      )
+
+    const firstCollection = startCollection('session-1')
+    firstCollection.addRecord({
+      type: RecordType.FullSnapshot,
+      timestamp: 10
+    })
+    firstCollection.stop('session_expire')
+    const secondCollection = startCollection('session-2')
+    secondCollection.addRecord({
+      type: RecordType.FullSnapshot,
+      timestamp: 20
+    })
+    secondCollection.stop('manual_stop')
+
+    expect(
+      worker.postMessage.calls.allArgs().map((args) => args[0].action)
+    ).toEqual(['write', 'write', 'reset', 'write', 'write', 'reset'])
+    expect(send).not.toHaveBeenCalled()
+
+    listeners.message({
+      data: {
+        type: 'wrote',
+        id: 0,
+        streamId: DeflateEncoderStreamId.REPLAY,
+        additionalBytesCount: 5,
+        result: new Uint8Array([1]),
+        trailer: new Uint8Array([9])
+      }
+    })
+    expect(send).not.toHaveBeenCalled()
+    listeners.message({
+      data: {
+        type: 'wrote',
+        id: 1,
+        streamId: DeflateEncoderStreamId.REPLAY,
+        additionalBytesCount: 5,
+        result: new Uint8Array([2]),
+        trailer: new Uint8Array([3])
+      }
+    })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send.calls.argsFor(0)[0].data.get('session_id')).toBe(
+      'session-1'
+    )
+
+    listeners.message({
+      data: {
+        type: 'wrote',
+        id: 2,
+        streamId: DeflateEncoderStreamId.REPLAY,
+        additionalBytesCount: 5,
+        result: new Uint8Array([4]),
+        trailer: new Uint8Array([9])
+      }
+    })
+    expect(send).toHaveBeenCalledTimes(1)
+    listeners.message({
+      data: {
+        type: 'wrote',
+        id: 3,
+        streamId: DeflateEncoderStreamId.REPLAY,
+        additionalBytesCount: 5,
+        result: new Uint8Array([5]),
+        trailer: new Uint8Array([6])
+      }
+    })
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send.calls.argsFor(1)[0].data.get('session_id')).toBe(
+      'session-2'
+    )
   })
 
   it('should finalize but not send a mandatory recovery tail when its baseline is abandoned', () => {
@@ -1416,6 +1519,159 @@ describe('segmentCollection', () => {
     expect(onReplayResetNeeded).toHaveBeenCalledOnceWith(
       'full_snapshot_encoder_backpressure'
     )
+  })
+
+  it('should not exhaust recovery on repeated transient full snapshot backpressure', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    let pendingRawBytesCount = 990
+    encoder.getPendingRawBytesCount = () => pendingRawBytesCount
+    const onReplayResetExhausted = jasmine.createSpy(
+      'onReplayResetExhausted'
+    )
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      encoder,
+      false,
+      {
+        pendingRawBytesLimit: 1000,
+        onReplayResetNeeded: jasmine.createSpy('onReplayResetNeeded'),
+        onReplayResetExhausted
+      }
+    )
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect(
+        segmentCollection.addRecord({
+          type: RecordType.FullSnapshot,
+          timestamp: 10 + attempt
+        })
+      ).toBeFalse()
+      expect(
+        segmentCollection.$rWasLastAddRecordBackpressured()
+      ).toBeTrue()
+    }
+
+    expect(onReplayResetExhausted).not.toHaveBeenCalled()
+    pendingRawBytesCount = 0
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.FullSnapshot,
+        timestamp: 20
+      })
+    ).toBeTrue()
+  })
+
+  it('should gate a replay generation after a permanent transport drop', () => {
+    const lifeCycle = new LifeCycle()
+    const onReplayResetNeeded = jasmine.createSpy('onReplayResetNeeded')
+    const send = jasmine.createSpy('send').and.callFake((payload) => {
+      if (send.calls.count() === 1) {
+        payload.$rOnPermanentDrop('queue_full')
+      }
+    })
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit: jasmine.createSpy('sendOnExit') },
+      createEncoder(),
+      false,
+      { onReplayResetNeeded }
+    )
+
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.FullSnapshot,
+        timestamp: 10
+      })
+    ).toBeTrue()
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+    jasmine.clock().tick(0)
+
+    expect(onReplayResetNeeded).toHaveBeenCalledOnceWith(
+      'transport_queue_full'
+    )
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 20
+      })
+    ).toBeFalse()
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.FullSnapshot,
+        timestamp: 30
+      })
+    ).toBeTrue()
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it('should isolate a stopped collection late transport callback from a new collection', () => {
+    const payloads = []
+    const request = {
+      send: (payload) => payloads.push(payload),
+      sendOnExit: jasmine.createSpy('sendOnExit')
+    }
+    const firstLifeCycle = new LifeCycle()
+    const firstCollection = doStartSegmentCollection(
+      firstLifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      request,
+      createEncoder(),
+      false
+    )
+    firstCollection.addRecord({
+      type: RecordType.FullSnapshot,
+      timestamp: 10
+    })
+    firstLifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+    firstCollection.stop('session_expire')
+
+    const secondLifeCycle = new LifeCycle()
+    const onReplayResetNeeded = jasmine.createSpy('onReplayResetNeeded')
+    const secondCollection = doStartSegmentCollection(
+      secondLifeCycle,
+      () => ({
+        session: { id: 'session-2' },
+        view: { id: 'view-2' }
+      }),
+      request,
+      createEncoder(),
+      false,
+      { onReplayResetNeeded }
+    )
+    secondCollection.addRecord({
+      type: RecordType.FullSnapshot,
+      timestamp: 20
+    })
+    secondLifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+
+    payloads[0].$rOnPermanentDrop('retry_exhausted')
+    jasmine.clock().tick(0)
+
+    expect(onReplayResetNeeded).not.toHaveBeenCalled()
+    expect(
+      secondCollection.addRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 30
+      })
+    ).toBeTrue()
   })
 
   it('should request a new full snapshot and gate incrementals after dropping a full snapshot', () => {

@@ -1,6 +1,6 @@
 ---
 name: publish-browser-sdk-docs
-description: Synchronize user-visible Guance browser SDK changes into the sibling dataflux-doc repository and deliver the documentation through a GitLab merge request targeting release. Use after changing browser RUM behavior, public APIs, configuration, framework integrations, package usage, CDN examples, sampling, replay, actions, resources, errors, data fields, or release notes when the corresponding Chinese Web RUM documentation under docs/zh/real-user-monitoring/web must be added or updated for both Guance and TrueWatch.
+description: Synchronize user-visible Guance browser SDK changes into the sibling dataflux-doc repository and deliver the documentation through a GitLab merge request targeting release. Use after changing browser RUM behavior, public APIs, configuration, framework integrations, package usage, CDN examples, sampling, replay, actions, resources, errors, data fields, or release notes when the corresponding Chinese Web RUM or Web Session Replay documentation must be added or updated for both Guance and TrueWatch.
 ---
 
 # Publish Browser SDK Docs
@@ -50,10 +50,11 @@ Requirements:
 
 ## Author the documentation
 
-Limit documentation changes to:
+Limit documentation changes to these two Web RUM trees:
 
 ```text
 docs/zh/real-user-monitoring/web/
+docs/zh/real-user-monitoring/session-replay/web/
 ```
 
 Follow the existing directory design:

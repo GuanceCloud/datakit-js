@@ -3,7 +3,10 @@
     "version": "3.3.6",
     "main": "bundle/worker.js",
     "scripts": {
-        "build": "rm -rf bundle && webpack --mode=production",
+        "build": "node ../../scripts/build-worker-bundles.js",
+        "build:unlocked": "rm -rf bundle && webpack --mode=production && npm run check:bundle-contract && npm run check:package-content",
+        "check:bundle-contract": "node ../../scripts/check-worker-bundle-contract.js bundle/worker.js bundle/canvas-worker.js",
+        "check:package-content": "node ../../scripts/check-worker-package-content.js",
         "publish:oss:current": "npm run build && node ./scripts/publish-oss.js current",
         "publish:oss:lts": "npm run build && node ./scripts/publish-oss.js lts",
         "publish:oss:test": "npm run build && node ./scripts/publish-oss.js test"

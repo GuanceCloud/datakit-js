@@ -8,15 +8,17 @@ const JSON_FILES = [
   'rum-vue',
   'rum-angular',
   'rum-nextjs',
-  'rum-nuxt'
+  'rum-nuxt',
+  'rum-webgl'
 ].map((packageName) => `./packages/${packageName}/package.json`)
 const RUM_PEER_DEPENDENCIES = [
   '@cloudcare/browser-rum',
   '@cloudcare/browser-rum-slim'
 ]
 
-// Keep framework plugins from being installed with an older RUM runtime that does not implement
-// their plugin lifecycle contract.
+// Keep integration plugins from being installed with an older RUM runtime that
+// does not implement their plugin lifecycle or cross-bundle capability
+// contract.
 //
 // Lerna [intentionally removed support for it][1], and [closed a feature request asking for an
 // option to bump them on publish][2], but we still want to make sure this version is updated as
@@ -24,19 +26,25 @@ const RUM_PEER_DEPENDENCIES = [
 //
 // [1]: https://github.com/lerna/lerna/commit/bdbfc62966e5351abfeac77830f9d47b6d69f1b1
 // [2]: https://github.com/lerna/lerna/issues/1575
-runMain(async () => {
-  for (const jsonFile of JSON_FILES) {
-    await modifyFile(jsonFile, updateJsonPeerDependencies)
-  }
-  command`npm install --package-lock-only --ignore-scripts`.run()
-})
+if (require.main === module) {
+  runMain(async () => {
+    for (const jsonFile of JSON_FILES) {
+      await modifyFile(jsonFile, updateJsonPeerDependencies)
+    }
+    command`npm install --package-lock-only --ignore-scripts`.run()
+  })
+}
 
-function updateJsonPeerDependencies(content) {
+function updateJsonPeerDependencies(
+  content,
+  rumVersion = lernaConfig.version
+) {
   const json = JSON.parse(content)
   const indentation = content.match(/^\{\n(\s+)"/)
+  const minimumRumVersion = getMinimumRumPeerVersion(json.name, rumVersion)
   RUM_PEER_DEPENDENCIES.forEach((packageName) => {
     if (json.peerDependencies[packageName]) {
-      json.peerDependencies[packageName] = `>=${lernaConfig.version}`
+      json.peerDependencies[packageName] = `>=${minimumRumVersion}`
     }
   })
   return `${JSON.stringify(
@@ -44,4 +52,16 @@ function updateJsonPeerDependencies(content) {
     null,
     indentation ? indentation[1].length : 2
   )}\n`
+}
+
+function getMinimumRumPeerVersion(
+  _packageName,
+  rumVersion = lernaConfig.version
+) {
+  return rumVersion
+}
+
+module.exports = {
+  getMinimumRumPeerVersion,
+  updateJsonPeerDependencies
 }

@@ -200,6 +200,108 @@ describe('replay/record/observers', () => {
     }
   })
 
+  it('should use strict ignore checks for stateless interactions only', () => {
+    jasmine.clock().install()
+    const target = document.createElement('input')
+    document.body.appendChild(target)
+    setSerializedNodeId(target, 102)
+    let frustrationHandler
+    const statefulIgnore = jasmine
+      .createSpy('statefulIgnore')
+      .and.returnValue(false)
+    const statelessIgnore = jasmine
+      .createSpy('statelessIgnore')
+      .and.returnValue(true)
+    const inputCb = jasmine.createSpy('inputCb')
+    const mousemoveCb = jasmine.createSpy('mousemoveCb')
+    const mouseInteractionCb = jasmine.createSpy(
+      'mouseInteractionCb'
+    )
+    const frustrationCb = jasmine.createSpy('frustrationCb')
+    const callback = jasmine.createSpy('callback')
+    const observers = initObservers({
+      lifeCycle: {
+        subscribe(_eventType, handler) {
+          frustrationHandler = handler
+          return { unsubscribe: function () {} }
+        }
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      elementsScrollPositions: new Map(),
+      inputCb,
+      mediaInteractionCb: callback,
+      mouseInteractionCb,
+      mousemoveCb,
+      mutationCb: callback,
+      mutationPerfCb: callback,
+      mutationOverflowCb: callback,
+      mutationActivityCb: callback,
+      scrollCb: callback,
+      styleSheetCb: callback,
+      viewportResizeCb: callback,
+      frustrationCb,
+      focusCb: callback,
+      visualViewportResizeCb: callback,
+      isNodeIgnored: statefulIgnore,
+      isNodeIgnoredForStatelessObserver: statelessIgnore,
+      shadowRootsController: {
+        addShadowRoot: function () {
+          return true
+        },
+        removeShadowRoot: function () {}
+      }
+    })
+
+    try {
+      const moveEvent = new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX: 1,
+        clientY: 2
+      })
+      const clickEvent = new MouseEvent('click', {
+        bubbles: true,
+        clientX: 3,
+        clientY: 4
+      })
+      target.dispatchEvent(moveEvent)
+      target.dispatchEvent(clickEvent)
+      frustrationHandler({
+        rawRumEvent: {
+          date: 1234,
+          type: RumEventType.ACTION,
+          action: {
+            type: ActionType.CLICK,
+            frustration: { type: ['rage_click'] }
+          }
+        },
+        domainContext: { events: [clickEvent] }
+      })
+
+      expect(statelessIgnore).toHaveBeenCalledTimes(3)
+      expect(statefulIgnore).not.toHaveBeenCalled()
+      expect(mousemoveCb).not.toHaveBeenCalled()
+      expect(mouseInteractionCb).not.toHaveBeenCalled()
+      expect(frustrationCb).not.toHaveBeenCalled()
+
+      target.value = 'stateful-input'
+      target.dispatchEvent(new Event('input', { bubbles: true }))
+      expect(statefulIgnore).toHaveBeenCalledWith(target)
+      expect(inputCb).toHaveBeenCalledOnceWith({
+        id: 102,
+        text: 'stateful-input'
+      })
+    } finally {
+      try {
+        observers.stop()
+        target.remove()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
   it('should allocate stable record ids per event object', () => {
     const eventA = {}
     const eventB = {}

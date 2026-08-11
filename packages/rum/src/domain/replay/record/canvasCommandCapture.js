@@ -481,24 +481,28 @@ function isUnsupportedDrawImageSource(value) {
 export function createCanvas2DCommandRecorder(options) {
   options = options || {}
   var emit = options.emit || function () {}
-  var now = options.now || Date.now
+  var now = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? options.now || Date.now
+    : Date.now
   var requestAnimationFrameImpl =
-    options.requestAnimationFrameImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+      options.requestAnimationFrameImpl) ||
     function (callback) {
       return window.requestAnimationFrame(callback)
     }
   var cancelAnimationFrameImpl =
-    options.cancelAnimationFrameImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+      options.cancelAnimationFrameImpl) ||
     function (rafId) {
       return window.cancelAnimationFrame(rafId)
     }
   var setTimeoutImpl =
-    options.setTimeoutImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.setTimeoutImpl) ||
     function (callback, delay) {
       return setTimeout(callback, delay)
     }
   var clearTimeoutImpl =
-    options.clearTimeoutImpl ||
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.clearTimeoutImpl) ||
     function (timeoutId) {
       return clearTimeout(timeoutId)
     }
@@ -522,10 +526,9 @@ export function createCanvas2DCommandRecorder(options) {
   var patchedOpaqueObjectRefAddCount = 0
   var patchedOpaqueObjectRefLastCompactionCount = 0
   var opaqueObjectContextMap = new WeakMap()
-  var weakRefFactory = Object.prototype.hasOwnProperty.call(
-    options,
-    'weakRefFactory'
-  )
+  var weakRefFactory =
+    __BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+    Object.prototype.hasOwnProperty.call(options, 'weakRefFactory')
     ? typeof options.weakRefFactory === 'function'
       ? options.weakRefFactory
       : undefined
@@ -540,7 +543,8 @@ export function createCanvas2DCommandRecorder(options) {
   var stopped = false
   var paused = false
   var objectRefRegistry =
-    options.objectRefRegistry || createCanvasCommandObjectRefRegistry()
+    (__BUILD_ENV__REPLAY_DEBUG_ENABLED__ && options.objectRefRegistry) ||
+    createCanvasCommandObjectRefRegistry()
   var onCommandOverflow = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
     ? options.onCommandOverflow || function () {}
     : undefined
@@ -1018,7 +1022,10 @@ export function createCanvas2DCommandRecorder(options) {
       // detached context strongly or replaying an incomplete command stream.
       markSnapshotFallbackDirty(context, true)
     }
-    flush()
+    // Publication belongs to one exact DOM admission boundary. Flushing every
+    // context here could move commands from another, already-published canvas
+    // ahead of DOM mutations that happened before its scheduled frame.
+    flushContext(context)
     return true
   }
 

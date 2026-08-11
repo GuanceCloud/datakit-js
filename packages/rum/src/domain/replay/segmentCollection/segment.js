@@ -14,7 +14,9 @@ export function createSegment(options) {
   let estimatedEncodedBytesCount = 0
   let isRegisteredInStats = false
   const viewId = context.view.id
-  const recordCountsByType = {}
+  const recordCountsByType = __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+    ? {}
+    : undefined
 
   const metadata = assign(
     {
@@ -136,7 +138,9 @@ export function createSegment(options) {
     metadata.start = Math.min(metadata.start, record.timestamp)
     metadata.end = Math.max(metadata.end, record.timestamp)
     metadata.records_count += 1
-    incrementRecordCount(recordCountsByType, getRecordDebugType(record))
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      incrementRecordCount(recordCountsByType, getRecordDebugType(record))
+    }
     if (!metadata.has_full_snapshot) {
       metadata.has_full_snapshot = record.type === RecordType.FullSnapshot
     }
@@ -176,7 +180,13 @@ export function createSegment(options) {
         encoderResult.error = footerWriteError
       }
       replayStats.addWroteData(metadata.view.id, encoderResult.rawBytesCount)
-      callback(metadata, encoderResult, assign({}, recordCountsByType))
+      callback(
+        metadata,
+        encoderResult,
+        __BUILD_ENV__REPLAY_DEBUG_ENABLED__
+          ? assign({}, recordCountsByType)
+          : undefined
+      )
     })
   }
   function discard(callback) {

@@ -13,6 +13,7 @@ export var MAX_SERIALIZED_NODE_ANCESTOR_DEPTH = 1000
 export var STYLESHEET_SERIALIZATION_MAX_RULE_COUNT = 5000
 export var STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT = 256 * 1024
 export var STYLESHEET_SERIALIZATION_MAX_DURATION_MS = 4
+export var STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES = 512 * 1024
 var serializedCanvasEntries = []
 var serializedCanvasFreeEntryIndexes = []
 var serializedCanvasEntryByNode = new WeakMap()
@@ -408,18 +409,23 @@ export function getCssRulesString(cssStyleSheet) {
     visitedStyleSheets: new Set(),
     ruleCount: 0,
     characterCount: 0,
+    characterLimit:
+      STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT - 64,
     deadline:
       getSerializationTime() + STYLESHEET_SERIALIZATION_MAX_DURATION_MS,
     exceeded: false
   }
-  if (
-    !appendStyleSheetRules(
-      cssStyleSheet,
-      serializationState,
-      cssStyleSheet.href,
-      rootRules
+  var completed = appendStyleSheetRules(
+    cssStyleSheet,
+    serializationState,
+    cssStyleSheet.href,
+    rootRules
+  )
+  if (!completed && serializationState.parts.length) {
+    serializationState.parts.push(
+      '/* session-replay:stylesheet-truncated */'
     )
-  ) {
+  } else if (!completed) {
     return null
   }
   var styleSheetCssText = fixBrowserCompatibilityIssuesInCSS(
@@ -570,7 +576,8 @@ function hasStyleSheetSerializationBudget(
       serializationState.ruleCount >=
         STYLESHEET_SERIALIZATION_MAX_RULE_COUNT) ||
     serializationState.characterCount + additionalCharacterCount >
-      STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT ||
+      (serializationState.characterLimit ||
+        STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT) ||
     getSerializationTime() > serializationState.deadline
   ) {
     serializationState.exceeded = true
@@ -680,6 +687,152 @@ export function serializeStyleSheets(cssStyleSheets) {
     serializedStyleSheets.push(styleSheet)
   }
   return serializedStyleSheets
+}
+
+/**
+ * Incrementally serializes constructable/adopted stylesheets. Unlike the
+ * legacy synchronous helper above, this task never treats a per-frame
+ * deadline, rule count, or the old 256 KiB watermark as a successful partial
+ * result. The owning DOM serializer publishes only after every readable rule
+ * has been copied, while still yielding between small rule batches.
+ */
+export function createStyleSheetsSerializerTask(cssStyleSheets) {
+  if (cssStyleSheets === undefined || cssStyleSheets.length === 0) {
+    return null
+  }
+  var serializedStyleSheets = []
+  var styleSheetIndex = 0
+  var currentRules
+  var currentRuleIndex = 0
+  var currentSerializedStyleSheet
+  var approxBytes = 0
+
+  return {
+    serializedStyleSheets: serializedStyleSheets,
+    approxBytes: 0,
+    isComplete: false,
+    isMaxApproxBytesReached: false,
+    advance: function (
+      deadline,
+      maxApproxBytes,
+      hardMaxApproxBytes
+    ) {
+      if (typeof maxApproxBytes !== 'number') {
+        maxApproxBytes = Number.MAX_SAFE_INTEGER
+      }
+      if (typeof hardMaxApproxBytes !== 'number') {
+        hardMaxApproxBytes = maxApproxBytes
+      }
+      hardMaxApproxBytes = Math.min(
+        hardMaxApproxBytes,
+        STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES
+      )
+      maxApproxBytes = Math.min(
+        maxApproxBytes,
+        hardMaxApproxBytes
+      )
+      this.isMaxApproxBytesReached = false
+      while (styleSheetIndex < cssStyleSheets.length) {
+        if (!currentRules) {
+          if (approxBytes + 32 > maxApproxBytes) {
+            if (approxBytes + 32 <= hardMaxApproxBytes) {
+              this.approxBytes = approxBytes
+              this.isMaxApproxBytesReached = true
+              return false
+            }
+            if (
+              approxBytes + 24 <= hardMaxApproxBytes &&
+              approxBytes + 24 > maxApproxBytes
+            ) {
+              this.approxBytes = approxBytes
+              this.isMaxApproxBytesReached = true
+              return false
+            }
+            if (approxBytes + 24 <= hardMaxApproxBytes) {
+              serializedStyleSheets.push({
+                cssRules: [],
+                isTruncated: true
+              })
+              approxBytes += 24
+            }
+            styleSheetIndex = cssStyleSheets.length
+            break
+          }
+          var cssStyleSheet = cssStyleSheets[styleSheetIndex]
+          currentRules = getReadableStyleSheetRules(cssStyleSheet)
+          currentRuleIndex = 0
+          if (!currentRules) {
+            styleSheetIndex += 1
+            continue
+          }
+          currentSerializedStyleSheet = {
+            cssRules: [],
+            disabled: cssStyleSheet.disabled || undefined,
+            media:
+              cssStyleSheet.media && cssStyleSheet.media.length > 0
+                ? Array.from(cssStyleSheet.media)
+                : undefined
+          }
+          serializedStyleSheets.push(currentSerializedStyleSheet)
+          approxBytes += 32
+        }
+
+        while (currentRuleIndex < currentRules.length) {
+          if (getSerializationTime() >= deadline) {
+            this.approxBytes = approxBytes
+            return false
+          }
+          var cssText = currentRules[currentRuleIndex].cssText
+          if (typeof cssText !== 'string') {
+            currentRuleIndex += 1
+            continue
+          }
+          var cssTextApproxBytes = cssText.length * 2 + 8
+          if (approxBytes + cssTextApproxBytes > maxApproxBytes) {
+            if (
+              approxBytes + cssTextApproxBytes <=
+              hardMaxApproxBytes
+            ) {
+              // The outer DOM serializer grows its byte watermark between
+              // FullSnapshot slices. Keep the current rule pending until that
+              // soft budget grows instead of turning a temporary yield into a
+              // permanently truncated stylesheet.
+              this.approxBytes = approxBytes
+              this.isMaxApproxBytesReached = true
+              return false
+            }
+            if (
+              approxBytes + 24 <= hardMaxApproxBytes &&
+              approxBytes + 24 > maxApproxBytes
+            ) {
+              this.approxBytes = approxBytes
+              this.isMaxApproxBytesReached = true
+              return false
+            }
+            // Preserve complete CSS rules only. A partial rule can invalidate
+            // the remainder of the sheet in the player. The explicit marker
+            // makes this a local, diagnosable stylesheet degradation instead
+            // of a silent omission or a whole FullSnapshot failure.
+            if (approxBytes + 24 <= hardMaxApproxBytes) {
+              currentSerializedStyleSheet.isTruncated = true
+              approxBytes += 24
+            }
+            currentRuleIndex = currentRules.length
+            break
+          }
+          currentRuleIndex += 1
+          currentSerializedStyleSheet.cssRules.push(cssText)
+          approxBytes += cssTextApproxBytes
+        }
+        currentRules = undefined
+        currentSerializedStyleSheet = undefined
+        styleSheetIndex += 1
+      }
+      this.approxBytes = approxBytes
+      this.isComplete = true
+      return true
+    }
+  }
 }
 export function absoluteToDoc(doc, attributeValue) {
   if (!attributeValue || attributeValue.trim() === '') {

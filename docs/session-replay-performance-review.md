@@ -26,7 +26,15 @@ Subsequent full snapshots are incremental serializer tasks:
 
 - each task runs in 4 ms slices
 - total active serialization time is limited to 1 second; time spent waiting
-  between slices does not consume that budget
+  between slices does not consume that budget, and neither a restart nor a
+  quiet-window retry resets the accumulated active time
+- after three mutation-driven restarts, a mandatory recovery waits for a
+  250 ms quiet window instead of repeatedly rebuilding serializer state
+- if churn continues for 1 second, one synchronous finalization attempt is
+  allowed, with a hard 12 ms main-thread budget; an incomplete attempt returns
+  to quiet-window scheduling rather than stopping the recorder immediately
+- the complete recovery transaction, including quiet waits and encoder
+  admission retries, has a 30-second wall-clock deadline
 - serialization stops at 50,000 nodes or approximately 1 MiB; this separately
   bounds the final synchronous JSON serialization before worker encoding
 - tree depth is capped at 1,000 levels
@@ -36,7 +44,8 @@ Subsequent full snapshots are incremental serializer tasks:
   4 ms active budget; an over-budget linked sheet falls back to its original
   URL, while an inline style keeps its bounded source text when possible
 - a DOM mutation generation change invalidates the in-progress snapshot and
-  restarts it, with a maximum of three restarts
+  restarts it; optional snapshots are abandoned after the bounded restart
+  policy, while mandatory recovery uses the bounded quiet-window path above
 - records observed while a replacement baseline is being built are bounded and
   are released only after the full snapshot succeeds
 
@@ -56,30 +65,35 @@ Ancestor validation and privacy inheritance are iterative and fail closed
 after 1,000 levels instead of recursing or walking indefinitely.
 
 `MutationRecord.oldValue` accounting cannot see the current DOM value. Current
-text and attribute sources therefore have a separate O(1) admission check:
-one value is limited to 200,000 characters and all current values normalized
-in one batch are limited to 512 Ki characters. The check runs before masking,
-attribute serialization, or payload measurement. Safe entries completed
-before the watermark are emitted, then the staged generation is discarded and
-a replacement baseline is requested.
+text and attribute sources therefore have a separate bounded admission path.
+Privacy and sanitization run before each serialized value is truncated to
+64 Ki characters, and all current values normalized in one transaction are
+limited to 512 Ki characters. Safe entries completed before the aggregate
+watermark are emitted, then the staged generation is discarded and a
+replacement baseline is requested.
 
-Added subtrees are serialized as resumable tasks. Mutation records also have
-two approximately 200 KB boundaries:
+Added subtrees are serialized as resumable tasks. Text and attribute values are
+first truncated to 64 KiB, and mutation records then have two approximately
+200 KB boundaries:
 
 - an individual add, remove, text, or attribute entry cannot exceed the limit
 - a materialized mutation event cannot exceed the limit
 
-Safe entries are split into bounded events. An indivisible oversized entry is
-dropped before it can enter debug history or segment serialization, and the
-recorder requests a replacement full snapshot. This applies to large text and
-attribute changes as well as added DOM subtrees.
+Safe entries are split into bounded events. An added subtree, or any other
+atomic entry that still exceeds the boundary after value truncation, is dropped
+before it can enter debug history or segment serialization, and the recorder
+requests a replacement full snapshot.
 
-Pending subtree serializers have a separate global backlog limit of 256 roots
-and approximately 4 MiB. A root may be refreshed at most 16 times while it is
-changing. Removed-subtree cleanup visits no more than 5,000 nodes in a 4 ms
-slice, including open shadow trees. Crossing any of these limits atomically
-discards the staged generation and requests a fresh baseline instead of
-emitting across a sequence gap.
+Pending subtree serializers have a separate global active limit of 256 roots
+and approximately 4 MiB; a bounded lightweight deferred queue absorbs a
+single admitted pure-add burst without constructing all serializer state at
+once. A root may be refreshed at most 16 times while it is changing. Repeated
+single-node replacements under the same published parent retarget the pending
+atomic add to the latest node, so an unpublished intermediate counter/text
+node cannot be mistaken for a canceled published move. Removed-subtree cleanup
+visits no more than 5,000 nodes in a 4 ms slice, including open shadow trees.
+Crossing any of these limits atomically discards the staged generation and
+requests a fresh baseline instead of emitting across a sequence gap.
 
 The Large DOM demo keeps its 2,500-row stress case incremental-only and appends
 four rows per observer callback. Its separate 50-row case is the Full Snapshot
@@ -98,25 +112,33 @@ replacement baseline restores the previous publication maps, so stale ids
 from the failed attempt cannot escape and the still-playable tree remains
 observable.
 
-Shadow-root observers use generation invalidation and an O(1) active-map swap
-on reset or stop. Retired observers are released asynchronously in batches of
-at most 32 or 4 ms. At most 64 ShadowRoots per generation are serialized with
-their content and observed. Additional roots are represented by empty
-ShadowRoot document-fragment placeholders without adopted styles or child
-content, so a component-heavy page degrades locally instead of stopping the
-whole replay. Synchronous flush therefore visits at most the same 64 observed
-roots and has a 4 ms budget. Its callbacks are buffered until every root
-succeeds, so a partial flush is never published. A new full snapshot retires
-the old generation before serialization, and the observed roots discovered by
-that snapshot remain active after the baseline is emitted.
+All open ShadowRoots discovered by serialization are captured with their child
+content and observed; 64 is a per-flush-page limit, not a total observer cap.
+Each page also has a 4 ms budget. Callbacks from every page remain buffered in
+one logical transaction until the complete root set succeeds, so neither a
+page boundary nor a time-budget yield publishes a partial mutation. Detached
+root discovery is likewise scanned in slices of at most 32 entries or 4 ms.
+Generation invalidation prevents retired callbacks from escaping, and physical
+observer/listener cleanup runs asynchronously in batches of at most 32 or 4 ms.
+A new full snapshot retires the old generation before serialization, and all
+open roots discovered by that snapshot remain active after publication.
 
 Open ShadowRoots attached after recording starts are instrumented at
 `attachShadow()` and publish their empty root boundary before control returns
 to application code. Synchronously appended children therefore cannot overtake
 the root in the replay stream. A root created inside an unpublished host is
 instead serialized with that host's outer add. Closed roots are not inspected,
-and dynamic roots share the same 64-controller capacity and empty-placeholder
-degradation as roots discovered during a full snapshot.
+and dynamic open roots use the same complete observation and paged-flush rules
+as roots discovered during a full snapshot.
+
+If a replacement full snapshot fails and the previous published baseline must
+be restored, its ShadowRoot observers are reinstalled synchronously. This is a
+failure-only correctness fallback: installing them asynchronously would create
+an unobserved mutation gap. The successful replacement path never performs
+that reinstall. Pages with thousands of open roots can therefore see a long
+task specifically while abandoning a failed replacement snapshot; the test
+suite covers restoration beyond 1,000 roots so this cost cannot be hidden by a
+silent observation cap.
 
 At most 512 retired ShadowRoot controllers may wait in the sliced cleanup
 queue. Once that queue is full, the newly retired generation is disconnected
@@ -156,6 +178,9 @@ bitmap baseline for at most 64 serialized canvases. This bounded pass is
 independent from the continuous/command round-robin cursor and does not probe
 or create application canvas contexts. It covers static canvases that were
 drawn before Replay started without adding a periodic document-wide sweep.
+Canvases identified as WebGL are excluded because this asynchronous pass is
+not a safe default-framebuffer boundary; their next real draw supplies the
+first WebGL replay frame. Static 2D and unknown canvases retain the baseline.
 
 The continuous scheduler additionally limits snapshots and concurrent encodes,
 honors the configured interval, and applies success, unchanged, and failure
@@ -208,6 +233,10 @@ WebGL capture; the next eligible real draw must enqueue it. This keeps
 subsequent cadence samples on a valid rendering boundary instead of reading a
 stale default framebuffer.
 
+Each render boundary retains only a bounded candidate page. Priority and
+least-recently-selected order provide fairness among candidates; queue pressure
+leaves a canvas dirty but does not carry a pixel-read job across boundaries.
+
 At the draw boundary, the normal path copies the WebGL canvas into an
 SDK-internal 2D staging canvas with `drawImage`. It does not synchronously read
 pixels from the GPU. `readPixels` is used only if that copy fails, and that
@@ -239,6 +268,14 @@ Native encodes also pass through a module-level admission queue shared by
 successive recorder instances. At most four native operations run at once and
 at most 64 wait, so stop/start cycles cannot accumulate otherwise
 uncancellable browser work outside a retired recorder's local counters.
+
+An oversized WebGL result gets at most one fallback encode from the same staged
+frame at 40% width and height and half quality (minimum 0.12). A successful
+fallback profile is reused for 10 seconds before one full-profile probe. The
+profile is tokened so an older async frame cannot overwrite a newer result. If
+the fallback is also oversized, it remains dropped and the low profile is
+temporarily cached to avoid performing two known-to-fail encodes on every
+sample. Ordinary 2D canvas does not use this adaptive path.
 
 The object URL for the inline canvas worker is revoked immediately after worker
 initialization, and is also revoked if construction fails. External worker URLs
@@ -347,21 +384,19 @@ would add a JavaScript interception point to every GL call, duplicate resource
 uploads into replay payloads, and still fail to reconstruct contexts that were
 initialized before recording began.
 
-The draw-driven snapshot path supports pre-existing contexts, does not change
-`preserveDrawingBuffer`, and has bounded capture and payload costs. Command-level
-WebGL replay should remain a separate opt-in design with its own compatibility
-and resource budgets.
+The draw-driven snapshot path is shipped as the optional
+`@cloudcare/browser-rum-webgl` addon. It supports pre-existing contexts, does
+not change `preserveDrawingBuffer`, and has bounded capture and payload costs.
+Command-level WebGL replay remains out of scope.
 
 ## Remaining risks
 
-- Replay is still bundled eagerly into the main RUM browser bundle. The
-  WebGL capture and backpressure safeguards therefore add download, parse, and
-  compile cost even for sessions that are not sampled for replay. Applications
-  that do not use Session Replay can use `@cloudcare/browser-rum-slim` to avoid
-  that cost. For the full package, the production build enforces raw and gzip
-  bundle-size limits. Moving the recorder and its canvas encoders behind a
-  separately cached lazy chunk is the architectural follow-up; the automated
-  size gate should remain in place until that split exists.
+- DOM and Canvas 2D Replay are still bundled eagerly into the main RUM browser
+  bundle. WebGL implementation code is excluded from that graph and is loaded
+  only through `@cloudcare/browser-rum-webgl`. Applications that do not use any
+  Session Replay can use `@cloudcare/browser-rum-slim`; applications that use
+  Replay without WebGL pay only the main recorder cost. Both production bundles
+  have independent raw/gzip and cross-bundle contract gates.
 - Serialization can yield only between nodes. Source sizes, attribute counts,
   and CSS rules are bounded, but a browser-provided DOM/CSSOM getter or layout
   operation that itself blocks cannot be preempted.
@@ -375,12 +410,12 @@ and resource budgets.
   long task at the allowed maximum size.
 - If `toBlob` or `FileReader` is unavailable, the final legacy main-thread
   fallback is synchronous `toDataURL`.
-- Known WebGL extension draw entry points are intercepted when the extension
-  is queried after Replay starts. An extension object cached before Replay
-  starts cannot be discovered safely through standard browser APIs, so later
-  extension-only draws on that object remain best-effort. Start Replay before
-  creating the WebGL context or querying extensions for complete draw-driven
-  capture.
+- Known WebGL extension draw entry points are intercepted by the optional
+  plugin bootstrap installed synchronously during RUM `init()`. Extension
+  objects and draw/rAF methods cached after plugin initialization continue to
+  route to the active observer when asynchronous Replay recording starts. A
+  raw method reference cached before plugin/RUM initialization cannot be
+  retroactively replaced, so initialize the plugin before booting the engine.
 - Rendering outside `requestAnimationFrame` has a weaker task-boundary signal.
   With `preserveDrawingBuffer: false`, applications with unusual scheduling may
   need an explicit capture point.

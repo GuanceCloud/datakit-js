@@ -28,7 +28,10 @@ export function processSessionStoreOperations(
     return persistSession(assign({}, session, { lock: currentLock }))
   }
   const retrieveStore = function () {
-    const { lock, ...session } = sessionStoreStrategy.retrieveSession()
+    const storedSession = sessionStoreStrategy.retrieveSession()
+    const lock = storedSession.lock
+    const session = assign({}, storedSession)
+    delete session.lock
 
     return {
       session,
@@ -133,7 +136,7 @@ export function createLock() {
 }
 
 function isLockExpired(lock) {
-  const [, timeStamp] = lock.split(LOCK_SEPARATOR)
+  const timeStamp = lock.split(LOCK_SEPARATOR)[1]
   return (
     !timeStamp ||
     elapsed(Number(timeStamp), timeStampNow()) > LOCK_EXPIRATION_DELAY

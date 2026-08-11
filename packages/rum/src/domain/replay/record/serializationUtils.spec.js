@@ -7,6 +7,8 @@ import {
   MAX_SERIALIZED_NODE_ANCESTOR_DEPTH,
   STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT,
   STYLESHEET_SERIALIZATION_MAX_RULE_COUNT,
+  STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES,
+  createStyleSheetsSerializerTask,
   getSerializedCanvasNodes,
   getSerializedCanvasNodesSnapshot,
   makeUrlAbsolute,
@@ -155,6 +157,80 @@ describe('replay/record/serializationUtils', () => {
     ).toEqual([cssText])
   })
 
+  it('should resume adopted stylesheet serialization after yielding at its deadline', () => {
+    let now = 0
+    spyOn(performance, 'now').and.callFake(() => now)
+    const rules = Array.from({ length: 3 }, (_, index) => ({
+      cssText: `.rule-${index} { color: red; }`
+    }))
+    const task = createStyleSheetsSerializerTask([
+      { cssRules: rules }
+    ])
+
+    expect(
+      task.advance(1, STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES)
+    ).toBeTrue()
+    expect(task.serializedStyleSheets[0].cssRules).toEqual(
+      rules.map((rule) => rule.cssText)
+    )
+
+    const yieldedTask = createStyleSheetsSerializerTask([
+      { cssRules: rules }
+    ])
+    now = 2
+    expect(
+      yieldedTask.advance(1, STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES)
+    ).toBeFalse()
+    now = 3
+    expect(
+      yieldedTask.advance(4, STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES)
+    ).toBeTrue()
+    expect(yieldedTask.serializedStyleSheets[0].cssRules).toEqual(
+      rules.map((rule) => rule.cssText)
+    )
+  })
+
+  it('should keep the current rule pending when only the slice byte budget is exhausted', () => {
+    const cssText = '.pending-rule { color: rebeccapurple; }'
+    const task = createStyleSheetsSerializerTask([
+      { cssRules: [{ cssText }] }
+    ])
+
+    expect(task.advance(Infinity, 40, 1024)).toBeFalse()
+    expect(task.isMaxApproxBytesReached).toBeTrue()
+    expect(task.serializedStyleSheets[0].cssRules).toEqual([])
+    expect(task.serializedStyleSheets[0].isTruncated).toBeUndefined()
+
+    expect(task.advance(Infinity, 1024, 1024)).toBeTrue()
+    expect(task.isMaxApproxBytesReached).toBeFalse()
+    expect(task.serializedStyleSheets[0].cssRules).toEqual([cssText])
+    expect(task.serializedStyleSheets[0].isTruncated).toBeUndefined()
+  })
+
+  it('should use one bounded budget across all adopted stylesheets', () => {
+    const cssText = 'x'.repeat(
+      Math.floor(STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES / 3)
+    )
+    const task = createStyleSheetsSerializerTask([
+      { cssRules: [{ cssText }] },
+      { cssRules: [{ cssText }] }
+    ])
+
+    expect(
+      task.advance(
+        Number.MAX_SAFE_INTEGER,
+        STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES
+      )
+    ).toBeTrue()
+    expect(task.approxBytes).toBeLessThanOrEqual(
+      STYLESHEET_SERIALIZATION_MAX_SNAPSHOT_BYTES
+    )
+    expect(task.serializedStyleSheets[0].cssRules).toEqual([cssText])
+    expect(task.serializedStyleSheets[1].cssRules).toEqual([])
+    expect(task.serializedStyleSheets[1].isTruncated).toBeTrue()
+    expect(task.isMaxApproxBytesReached).toBeFalse()
+  })
+
   it('should abandon CSSOM inlining when it exceeds the active time budget', () => {
     const rules = Array.from({ length: 96 }, (_, index) => ({
       cssText: `.rule-${index} { color: red; }`
@@ -185,12 +261,17 @@ describe('replay/record/serializationUtils', () => {
         cssRules: [{ cssText: oversizedCssText }]
       })
     ).toBeNull()
-    expect(
-      getCssRulesString({
-        href: 'https://example.com/too-many-rules.css',
-        cssRules: tooManyRules
-      })
-    ).toBeNull()
+    const boundedRulePrefix = getCssRulesString({
+      href: 'https://example.com/too-many-rules.css',
+      cssRules: tooManyRules
+    })
+    expect(boundedRulePrefix).toContain('a{}')
+    expect(boundedRulePrefix).toContain(
+      'session-replay:stylesheet-truncated'
+    )
+    expect(boundedRulePrefix.length).toBeLessThanOrEqual(
+      STYLESHEET_SERIALIZATION_MAX_CHARACTER_COUNT
+    )
   })
 
   it('should convert relative urls and srcset entries against the document', () => {

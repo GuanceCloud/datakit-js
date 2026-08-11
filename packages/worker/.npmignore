@@ -1,4 +1,5 @@
 *
 !/bundle/worker.js
+!/bundle/canvas-worker.js
 !/src/**/*
 /src/**/*.spec.js

@@ -119,6 +119,7 @@ export function doStartSegmentCollection(
   var activeBaselineGeneration = 0
   var nextBaselineGeneration = 0
   var baselineGenerationStates = {}
+  var transportGenerationStates = {}
   var baselineGenerationInFlightCounts = {}
   var pendingSegmentResultsByGeneration = {}
   var consecutiveFullSnapshotFailures = 0
@@ -281,6 +282,7 @@ export function doStartSegmentCollection(
     lockedBufferGeneration += 1
     lockedSegments = []
     baselineGenerationStates = {}
+    transportGenerationStates = {}
     baselineGenerationInFlightCounts = {}
     pendingSegmentResultsByGeneration = {}
     if (state.$rStatus === SegmentCollectionStatus.SegmentPending) {
@@ -360,6 +362,14 @@ export function doStartSegmentCollection(
       return
     }
     delete baselineGenerationStates[baselineGeneration]
+    delete transportGenerationStates[baselineGeneration]
+  }
+
+  function getTransportGenerationState(baselineGeneration) {
+    if (!transportGenerationStates[baselineGeneration]) {
+      transportGenerationStates[baselineGeneration] = { $rValid: true }
+    }
+    return transportGenerationStates[baselineGeneration]
   }
 
   function clearCanvasFlushTimeout() {
@@ -448,10 +458,34 @@ export function doStartSegmentCollection(
     inFlightSegmentFlushes.delete(transport)
   }
 
+  function handlePermanentTransportDrop(segmentResult, reason) {
+    // Invalidate the transport chain even after the recorder itself stopped;
+    // older queued dependents must never be promoted past the missing segment.
+    segmentResult.$rTransportGeneration.$rValid = false
+    if (
+      state.$rStatus === SegmentCollectionStatus.Stopped ||
+      replayRecoveryExhausted
+    ) {
+      return
+    }
+    var dropReason = 'transport_' + reason
+    reportDroppedRecord(dropReason, 0)
+    // Once a segment is permanently rejected, every later incremental in its
+    // generation may depend on replay state the player will never receive.
+    // Retire the generation and gate admission until a replacement Full
+    // Snapshot establishes a new chain. A transport failure is not evidence
+    // that Full Snapshot serialization itself is permanently broken.
+    failBaselineGeneration(segmentResult.$rGeneration, dropReason, false)
+    scheduleReplayResetNotification()
+  }
+
   function sendSegment(segmentResult) {
     const metadata = segmentResult.$rMetadata
     const encoderResult = segmentResult.$rEncoder
-    if (options.onSegmentFlushed) {
+    if (
+      __BUILD_ENV__REPLAY_DEBUG_ENABLED__ &&
+      options.onSegmentFlushed
+    ) {
       options.onSegmentFlushed({
         creationReason: metadata.creation_reason,
         flushReason: segmentResult.$rReason,
@@ -491,6 +525,13 @@ export function doStartSegmentCollection(
       encoderResult.rawBytesCount
     )
     payload.$rExitBytesCount = estimatedDeliveryBytesCount
+    payload.$rEnforceOrder = true
+    payload.$rIsValid = function () {
+      return segmentResult.$rTransportGeneration.$rValid
+    }
+    payload.$rOnPermanentDrop = function (reason) {
+      handlePermanentTransportDrop(segmentResult, reason)
+    }
 
     if (shouldUseExitTransport) {
       var exitDeliveryResult = httpRequest.sendOnExit(
@@ -721,12 +762,18 @@ export function doStartSegmentCollection(
     const segmentResult = {
       $rMetadata: metadata,
       $rEncoder: encoderResult,
-      $rCounts: recordCountsByType,
       $rReason: flushReason,
       $rExit: transport.$rExit,
       $rLocked: wasLocked,
       $rLockGeneration: lockedGeneration,
+      $rGeneration: baselineGeneration,
+      $rTransportGeneration: getTransportGenerationState(
+        baselineGeneration
+      ),
       $rSequence: transport.$rSequence
+    }
+    if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+      segmentResult.$rCounts = recordCountsByType
     }
     handleSuccessfulSegment(baselineGeneration, segmentResult)
     scheduleReplayResetNotification()
@@ -1082,7 +1129,7 @@ export function doStartSegmentCollection(
         result.status === 'record_too_large'
           ? 'full_snapshot_too_large'
           : 'full_snapshot_encoder_backpressure',
-        true
+        result.status === 'record_too_large'
       )
     }
     mandatoryRecoveryPending = false
@@ -1147,7 +1194,7 @@ export function doStartSegmentCollection(
     return true
   }
 
-  return {
+  var segmentCollection = {
     $rAddBaselineRecords: addBaselineRecords,
     addRecord: function (record) {
       lastAddRecordWasBackpressured = false
@@ -1253,7 +1300,7 @@ export function doStartSegmentCollection(
             record.type === RecordType.FullSnapshot
               ? 'full_snapshot_encoder_backpressure'
               : 'encoder_backpressure',
-            record.type === RecordType.FullSnapshot
+            false
           )
         }
         if (
@@ -1333,9 +1380,6 @@ export function doStartSegmentCollection(
     isLocked: function () {
       return state.$rLocked
     },
-    getBaselineGenerationStateCountForDebug: function () {
-      return Object.keys(baselineGenerationStates).length
-    },
     $rBeginMandatoryRecovery: function () {
       beginMandatoryRecovery()
     },
@@ -1373,14 +1417,21 @@ export function doStartSegmentCollection(
         }
       }
       flushSegment(flushReason || 'stop', undefined, true)
-      // A stopped recorder can be restarted immediately with the cached replay
-      // encoder. Settle every final finish/discard boundary before returning so
-      // the new recording cannot inherit the old raw backlog or stream state.
-      // The synchronous encoder path is capped by the segment output budget.
-      flushPendingSegmentEncodingsSync()
+      // Normal stop/session renewal must not force a potentially large worker
+      // backlog onto the main thread or apply the unload delivery budget. The
+      // encoder queues a reset after each finish, so a restarted recorder can
+      // append a new generation while these old results complete in order.
+      // Only a real unload needs the bounded synchronous drain.
+      flushPendingSegmentEncodingsForUnload(flushReason)
       unsubscribeLifecycle()
     }
   }
+  if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
+    segmentCollection.getBaselineGenerationStateCountForDebug = function () {
+      return Object.keys(baselineGenerationStates).length
+    }
+  }
+  return segmentCollection
 
   function beginMandatoryRecovery() {
     mandatoryRecoveryPending = true

@@ -7,6 +7,10 @@ export var MAX_ONGOING_REQUESTS = 32
 export var MAX_QUEUE_BYTES_COUNT = 20 * ONE_MEBI_BYTE
 export var MAX_BACKOFF_TIME = 256 * ONE_SECOND
 export var INITIAL_BACKOFF_TIME = ONE_SECOND
+// Ordered payloads intentionally allow only one in-flight request. Without a
+// watchdog, a fetch/XHR that never settles blocks the complete ordered stream
+// and lets its retry queue grow until the 20 MiB cap is reached.
+export var ORDERED_REQUEST_TIMEOUT = 30 * ONE_SECOND
 
 var TransportStatus = {
   UP: 0,
@@ -26,6 +30,10 @@ export function sendWithRetryStrategy(
   endpointUrl,
   reportError
 ) {
+  if (!isPayloadValid(payload)) {
+    state.$rPayloadSequenceByPayload.delete(payload)
+    return
+  }
   if (!state.$rPayloadSequenceByPayload.has(payload)) {
     state.$rPayloadSequenceByPayload.set(
       payload,
@@ -50,14 +58,54 @@ export function sendWithRetryStrategy(
         )
       },
       onFailure: function () {
-        if (!state.queuedPayloads.enqueue(payload)) {
+        var queued = enqueueAfterPruningInvalidPayloads(
+          payload,
+          state,
+          !!payload.$rEnforceOrder,
+          sendStrategy,
+          endpointUrl,
+          reportError
+        )
+        if (!queued) {
           state.$rPayloadSequenceByPayload.delete(payload)
+          notifyPermanentDrop(payload, 'queue_full')
+          resumeAfterInvalidPayloadsPruned(
+            !isPayloadValid(payload) && pruneInvalidPayloads(state),
+            state,
+            sendStrategy,
+            endpointUrl,
+            reportError
+          )
         }
         scheduleRetry(state, sendStrategy, endpointUrl, reportError)
       }
     })
-  } else if (!state.queuedPayloads.enqueue(payload)) {
-    state.$rPayloadSequenceByPayload.delete(payload)
+  } else {
+    if (
+      !enqueueAfterPruningInvalidPayloads(
+        payload,
+        state,
+        false,
+        sendStrategy,
+        endpointUrl,
+        reportError
+      )
+    ) {
+      state.$rPayloadSequenceByPayload.delete(payload)
+      notifyPermanentDrop(payload, 'queue_full')
+      resumeAfterInvalidPayloadsPruned(
+        !isPayloadValid(payload) && pruneInvalidPayloads(state),
+        state,
+        sendStrategy,
+        endpointUrl,
+        reportError
+      )
+      return
+    }
+    // A retry timer can legitimately drain only stale generation-bound
+    // payloads and leave the transport DOWN with no timer. A later valid
+    // payload must restart recovery instead of remaining queued forever.
+    scheduleRetry(state, sendStrategy, endpointUrl, reportError)
   }
 }
 
@@ -79,7 +127,19 @@ function scheduleRetry(state, sendStrategy, endpointUrl, reportError) {
     ) {
       return
     }
-    var payload = state.queuedPayloads.first()
+    var payload
+    while (state.queuedPayloads.size() > 0) {
+      payload = state.queuedPayloads.first()
+      if (isPayloadValid(payload)) {
+        break
+      }
+      state.queuedPayloads.dequeue()
+      state.$rPayloadSequenceByPayload.delete(payload)
+      payload = undefined
+    }
+    if (!payload) {
+      return
+    }
     send(payload, state, sendStrategy, {
       $rGeneration: retryGeneration,
       onSuccess: function () {
@@ -113,10 +173,11 @@ function send(payload, state, sendStrategy, responseData) {
   state.$rOngoingRequests.add(ongoingRequest)
   state.bandwidthMonitor.add(payload)
   function handleResponse(response) {
-    if (responseHandled) {
+    if (responseHandled || ongoingRequest.$rRetired) {
       return
     }
     responseHandled = true
+    clearOngoingRequestWatchdog(ongoingRequest)
     state.$rOngoingRequests.delete(ongoingRequest)
     if (ongoingRequest.$rActive) {
       ongoingRequest.$rActive = false
@@ -127,6 +188,17 @@ function send(payload, state, sendStrategy, responseData) {
     }
     if (!shouldRetryRequest(response, state, payload)) {
       state.$rPayloadSequenceByPayload.delete(payload)
+      var permanentDropReason = getPermanentDropReason(
+        response,
+        state,
+        payload
+      )
+      if (permanentDropReason) {
+        notifyPermanentDrop(payload, permanentDropReason)
+        if (!isPayloadValid(payload)) {
+          pruneInvalidPayloads(state)
+        }
+      }
       state.transportStatus = TransportStatus.UP
       onSuccess()
     } else {
@@ -144,8 +216,44 @@ function send(payload, state, sendStrategy, responseData) {
   }
   try {
     ongoingRequest.$rAbort = sendStrategy(payload, handleResponse)
+    if (
+      payload.$rEnforceOrder &&
+      !responseHandled &&
+      !ongoingRequest.$rRetired
+    ) {
+      ongoingRequest.$rWatchdogTimeoutId = setTimeout(function () {
+        ongoingRequest.$rWatchdogTimeoutId = undefined
+        if (responseHandled || ongoingRequest.$rRetired) {
+          return
+        }
+        var abort = ongoingRequest.$rAbort
+        // Settle the retry state before aborting. XHR abort can dispatch a
+        // synchronous loadend with status 0, which must not turn this timeout
+        // into a permanent online http_0 rejection.
+        handleResponse({ status: 0, $rForceRetry: true })
+        abortOngoingRequest(abort)
+      }, ORDERED_REQUEST_TIMEOUT)
+    }
   } catch (e) {
     handleResponse({ status: 0, $rForceRetry: true })
+  }
+}
+
+function clearOngoingRequestWatchdog(ongoingRequest) {
+  if (ongoingRequest.$rWatchdogTimeoutId !== undefined) {
+    clearTimeout(ongoingRequest.$rWatchdogTimeoutId)
+    ongoingRequest.$rWatchdogTimeoutId = undefined
+  }
+}
+
+function abortOngoingRequest(abort) {
+  if (!abort || typeof abort.abort !== 'function') {
+    return
+  }
+  try {
+    abort.abort()
+  } catch (e) {
+    // Transport cleanup must continue when cancellation is unavailable.
   }
 }
 
@@ -202,6 +310,140 @@ function shouldRetryRequest(response, state, payload) {
         response.status >= 500))
   )
 }
+
+function getPermanentDropReason(response, state, payload) {
+  if (
+    state.retryMaxSize > -1 &&
+    payload.retry &&
+    payload.retry.count > state.retryMaxSize
+  ) {
+    return 'retry_exhausted'
+  }
+  if (
+    response.type === 'opaque' ||
+    (response.status >= 200 && response.status < 300)
+  ) {
+    return
+  }
+  return 'http_' + response.status
+}
+
+function notifyPermanentDrop(payload, reason) {
+  if (
+    !payload ||
+    payload.$rPermanentDropNotified ||
+    typeof payload.$rOnPermanentDrop !== 'function'
+  ) {
+    return
+  }
+  payload.$rPermanentDropNotified = true
+  try {
+    payload.$rOnPermanentDrop(reason)
+  } catch (e) {
+    // Transport cleanup and queue progression must not depend on replay
+    // recovery callbacks succeeding.
+  }
+}
+
+function isPayloadValid(payload) {
+  if (!payload || typeof payload.$rIsValid !== 'function') {
+    return true
+  }
+  try {
+    return payload.$rIsValid() !== false
+  } catch (e) {
+    return false
+  }
+}
+
+function enqueueAfterPruningInvalidPayloads(
+  payload,
+  state,
+  enqueueFirst,
+  sendStrategy,
+  endpointUrl,
+  reportError
+) {
+  var enqueue = enqueueFirst ? 'enqueueFirst' : 'enqueue'
+  if (state.queuedPayloads[enqueue](payload)) {
+    return true
+  }
+  var invalidPayloadPruned = pruneInvalidPayloads(state)
+  var queued = state.queuedPayloads[enqueue](payload)
+  resumeAfterInvalidPayloadsPruned(
+    invalidPayloadPruned,
+    state,
+    sendStrategy,
+    endpointUrl,
+    reportError
+  )
+  return queued
+}
+
+function pruneInvalidPayloads(state) {
+  var invalidPayloadPruned = false
+  var queuedPayloads = state.queuedPayloads
+  var validQueuedPayloads = []
+  while (queuedPayloads.size() > 0) {
+    var queuedPayload = queuedPayloads.dequeue()
+    if (isPayloadValid(queuedPayload)) {
+      // Preserve the complete valid queue, including its permitted one-item
+      // overshoot. Re-applying admission while compacting could silently drop
+      // a valid tail after an ordered head crossed the byte watermark.
+      validQueuedPayloads.push(queuedPayload)
+    } else {
+      invalidPayloadPruned = true
+      state.$rPayloadSequenceByPayload.delete(queuedPayload)
+    }
+  }
+  state.queuedPayloads = newPayloadQueue(validQueuedPayloads)
+
+  state.$rOngoingRequests.forEach(function (ongoingRequest) {
+    if (isPayloadValid(ongoingRequest.payload)) {
+      return
+    }
+    invalidPayloadPruned = true
+    ongoingRequest.$rRetired = true
+    clearOngoingRequestWatchdog(ongoingRequest)
+    state.$rOngoingRequests.delete(ongoingRequest)
+    if (ongoingRequest.$rActive) {
+      ongoingRequest.$rActive = false
+      state.bandwidthMonitor.remove(ongoingRequest.payload)
+    }
+    state.$rPayloadSequenceByPayload.delete(ongoingRequest.payload)
+    abortOngoingRequest(ongoingRequest.$rAbort)
+  })
+  return invalidPayloadPruned
+}
+
+function resumeAfterInvalidPayloadsPruned(
+  invalidPayloadPruned,
+  state,
+  sendStrategy,
+  endpointUrl,
+  reportError
+) {
+  if (
+    !invalidPayloadPruned ||
+    state.bandwidthMonitor.ongoingRequestCount > 0
+  ) {
+    return
+  }
+  if (state.$rRetryTimeoutId !== undefined) {
+    clearTimeout(state.$rRetryTimeoutId)
+    state.$rRetryTimeoutId = undefined
+  }
+  state.transportStatus = TransportStatus.UP
+  state.currentBackoffTime = INITIAL_BACKOFF_TIME
+  retryQueuedPayloads(
+    RetryReason.AFTER_SUCCESS,
+    state,
+    sendStrategy,
+    endpointUrl,
+    reportError
+  )
+}
+
 export function newRetryState(retryMaxSize) {
   return {
     transportStatus: TransportStatus.UP,
@@ -228,6 +470,10 @@ export function drainQueuedPayloads(state) {
   var payloads = []
   var drainedPayloads = new Set()
   function appendPayload(payload) {
+    if (!isPayloadValid(payload)) {
+      state.$rPayloadSequenceByPayload.delete(payload)
+      return
+    }
     if (!drainedPayloads.has(payload)) {
       drainedPayloads.add(payload)
       payloads.push(payload)
@@ -236,17 +482,12 @@ export function drainQueuedPayloads(state) {
   state.$rRetryGeneration += 1
   state.$rOngoingRequests.forEach(function (ongoingRequest) {
     appendPayload(ongoingRequest.payload)
+    ongoingRequest.$rRetired = true
+    clearOngoingRequestWatchdog(ongoingRequest)
     if (ongoingRequest.$rActive) {
       ongoingRequest.$rActive = false
       state.bandwidthMonitor.remove(ongoingRequest.payload)
-      var abort = ongoingRequest.$rAbort
-      if (abort && typeof abort.abort === 'function') {
-        try {
-          abort.abort()
-        } catch (e) {
-          // Continue promoting the remaining payloads when cancellation fails.
-        }
-      }
+      abortOngoingRequest(ongoingRequest.$rAbort)
     }
   })
   state.$rOngoingRequests.clear()
@@ -267,16 +508,33 @@ export function drainQueuedPayloads(state) {
   return payloads
 }
 
-function newPayloadQueue() {
-  var queue = []
+function newPayloadQueue(initialPayloads) {
+  var queue = initialPayloads || []
   var head = 0
+  var initialBytesCount = 0
+  for (var index = 0; index < queue.length; index += 1) {
+    initialBytesCount += queue[index].bytesCount
+  }
   return {
-    bytesCount: 0,
+    bytesCount: initialBytesCount,
     enqueue: function (payload) {
       if (this.isFull()) {
         return false
       }
       queue.push(payload)
+      this.bytesCount += payload.bytesCount
+      return true
+    },
+    enqueueFirst: function (payload) {
+      if (this.isFull()) {
+        return false
+      }
+      if (head > 0) {
+        head -= 1
+        queue[head] = payload
+      } else {
+        queue.unshift(payload)
+      }
       this.bytesCount += payload.bytesCount
       return true
     },
@@ -308,8 +566,15 @@ function newPayloadQueue() {
 function newBandwidthMonitor() {
   return {
     ongoingRequestCount: 0,
+    ongoingOrderedRequestCount: 0,
     ongoingByteCount: 0,
     canHandle: function (payload) {
+      if (
+        this.ongoingOrderedRequestCount > 0 ||
+        (payload.$rEnforceOrder && this.ongoingRequestCount > 0)
+      ) {
+        return false
+      }
       return (
         this.ongoingRequestCount === 0 ||
         (this.ongoingByteCount + payload.bytesCount <=
@@ -319,10 +584,16 @@ function newBandwidthMonitor() {
     },
     add: function (payload) {
       this.ongoingRequestCount += 1
+      if (payload.$rEnforceOrder) {
+        this.ongoingOrderedRequestCount += 1
+      }
       this.ongoingByteCount += payload.bytesCount
     },
     remove: function (payload) {
       this.ongoingRequestCount -= 1
+      if (payload.$rEnforceOrder) {
+        this.ongoingOrderedRequestCount -= 1
+      }
       this.ongoingByteCount -= payload.bytesCount
     }
   }

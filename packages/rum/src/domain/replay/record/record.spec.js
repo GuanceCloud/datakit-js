@@ -9,6 +9,7 @@ import {
 import {
   createMutationAddPublicationToken,
   createMutationTasksController,
+  MAX_MUTATION_SERIALIZED_VALUE_CHARACTERS,
   processMutations,
   registerMutationAddPublicationToken
 } from './mutationObserver'
@@ -21,6 +22,7 @@ import { SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT } from './shadowRootsController'
 import { createCanvas2DCommandRecorder } from './canvasCommandCapture'
 import { startCanvasCommandCapture as startRealCanvasCommandCapture } from './canvasCommandObserver'
 import { createCanvasObserver as createRealCanvasObserver } from './canvasObserver'
+import { MAX_QUEUED_MUTATION_RECORDS } from './mutationBatch'
 
 describe('replay/record/record', () => {
   let container
@@ -188,6 +190,933 @@ describe('replay/record/record', () => {
           event.type === RecordType.FullSnapshot
       )
     ).toBeFalse()
+  })
+
+  it('should retry the exact initial baseline transaction after encoder backpressure', () => {
+    jasmine.clock().install()
+    const attemptedBaselines = []
+    let admissionBlocked = true
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        $rEmitBaseline: function (baselineRecords) {
+          attemptedBaselines.push(baselineRecords)
+          return !admissionBlocked
+        },
+        $rWasLastEmitBackpressured: () => admissionBlocked,
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+
+      expect(attemptedBaselines.length).toBe(1)
+      admissionBlocked = false
+      jasmine.clock().tick(32)
+
+      expect(attemptedBaselines.length).toBe(2)
+      expect(attemptedBaselines[1]).toBe(attemptedBaselines[0])
+      attemptedBaselines[1].forEach((record, index) => {
+        expect(record).toBe(attemptedBaselines[0][index])
+      })
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should retry the exact subsequent baseline transaction after encoder backpressure', () => {
+    jasmine.clock().install()
+    const attemptedBaselines = []
+    let captureSubsequent = false
+    let admissionBlocked = false
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        $rEmitBaseline: function (baselineRecords) {
+          if (captureSubsequent) {
+            attemptedBaselines.push(baselineRecords)
+          }
+          return !admissionBlocked
+        },
+        $rWasLastEmitBackpressured: () => admissionBlocked,
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+
+      captureSubsequent = true
+      admissionBlocked = true
+      recorder.takeSubsequentFullSnapshot(12345)
+      expect(attemptedBaselines.length).toBe(1)
+
+      admissionBlocked = false
+      jasmine.clock().tick(32)
+
+      expect(attemptedBaselines.length).toBe(2)
+      expect(attemptedBaselines[1]).toBe(attemptedBaselines[0])
+      attemptedBaselines[1].forEach((record, index) => {
+        expect(record).toBe(attemptedBaselines[0][index])
+      })
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should reject an expired backpressured baseline during direct flush', () => {
+    jasmine.clock().install()
+    let performanceTime = 0
+    spyOn(performance, 'now').and.callFake(() => performanceTime)
+    const attemptedBaselines = []
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    let captureSubsequent = false
+    let admissionBlocked = false
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        $rEmitBaseline: function (baselineRecords) {
+          if (captureSubsequent) {
+            attemptedBaselines.push(baselineRecords)
+          }
+          return !admissionBlocked
+        },
+        $rWasLastEmitBackpressured: () => admissionBlocked,
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        onFullSnapshotFailure
+      })
+
+      captureSubsequent = true
+      admissionBlocked = true
+      recorder.takeSubsequentFullSnapshot(12346)
+      expect(attemptedBaselines.length).toBe(1)
+
+      performanceTime = 30001
+      admissionBlocked = false
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+
+      expect(attemptedBaselines.length).toBe(1)
+      expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+        'full_snapshot_serialization_timeout'
+      )
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should contain a baseline rebuild exception after backpressure', () => {
+    jasmine.clock().install()
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    let observerOptions
+    let admissionBlocked = false
+    let throwOnCanvasReset = false
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        $rEmitBaseline: function () {
+          return !admissionBlocked
+        },
+        $rWasLastEmitBackpressured: () => admissionBlocked,
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        onFullSnapshotFailure,
+        initObservers: function (options) {
+          observerOptions = options
+          return {
+            stop: function () {},
+            flush: function () {},
+            reset: function () {}
+          }
+        },
+        createCanvasObserver: function () {
+          return {
+            snapshot: jasmine.createSpy('snapshot'),
+            reset: function () {
+              if (throwOnCanvasReset) {
+                throw new Error('canvas reset failed')
+              }
+            },
+            stop: jasmine.createSpy('stop')
+          }
+        }
+      })
+
+      admissionBlocked = true
+      recorder.takeSubsequentFullSnapshot(12347)
+      observerOptions.mutationActivityCb(container)
+      throwOnCanvasReset = true
+      admissionBlocked = false
+
+      expect(() => jasmine.clock().tick(32)).not.toThrow()
+      expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+        'full_snapshot_serialization_error'
+      )
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should stop safely when optional snapshot restore throws during direct flush', () => {
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    const stopWebGLObserver = jasmine.createSpy('stopWebGLObserver')
+    let throwOnReset = false
+    const resetWebGLObserver = jasmine
+      .createSpy('resetWebGLObserver')
+      .and.callFake(() => {
+        if (throwOnReset) {
+          throw new Error('webgl reset failed')
+        }
+      })
+    const recorder = record({
+      emit: function () {
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      onFullSnapshotFailure,
+      startCanvasWebGLSnapshotObserver: function () {
+        return {
+          isWebGLCanvas: function () {
+            return false
+          },
+          reset: resetWebGLObserver,
+          stop: stopWebGLObserver
+        }
+      }
+    })
+
+    recorder.scheduleSubsequentFullSnapshot(12348, true)
+    throwOnReset = true
+
+    expect(() => recorder.flushScheduledFullSnapshot()).not.toThrow()
+    expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+      'full_snapshot_abandon_restore_error'
+    )
+    expect(stopWebGLObserver).toHaveBeenCalledTimes(1)
+    recorder.stop()
+  })
+
+  it('should stop safely when optional snapshot timeout restore throws', () => {
+    jasmine.clock().install()
+    let performanceTime = 0
+    spyOn(performance, 'now').and.callFake(() => performanceTime)
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    const stopWebGLObserver = jasmine.createSpy('stopWebGLObserver')
+    let throwOnReset = false
+    const resetWebGLObserver = jasmine
+      .createSpy('resetWebGLObserver')
+      .and.callFake(() => {
+        if (throwOnReset) {
+          throw new Error('webgl reset failed')
+        }
+      })
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        onFullSnapshotFailure,
+        startCanvasWebGLSnapshotObserver: function () {
+          return {
+            isWebGLCanvas: function () {
+              return false
+            },
+            reset: resetWebGLObserver,
+            stop: stopWebGLObserver
+          }
+        }
+      })
+
+      recorder.scheduleSubsequentFullSnapshot(12349, true)
+      throwOnReset = true
+      performanceTime = 30001
+
+      expect(() => jasmine.clock().tick(1)).not.toThrow()
+      expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+        'full_snapshot_abandon_restore_error'
+      )
+      expect(stopWebGLObserver).toHaveBeenCalledTimes(1)
+      const resetCountAfterFailure = resetWebGLObserver.calls.count()
+      jasmine.clock().tick(100)
+      expect(resetWebGLObserver).toHaveBeenCalledTimes(
+        resetCountAfterFailure
+      )
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should rebuild a backpressured baseline when the DOM generation changes', () => {
+    jasmine.clock().install()
+    const attemptedBaselines = []
+    let observerOptions
+    let captureSubsequent = false
+    let admissionBlocked = false
+    let serializerTaskCount = 0
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        $rEmitBaseline: function (baselineRecords) {
+          if (captureSubsequent) {
+            attemptedBaselines.push(baselineRecords)
+          }
+          return !admissionBlocked
+        },
+        $rWasLastEmitBackpressured: () => admissionBlocked,
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        initObservers: function (options) {
+          observerOptions = options
+          return {
+            stop: function () {},
+            flush: function () {
+              return true
+            },
+            reset: function () {}
+          }
+        },
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          return {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              state: container.getAttribute('data-state'),
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 128,
+            advance: function () {
+              return true
+            }
+          }
+        }
+      })
+
+      container.setAttribute('data-state', 'before')
+      captureSubsequent = true
+      admissionBlocked = true
+      recorder.takeSubsequentFullSnapshot(54321)
+      const staleBaseline = attemptedBaselines[0]
+
+      container.setAttribute('data-state', 'after')
+      observerOptions.mutationActivityCb(container)
+      admissionBlocked = false
+      jasmine.clock().tick(32)
+      jasmine.clock().tick(0)
+
+      expect(attemptedBaselines.length).toBe(2)
+      expect(attemptedBaselines[1]).not.toBe(staleBaseline)
+      expect(attemptedBaselines[1][2]).not.toBe(staleBaseline[2])
+      expect(attemptedBaselines[1][2].data.node.state).toBe('after')
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should admit same-task CSSOM before a scheduled snapshot without replaying it twice', () => {
+    jasmine.clock().install()
+    const style = document.createElement('style')
+    container.appendChild(style)
+    const emittedRecords = []
+    let captureSubsequent = false
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function (event) {
+          if (captureSubsequent) {
+            emittedRecords.push(event)
+          }
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+      captureSubsequent = true
+
+      recorder.scheduleSubsequentFullSnapshot(6000, true)
+      style.sheet.insertRule(
+        '.scheduled-cssom { color: rgb(1, 2, 3); }',
+        0
+      )
+
+      const styleSheetRecordsBeforeBaseline = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.StyleSheetRule
+      )
+      expect(styleSheetRecordsBeforeBaseline.length).toBe(1)
+
+      jasmine.clock().tick(1)
+
+      const fullSnapshot = emittedRecords.find(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(fullSnapshot).toBeDefined()
+      expect(JSON.stringify(fullSnapshot)).toContain('.scheduled-cssom')
+      expect(
+        emittedRecords.indexOf(styleSheetRecordsBeforeBaseline[0])
+      ).toBeLessThan(emittedRecords.indexOf(fullSnapshot))
+      expect(fullSnapshot.timestamp).toBeGreaterThanOrEqual(
+        styleSheetRecordsBeforeBaseline[0].timestamp
+      )
+      expect(
+        emittedRecords.filter(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.StyleSheetRule
+        )
+      ).toEqual(styleSheetRecordsBeforeBaseline)
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should rebuild a backpressured baseline after ignored CSSOM state changes', () => {
+    jasmine.clock().install()
+    const style = document.createElement('style')
+    container.appendChild(style)
+    style.sheet.insertRule('.rule-a { color: red; }', 0)
+    style.sheet.insertRule('.rule-b { color: blue; }', 1)
+    const attemptedBaselines = []
+    const emittedRecords = []
+    let captureSubsequent = false
+    let admissionBlocked = false
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function (event) {
+          if (captureSubsequent) {
+            emittedRecords.push(event)
+          }
+          return true
+        },
+        $rEmitBaseline: function (baselineRecords) {
+          if (captureSubsequent) {
+            attemptedBaselines.push(baselineRecords)
+          }
+          return !admissionBlocked
+        },
+        $rWasLastEmitBackpressured: function () {
+          return admissionBlocked
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+      captureSubsequent = true
+      admissionBlocked = true
+
+      recorder.takeSubsequentFullSnapshot(6100)
+
+      expect(attemptedBaselines.length).toBe(1)
+      const staleBaseline = attemptedBaselines[0]
+      expect(JSON.stringify(staleBaseline)).toContain('.rule-a')
+      expect(JSON.stringify(staleBaseline)).not.toContain(
+        '.rule-inserted'
+      )
+
+      style.sheet.insertRule(
+        '.rule-inserted { color: green; }',
+        1
+      )
+      style.sheet.deleteRule(0)
+      expect(
+        emittedRecords.filter(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.StyleSheetRule
+        ).length
+      ).toBe(2)
+
+      admissionBlocked = false
+      jasmine.clock().tick(32)
+      jasmine.clock().tick(0)
+
+      expect(attemptedBaselines.length).toBe(2)
+      expect(attemptedBaselines[1]).not.toBe(staleBaseline)
+      const acceptedCss = JSON.stringify(attemptedBaselines[1])
+      expect(acceptedCss).not.toContain('.rule-a')
+      expect(acceptedCss).toContain('.rule-inserted')
+      expect(acceptedCss).toContain('.rule-b')
+      expect(acceptedCss.indexOf('.rule-inserted')).toBeLessThan(
+        acceptedCss.indexOf('.rule-b')
+      )
+      expect(
+        emittedRecords.filter(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.StyleSheetRule
+        ).length
+      ).toBe(2)
+
+      style.sheet.deleteRule(0)
+
+      const laterStyleSheetRecords = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.StyleSheetRule
+      )
+      expect(laterStyleSheetRecords.length).toBe(3)
+      expect(laterStyleSheetRecords[2].data).toEqual(
+        jasmine.objectContaining({
+          removes: [{ index: 0 }]
+        })
+      )
+      expect(style.sheet.cssRules.length).toBe(1)
+      expect(style.sheet.cssRules[0].selectorText).toBe('.rule-b')
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should restore CSSOM state to the old replay tail when an optional snapshot is abandoned', () => {
+    const style = document.createElement('style')
+    container.appendChild(style)
+    style.sheet.insertRule('.rule-before { color: red; }', 0)
+    const emittedRecords = []
+    let captureSubsequent = false
+    const recorder = record({
+      emit: function (event) {
+        if (captureSubsequent) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureSubsequent = true
+
+    try {
+      recorder.scheduleSubsequentFullSnapshot(6200, true)
+      style.sheet.insertRule('.rule-during { color: green; }', 1)
+
+      expect(
+        emittedRecords.filter(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.StyleSheetRule
+        ).length
+      ).toBe(1)
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+
+      expect(
+        emittedRecords.some(
+          (event) => event.type === RecordType.FullSnapshot
+        )
+      ).toBeFalse()
+      let styleSheetRecords = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.StyleSheetRule
+      )
+      expect(styleSheetRecords.length).toBe(1)
+      expect(styleSheetRecords[0].data).toEqual(
+        jasmine.objectContaining({
+          adds: [
+            {
+              rule: '.rule-during { color: green; }',
+              index: 1
+            }
+          ]
+        })
+      )
+
+      style.sheet.deleteRule(0)
+      styleSheetRecords = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.StyleSheetRule
+      )
+      expect(styleSheetRecords.length).toBe(2)
+      expect(styleSheetRecords[1].data).toEqual(
+        jasmine.objectContaining({
+          removes: [{ index: 0 }]
+        })
+      )
+      expect(style.sheet.cssRules.length).toBe(1)
+      expect(style.sheet.cssRules[0].selectorText).toBe('.rule-during')
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should restore input state to the old replay tail when an optional snapshot is abandoned', () => {
+    jasmine.clock().install()
+    const input = document.createElement('input')
+    input.value = 'before'
+    container.appendChild(input)
+    const emittedRecords = []
+    let captureSubsequent = false
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function (event) {
+          if (captureSubsequent) {
+            emittedRecords.push(event)
+          }
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+      captureSubsequent = true
+
+      recorder.scheduleSubsequentFullSnapshot(6300, true)
+      input.value = 'during-optional-snapshot'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+
+      expect(
+        emittedRecords.filter(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Input
+        ).length
+      ).toBe(1)
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+
+      const inputRecords = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Input
+      )
+      expect(inputRecords.length).toBe(1)
+      expect(inputRecords[0].data).toEqual(
+        jasmine.objectContaining({
+          text: 'during-optional-snapshot'
+        })
+      )
+
+      jasmine.clock().tick(0)
+      expect(
+        emittedRecords.filter(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Input
+        ).length
+      ).toBe(1)
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should admit a real mandatory-snapshot interaction before its baseline', () => {
+    jasmine.clock().install()
+    const button = document.createElement('button')
+    button.textContent = 'mandatory-target'
+    container.appendChild(button)
+    const emittedRecords = []
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => {
+          emittedRecords.push(event)
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+      emittedRecords.length = 0
+
+      recorder.scheduleSubsequentFullSnapshot(6400, false)
+      button.dispatchEvent(
+        new MouseEvent('click', {
+          bubbles: true,
+          clientX: 12,
+          clientY: 24
+        })
+      )
+
+      const interaction = emittedRecords.find(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.MouseInteraction
+      )
+      expect(interaction).toBeDefined()
+      expect(
+        emittedRecords.some(
+          (event) => event.type === RecordType.FullSnapshot
+        )
+      ).toBeFalse()
+
+      jasmine.clock().tick(1)
+
+      const fullSnapshot = emittedRecords.find(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(fullSnapshot).toBeDefined()
+      expect(emittedRecords.indexOf(interaction)).toBeLessThan(
+        emittedRecords.indexOf(fullSnapshot)
+      )
+      expect(interaction.timestamp).toBeLessThanOrEqual(
+        fullSnapshot.timestamp
+      )
+      expect(JSON.stringify(fullSnapshot)).toContain('mandatory-target')
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should preserve interaction order when DOM activity promotes an optional snapshot', () => {
+    jasmine.clock().install()
+    const button = document.createElement('button')
+    button.textContent = 'ordered-target'
+    container.appendChild(button)
+    const emittedRecords = []
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => {
+          emittedRecords.push(event)
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+      emittedRecords.length = 0
+
+      recorder.scheduleSubsequentFullSnapshot(6500, true)
+      button.dispatchEvent(
+        new MouseEvent('click', {
+          bubbles: true,
+          clientX: 11,
+          clientY: 21
+        })
+      )
+      button.setAttribute('data-between-clicks', 'captured')
+      button.dispatchEvent(
+        new MouseEvent('click', {
+          bubbles: true,
+          clientX: 33,
+          clientY: 43
+        })
+      )
+
+      const interactionsBeforeFlush = emittedRecords.filter(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.MouseInteraction
+      )
+      expect(
+        interactionsBeforeFlush.map((event) => event.data.x)
+      ).toEqual([11, 33])
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+
+      const fullSnapshot = emittedRecords.find(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(fullSnapshot).toBeDefined()
+      expect(JSON.stringify(fullSnapshot)).toContain(
+        'data-between-clicks'
+      )
+      expect(
+        interactionsBeforeFlush.every(
+          (event) =>
+            emittedRecords.indexOf(event) <
+              emittedRecords.indexOf(fullSnapshot) &&
+            event.timestamp <= fullSnapshot.timestamp
+        )
+      ).toBeTrue()
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should refresh a backpressured baseline timestamp without reserializing for a stateless event', () => {
+    jasmine.clock().install()
+    const emittedRecords = []
+    const attemptedBaselines = []
+    let observerOptions
+    let serializerTaskCount = 0
+    let captureSubsequent = false
+    let admissionBlocked = false
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => {
+          if (captureSubsequent) {
+            emittedRecords.push(event)
+          }
+          return true
+        },
+        $rEmitBaseline: (baselineRecords) => {
+          if (captureSubsequent) {
+            attemptedBaselines.push(baselineRecords)
+          }
+          if (admissionBlocked) {
+            return false
+          }
+          if (captureSubsequent) {
+            emittedRecords.push(...baselineRecords)
+          }
+          return true
+        },
+        $rWasLastEmitBackpressured: () => admissionBlocked,
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        initObservers: function (options) {
+          observerOptions = options
+          return {
+            stop: function () {},
+            flush: function () {
+              return true
+            },
+            reset: function () {}
+          }
+        },
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          return {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 128,
+            advance: function () {
+              return true
+            }
+          }
+        }
+      })
+      const serializerTasksBeforeSubsequent = serializerTaskCount
+      captureSubsequent = true
+      admissionBlocked = true
+
+      recorder.takeSubsequentFullSnapshot(7000, true)
+      expect(attemptedBaselines.length).toBe(1)
+      expect(serializerTaskCount).toBe(
+        serializerTasksBeforeSubsequent + 1
+      )
+
+      const interactionRecord = {
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 7001,
+        data: {
+          source: IncrementalSource.MouseInteraction,
+          id: 1,
+          type: 0,
+          x: 1,
+          y: 2
+        }
+      }
+      observerOptions.mouseInteractionCb(interactionRecord)
+      admissionBlocked = false
+      jasmine.clock().tick(32)
+
+      expect(attemptedBaselines.length).toBe(2)
+      expect(serializerTaskCount).toBe(
+        serializerTasksBeforeSubsequent + 1
+      )
+      const fullSnapshot = emittedRecords.find(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(emittedRecords.indexOf(interactionRecord)).toBeLessThan(
+        emittedRecords.indexOf(fullSnapshot)
+      )
+      expect(fullSnapshot.timestamp).toBe(7001)
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should continue an initial full snapshot past one 50k-node slice', () => {
@@ -441,6 +1370,135 @@ describe('replay/record/record', () => {
     }
   })
 
+  it('should abandon an oversized best-effort full snapshot and keep recording', () => {
+    jasmine.clock().install()
+    const emittedRecords = []
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    let observerOptions
+    let serializerTaskCount = 0
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function (event) {
+          emittedRecords.push(event)
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        onFullSnapshotFailure,
+        initObservers: function (options) {
+          observerOptions = options
+          return {
+            stop: function () {},
+            flush: function () {},
+            reset: function () {}
+          }
+        },
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          const task = {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 1,
+            advance: function (_deadline, _maxNodeCount, maxBytes) {
+              if (serializerTaskCount === 1) {
+                return true
+              }
+              task.approxBytes = maxBytes
+              task.isMaxApproxBytesReached = true
+              return false
+            }
+          }
+          return task
+        }
+      })
+      emittedRecords.length = 0
+
+      recorder.takeSubsequentFullSnapshot(1238, true)
+      jasmine.clock().tick(1)
+
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+      observerOptions.inputCb({ id: 1, text: 'still-recording' })
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Input
+        )
+      ).toBeTrue()
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should not let a best-effort request replace a pending mandatory snapshot', () => {
+    jasmine.clock().install()
+    const onMandatoryFullSnapshotStarted = jasmine.createSpy(
+      'onMandatoryFullSnapshotStarted'
+    )
+    let serializerTaskCount = 0
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        $rOnMandatoryFullSnapshotStarted:
+          onMandatoryFullSnapshotStarted,
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          return {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 1,
+            advance: function () {
+              return serializerTaskCount === 1
+            }
+          }
+        }
+      })
+
+      recorder.scheduleSubsequentFullSnapshot(2000, false, true)
+      expect(serializerTaskCount).toBe(2)
+      expect(
+        onMandatoryFullSnapshotStarted
+      ).toHaveBeenCalledTimes(1)
+
+      recorder.takeSubsequentFullSnapshot(3000, true)
+
+      expect(serializerTaskCount).toBe(2)
+      expect(
+        onMandatoryFullSnapshotStarted
+      ).toHaveBeenCalledTimes(1)
+    } finally {
+      if (recorder) {
+        recorder.stop(undefined, true)
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
   it('should restart an initial snapshot after ignored input state changes', () => {
     jasmine.clock().install()
     const checkbox = document.createElement('input')
@@ -571,6 +1629,83 @@ describe('replay/record/record', () => {
           event.data.source === IncrementalSource.Mutation
       )
     ).toBeFalse()
+  })
+
+  it('should not classify a permanent baseline rejection from stale local backpressure', () => {
+    jasmine.clock().install()
+    let observerOptions
+    let transportBackpressured = false
+    let rejectSubsequentBaseline = false
+    const attemptedBaselines = []
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    let recorder
+    try {
+      recorder = record({
+        emit: function (event) {
+          if (
+            transportBackpressured &&
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Input
+          ) {
+            return false
+          }
+          return true
+        },
+        $rEmitBaseline: function (baselineRecords) {
+          if (rejectSubsequentBaseline) {
+            attemptedBaselines.push(baselineRecords)
+            return false
+          }
+          return true
+        },
+        $rWasLastEmitBackpressured: function () {
+          return transportBackpressured
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        onFullSnapshotFailure,
+        initObservers: function (options) {
+          observerOptions = options
+          return {
+            stop: function () {},
+            flush: function () {
+              return true
+            },
+            reset: function () {}
+          }
+        }
+      })
+
+      transportBackpressured = true
+      observerOptions.inputCb({ id: 1, text: 'deferred' })
+      transportBackpressured = false
+      observerOptions.mutationCb({
+        adds: [],
+        removes: [],
+        texts: [{ id: 2, value: 'blocked-by-local-barrier' }],
+        attributes: []
+      })
+      recorder.flushMutations()
+
+      rejectSubsequentBaseline = true
+      recorder.takeSubsequentFullSnapshot(1236)
+
+      expect(attemptedBaselines.length).toBe(1)
+      expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+        'full_snapshot_admission_rejected'
+      )
+      jasmine.clock().tick(64)
+      expect(attemptedBaselines.length).toBe(1)
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should keep a rejected structural mutation unpublished and request a full snapshot', () => {
@@ -722,6 +1857,649 @@ describe('replay/record/record', () => {
       RecordType.FullSnapshot
     ])
     recorder.stop()
+  })
+
+  it('should retry direct input and scroll records with exact object identity', () => {
+    jasmine.clock().install()
+    const attemptsBySource = {}
+    let observerOptions
+    let backpressuredSource
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          (event.data.source === IncrementalSource.Input ||
+            event.data.source === IncrementalSource.Scroll)
+        ) {
+          const sourceAttempts =
+            attemptsBySource[event.data.source] || []
+          sourceAttempts.push(event)
+          attemptsBySource[event.data.source] = sourceAttempts
+          if (event.data.source === backpressuredSource) {
+            return false
+          }
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () =>
+        backpressuredSource !== undefined,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          stop: jasmine.createSpy('stopObservers'),
+          flush: jasmine.createSpy('flushObservers'),
+          reset: jasmine.createSpy('resetObservers')
+        }
+      }
+    })
+    captureEmits = true
+
+    try {
+      backpressuredSource = IncrementalSource.Input
+      observerOptions.inputCb({
+        id: 1,
+        text: 'typed-under-backpressure',
+        isChecked: false
+      })
+      expect(attemptsBySource[IncrementalSource.Input].length).toBe(1)
+
+      backpressuredSource = undefined
+      jasmine.clock().tick(32)
+      expect(attemptsBySource[IncrementalSource.Input].length).toBe(2)
+      expect(attemptsBySource[IncrementalSource.Input][1]).toBe(
+        attemptsBySource[IncrementalSource.Input][0]
+      )
+
+      backpressuredSource = IncrementalSource.Scroll
+      observerOptions.scrollCb({ id: 1, x: 0, y: 24 })
+      expect(attemptsBySource[IncrementalSource.Scroll].length).toBe(1)
+
+      backpressuredSource = undefined
+      jasmine.clock().tick(32)
+      expect(attemptsBySource[IncrementalSource.Scroll].length).toBe(2)
+      expect(attemptsBySource[IncrementalSource.Scroll][1]).toBe(
+        attemptsBySource[IncrementalSource.Scroll][0]
+      )
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should supersede a preexisting direct state retry with a fresh snapshot', () => {
+    jasmine.clock().install()
+    const attemptedInputRecords = []
+    const acceptedInputRecords = []
+    const emittedRecords = []
+    let observerOptions
+    let inputBackpressured = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Input
+        ) {
+          attemptedInputRecords.push(event)
+          if (inputBackpressured) {
+            return false
+          }
+          acceptedInputRecords.push(event)
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => inputBackpressured,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          stop: jasmine.createSpy('stopObservers'),
+          flush: jasmine.createSpy('flushObservers'),
+          reset: jasmine.createSpy('resetObservers')
+        }
+      }
+    })
+    captureEmits = true
+
+    try {
+      observerOptions.inputCb({
+        id: 1,
+        text: 'state-before-periodic-snapshot',
+        isChecked: false
+      })
+      expect(attemptedInputRecords.length).toBe(1)
+
+      const fullSnapshotTimestamp =
+        attemptedInputRecords[0].timestamp + 1
+      recorder.takeSubsequentFullSnapshot(fullSnapshotTimestamp)
+      expect(attemptedInputRecords.length).toBe(2)
+      expect(attemptedInputRecords[1]).toBe(attemptedInputRecords[0])
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.FullSnapshot &&
+            event.timestamp === fullSnapshotTimestamp
+        )
+      ).toBeTrue()
+
+      inputBackpressured = false
+      jasmine.clock().tick(100)
+      expect(acceptedInputRecords).toEqual([])
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should supersede a preexisting direct canvas retry with a fresh snapshot', () => {
+    jasmine.clock().install()
+    const attemptedCanvasRecords = []
+    const acceptedCanvasRecords = []
+    const emittedRecords = []
+    let emitCanvasRecord
+    let canvasBackpressured = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.CanvasMutation
+        ) {
+          attemptedCanvasRecords.push(event)
+          if (canvasBackpressured) {
+            return false
+          }
+          acceptedCanvasRecords.push(event)
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => canvasBackpressured,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        emitCanvasRecord = options.emit
+        return {
+          snapshot: jasmine.createSpy('snapshot'),
+          reset: jasmine.createSpy('resetCanvasObserver'),
+          stop: jasmine.createSpy('stopCanvasObserver')
+        }
+      }
+    })
+    captureEmits = true
+    const canvasRecord = {
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 2100,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 1,
+        type: '2D',
+        commands: [],
+        encodedBytesCount: 0
+      }
+    }
+
+    try {
+      emitCanvasRecord(canvasRecord)
+      expect(attemptedCanvasRecords).toEqual([canvasRecord])
+
+      recorder.takeSubsequentFullSnapshot(2200)
+      expect(attemptedCanvasRecords).toEqual([
+        canvasRecord,
+        canvasRecord
+      ])
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.FullSnapshot &&
+            event.timestamp === 2200
+        )
+      ).toBeTrue()
+
+      canvasBackpressured = false
+      jasmine.clock().tick(100)
+      expect(acceptedCanvasRecords).toEqual([])
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should admit previous-tail state before a replacement snapshot', () => {
+    const emittedRecords = []
+    let emitCanvasRecord
+    let observerOptions
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        emitCanvasRecord = options.emit
+        return {
+          snapshot: jasmine.createSpy('snapshot'),
+          reset: jasmine.createSpy('resetCanvasObserver'),
+          stop: jasmine.createSpy('stopCanvasObserver')
+        }
+      },
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          stop: jasmine.createSpy('stopObservers'),
+          flush: jasmine.createSpy('flushObservers'),
+          reset: jasmine.createSpy('resetObservers')
+        }
+      }
+    })
+    captureEmits = true
+    const canvasRecord = {
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 2302,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 1,
+        type: '2D',
+        commands: [],
+        encodedBytesCount: 0
+      }
+    }
+
+    try {
+      recorder.scheduleSubsequentFullSnapshot(2300)
+      observerOptions.inputCb({
+        id: 1,
+        text: 'state-during-snapshot',
+        isChecked: false
+      })
+      emitCanvasRecord(canvasRecord)
+
+      expect(emittedRecords).toEqual([
+        jasmine.objectContaining({
+          data: jasmine.objectContaining({
+            source: IncrementalSource.Input
+          })
+        }),
+        canvasRecord
+      ])
+      recorder.takeSubsequentFullSnapshot(2300)
+
+      const fullSnapshotIndex = emittedRecords.findIndex(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      const inputIndex = emittedRecords.findIndex(
+        (event) =>
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Input
+      )
+      const canvasIndex = emittedRecords.indexOf(canvasRecord)
+      expect(fullSnapshotIndex).toBeGreaterThanOrEqual(0)
+      expect(inputIndex).toBeLessThan(fullSnapshotIndex)
+      expect(canvasIndex).toBeGreaterThan(inputIndex)
+      expect(canvasIndex).toBeLessThan(fullSnapshotIndex)
+      expect(
+        emittedRecords[fullSnapshotIndex].timestamp
+      ).toBeGreaterThanOrEqual(emittedRecords[inputIndex].timestamp)
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should drain old transaction records before a replacement snapshot', () => {
+    const emittedRecords = []
+    let emitCanvasRecord
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        emitCanvasRecord = options.emit
+        return {
+          snapshot: jasmine.createSpy('snapshot'),
+          reset: jasmine.createSpy('resetCanvasObserver'),
+          stop: jasmine.createSpy('stopCanvasObserver')
+        }
+      }
+    })
+    captureEmits = true
+    const oldCanvasRecord = {
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 2401,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 1,
+        type: '2D',
+        commands: [],
+        encodedBytesCount: 0
+      }
+    }
+
+    try {
+      recorder.scheduleSubsequentFullSnapshot(2400)
+      emitCanvasRecord(oldCanvasRecord)
+      expect(emittedRecords).toEqual([oldCanvasRecord])
+
+      recorder.takeSubsequentFullSnapshot(2500)
+
+      const oldCanvasIndex = emittedRecords.indexOf(oldCanvasRecord)
+      const replacementSnapshotIndex = emittedRecords.findIndex(
+        (event) =>
+          event.type === RecordType.FullSnapshot &&
+          event.timestamp === 2500
+      )
+      expect(oldCanvasIndex).toBeGreaterThanOrEqual(0)
+      expect(replacementSnapshotIndex).toBeGreaterThan(oldCanvasIndex)
+      expect(
+        emittedRecords.slice(replacementSnapshotIndex + 1)
+      ).not.toContain(oldCanvasRecord)
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should bound pre-snapshot drain and make retired state non-discardable', () => {
+    jasmine.clock().install()
+    const attemptedCanvasRecords = []
+    const emittedRecords = []
+    let emitCanvasRecord
+    let canvasBackpressured = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.CanvasMutation
+        ) {
+          attemptedCanvasRecords.push(event)
+          if (canvasBackpressured) {
+            return false
+          }
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => canvasBackpressured,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        emitCanvasRecord = options.emit
+        return {
+          snapshot: jasmine.createSpy('snapshot'),
+          reset: jasmine.createSpy('resetCanvasObserver'),
+          stop: jasmine.createSpy('stopCanvasObserver')
+        }
+      }
+    })
+    captureEmits = true
+    const firstCanvasRecord = {
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 3000,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 1,
+        type: '2D',
+        commands: [],
+        encodedBytesCount: 0
+      }
+    }
+
+    try {
+      emitCanvasRecord(firstCanvasRecord)
+      for (let index = 1; index <= 10; index += 1) {
+        emitCanvasRecord({
+          type: RecordType.IncrementalSnapshot,
+          timestamp: 3000 + index,
+          data: {
+            source: IncrementalSource.CanvasMutation,
+            id: 1,
+            type: '2D',
+            commands: [],
+            encodedBytesCount: 0
+          }
+        })
+      }
+      expect(attemptedCanvasRecords).toEqual([firstCanvasRecord])
+
+      let performanceCallCount = 0
+      spyOn(performance, 'now').and.callFake(() => {
+        performanceCallCount += 1
+        return performanceCallCount === 1 ? 0 : 5
+      })
+      canvasBackpressured = false
+      recorder.scheduleSubsequentFullSnapshot(4000, true)
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+
+      // One cached record is retried, then the 4 ms slice retires the rest.
+      expect(attemptedCanvasRecords).toEqual([
+        firstCanvasRecord,
+        firstCanvasRecord
+      ])
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.FullSnapshot &&
+            event.timestamp === 4000
+        )
+      ).toBeTrue()
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should replace a permanently rejected direct state record with a baseline', () => {
+    const emittedRecords = []
+    const attemptedInputRecords = []
+    let observerOptions
+    let rejectInput = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          rejectInput &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Input
+        ) {
+          attemptedInputRecords.push(event)
+          return false
+        }
+        emittedRecords.push(event)
+        return true
+      },
+      $rWasLastEmitBackpressured: () => false,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          stop: jasmine.createSpy('stopObservers'),
+          flush: jasmine.createSpy('flushObservers'),
+          reset: jasmine.createSpy('resetObservers')
+        }
+      }
+    })
+    emittedRecords.length = 0
+    rejectInput = true
+
+    try {
+      observerOptions.inputCb({
+        id: 1,
+        text: 'permanently-rejected',
+        isChecked: false
+      })
+
+      expect(attemptedInputRecords.length).toBe(1)
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+      expect(
+        emittedRecords.some(
+          (event) => event.type === RecordType.FullSnapshot
+        )
+      ).toBeTrue()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should drop a permanently rejected direct stateless record', () => {
+    jasmine.clock().install()
+    let observerOptions
+    let rejectInteraction = false
+    const attemptedRecords = []
+    const interactionRecord = {
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 1001,
+      data: {
+        source: IncrementalSource.MouseInteraction,
+        id: 1,
+        type: 0
+      }
+    }
+    const recorder = record({
+      emit: (event) => {
+        if (rejectInteraction && event === interactionRecord) {
+          attemptedRecords.push(event)
+          return false
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => false,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          stop: jasmine.createSpy('stopObservers'),
+          flush: jasmine.createSpy('flushObservers'),
+          reset: jasmine.createSpy('resetObservers')
+        }
+      }
+    })
+    rejectInteraction = true
+
+    try {
+      observerOptions.mouseInteractionCb(interactionRecord)
+      jasmine.clock().tick(100)
+
+      expect(attemptedRecords).toEqual([interactionRecord])
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should keep stateless interaction checks side-effect free for pending adds', () => {
+    let observerOptions
+    const refreshPendingRoot = jasmine.createSpy(
+      'refreshAndFlushPendingRootForNode'
+    )
+    const recorder = record({
+      emit: function () {
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          refreshAndFlushPendingRootForNode: refreshPendingRoot,
+          stop: jasmine.createSpy('stopObservers'),
+          flush: jasmine.createSpy('flushObservers'),
+          reset: jasmine.createSpy('resetObservers')
+        }
+      }
+    })
+    const pendingNode = document.createElement('div')
+    container.appendChild(pendingNode)
+    const publicationToken = createMutationAddPublicationToken()
+    observerOptions.mutationNodeSerializationCb(
+      pendingNode,
+      container,
+      publicationToken
+    )
+
+    try {
+      // Mouse move, click and frustration all use this strict predicate. It
+      // only observes published membership and must not advance/rebuild the
+      // pending serializer.
+      expect(
+        observerOptions.isNodeIgnoredForStatelessObserver(pendingNode)
+      ).toBeTrue()
+      expect(
+        observerOptions.isNodeIgnoredForStatelessObserver(pendingNode)
+      ).toBeTrue()
+      expect(
+        observerOptions.isNodeIgnoredForStatelessObserver(pendingNode)
+      ).toBeTrue()
+      expect(refreshPendingRoot).not.toHaveBeenCalled()
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+
+      // Stateful input/scroll/media/CSS checks retain the ordered refresh
+      // path so their state can bind to the eventual add admission.
+      expect(observerOptions.isNodeIgnored(pendingNode)).toBeTrue()
+      expect(refreshPendingRoot).toHaveBeenCalledOnceWith(pendingNode)
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      recorder.stop()
+    }
   })
 
   it('should retry the exact same mutation record until encoder backpressure clears', () => {
@@ -900,6 +2678,1091 @@ describe('replay/record/record', () => {
     }
   })
 
+  it('should publish queued-node input and CSSOM state at its structural boundary', () => {
+    const acceptedSources = []
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot
+        ) {
+          if (
+            event.data.source === IncrementalSource.Mutation &&
+            admissionBlocked
+          ) {
+            return false
+          }
+          acceptedSources.push(event.data.source)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const input = document.createElement('input')
+    const style = document.createElement('style')
+    container.appendChild(input)
+    container.appendChild(style)
+
+    try {
+      recorder.flushMutations()
+      expect(recorder.getSerializedNodeIdForDebug(input)).toBeUndefined()
+
+      input.value = 'typed-before-add-admission'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      style.sheet.insertRule('body { color: rgb(1, 2, 3); }', 0)
+
+      input.setAttribute('data-after-state', 'true')
+      recorder.flushMutations()
+      expect(acceptedSources).toEqual([])
+
+      admissionBlocked = false
+      recorder.flushMutations()
+
+      expect(acceptedSources).toEqual([
+        IncrementalSource.Mutation,
+        IncrementalSource.Input,
+        IncrementalSource.StyleSheetRule,
+        IncrementalSource.Mutation
+      ])
+      expect(recorder.getSerializedNodeIdForDebug(input)).toEqual(
+        jasmine.any(Number)
+      )
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should flush the mutation emit buffer before queued-node state', async () => {
+    jasmine.clock().install()
+    const idleCallbacks = []
+    spyOn(window, 'requestIdleCallback').and.callFake((callback) => {
+      idleCallbacks.push(callback)
+      return idleCallbacks.length
+    })
+    spyOn(window, 'cancelIdleCallback').and.callFake(() => {})
+    const acceptedSources = []
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot
+        ) {
+          acceptedSources.push(event.data.source)
+        }
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const input = document.createElement('input')
+    const style = document.createElement('style')
+    container.appendChild(input)
+    container.appendChild(style)
+
+    try {
+      // Deliver the native MutationObserver callback and its throttled batch,
+      // but stop before record()'s 16 ms mutation emit timer fires.
+      await Promise.resolve()
+      expect(idleCallbacks.length).toBeGreaterThan(0)
+      idleCallbacks.splice(0).forEach((callback) => {
+        callback({
+          didTimeout: false,
+          timeRemaining: () => 50
+        })
+      })
+      jasmine.clock().tick(48)
+      expect(acceptedSources).toEqual([])
+
+      input.value = 'state-before-emit-timer'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      style.sheet.insertRule('body { color: blue; }', 0)
+
+      expect(acceptedSources).toEqual([
+        IncrementalSource.Mutation,
+        IncrementalSource.Input,
+        IncrementalSource.StyleSheetRule
+      ])
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should admit earlier mutations before a future deferred barrier', () => {
+    const acceptedSources = []
+    let attemptedMutationCount = 0
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot
+        ) {
+          if (event.data.source === IncrementalSource.Mutation) {
+            attemptedMutationCount += 1
+            if (admissionBlocked) {
+              return false
+            }
+          }
+          acceptedSources.push(event.data.source)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const earlierNode = document.createElement('div')
+    earlierNode.textContent = 'a'.repeat(70000)
+    const barrierInput = document.createElement('input')
+    barrierInput.setAttribute('data-padding', 'b'.repeat(70000))
+    container.appendChild(earlierNode)
+    container.appendChild(barrierInput)
+
+    try {
+      recorder.flushMutations()
+      expect(attemptedMutationCount).toBe(1)
+
+      barrierInput.value = 'state-after-b'
+      barrierInput.dispatchEvent(new Event('input', { bubbles: true }))
+
+      admissionBlocked = false
+      recorder.flushMutations()
+
+      expect(acceptedSources).toEqual([
+        IncrementalSource.Mutation,
+        IncrementalSource.Mutation,
+        IncrementalSource.Input
+      ])
+      expect(recorder.getSerializedNodeIdForDebug(earlierNode)).toEqual(
+        jasmine.any(Number)
+      )
+      expect(recorder.getSerializedNodeIdForDebug(barrierInput)).toEqual(
+        jasmine.any(Number)
+      )
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should not merge a later pure add across a deferred barrier', () => {
+    const acceptedRecords = []
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot
+        ) {
+          if (
+            event.data.source === IncrementalSource.Mutation &&
+            admissionBlocked
+          ) {
+            return false
+          }
+          acceptedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const earlierNode = document.createElement('div')
+    earlierNode.textContent = 'a'.repeat(70000)
+    const barrierInput = document.createElement('input')
+    barrierInput.setAttribute('data-role', 'barrier-b')
+    barrierInput.setAttribute('data-padding', 'b'.repeat(40000))
+    container.appendChild(earlierNode)
+    container.appendChild(barrierInput)
+
+    try {
+      recorder.flushMutations()
+
+      barrierInput.value = 'event-x'
+      barrierInput.dispatchEvent(new Event('input', { bubbles: true }))
+
+      const laterNode = document.createElement('div')
+      laterNode.setAttribute('data-role', 'later-c')
+      container.appendChild(laterNode)
+      recorder.flushMutations()
+
+      admissionBlocked = false
+      recorder.flushMutations()
+
+      expect(
+        acceptedRecords.map((event) => event.data.source)
+      ).toEqual([
+        IncrementalSource.Mutation,
+        IncrementalSource.Mutation,
+        IncrementalSource.Input,
+        IncrementalSource.Mutation
+      ])
+      expect(
+        acceptedRecords[1].data.adds.some(
+          (add) => add.node.attributes['data-role'] === 'later-c'
+        )
+      ).toBeFalse()
+      expect(acceptedRecords[3].data.adds).toContain(
+        jasmine.objectContaining({
+          node: jasmine.objectContaining({
+            attributes: jasmine.objectContaining({
+              'data-role': 'later-c'
+            })
+          })
+        })
+      )
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should publish cached canvas commands before a later DOM barrier', () => {
+    const acceptedRecords = []
+    const cachedCanvasRecord = {
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 1200,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 777,
+        type: '2D',
+        commands: [
+          {
+            property: 'fillRect',
+            args: [1, 2, 3, 4]
+          }
+        ],
+        encodedBytesCount: 16
+      }
+    }
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot
+        ) {
+          if (
+            event.data.source === IncrementalSource.Mutation &&
+            admissionBlocked
+          ) {
+            return false
+          }
+          acceptedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      startCanvasCommandCapture: function (options) {
+        return {
+          $rRetryPublishedCanvas: function () {
+            options.emit(cachedCanvasRecord)
+          },
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy(
+            'scanExistingCanvases'
+          ),
+          stop: jasmine.createSpy('stopCanvasCommandCapture')
+        }
+      }
+    })
+    captureEmits = true
+
+    const canvas = document.createElement('canvas')
+    canvas.setAttribute('data-role', 'canvas-a')
+    container.appendChild(canvas)
+
+    try {
+      recorder.flushMutations()
+      expect(acceptedRecords).toEqual([])
+
+      const laterInput = document.createElement('input')
+      laterInput.setAttribute('data-role', 'later-b')
+      container.appendChild(laterInput)
+      recorder.flushMutations()
+      laterInput.value = 'state-after-b'
+      laterInput.dispatchEvent(new Event('input', { bubbles: true }))
+      expect(acceptedRecords).toEqual([])
+
+      admissionBlocked = false
+      recorder.flushMutations()
+
+      expect(
+        acceptedRecords.map((event) => event.data.source)
+      ).toEqual([
+        IncrementalSource.Mutation,
+        IncrementalSource.CanvasMutation,
+        IncrementalSource.Mutation,
+        IncrementalSource.Input
+      ])
+      expect(acceptedRecords[0].data.adds).toContain(
+        jasmine.objectContaining({
+          node: jasmine.objectContaining({ tagName: 'canvas' })
+        })
+      )
+      expect(acceptedRecords[2].data.adds).toContain(
+        jasmine.objectContaining({
+          node: jasmine.objectContaining({ tagName: 'input' })
+        })
+      )
+      expect(acceptedRecords[1]).toBe(cachedCanvasRecord)
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should serialize same-task CSSOM state in the style add', () => {
+    let captureEmits = false
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => {
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const style = document.createElement('style')
+    container.appendChild(style)
+
+    try {
+      // This runs before the native MutationObserver callback has serialized
+      // or staged the style element, so no CSSOM incremental record can carry
+      // a valid node id yet. The later add serializer reads sheet.cssRules.
+      style.sheet.insertRule('body { color: red; }', 0)
+      recorder.flushMutations()
+
+      const styleAdd = emittedRecords
+        .filter(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Mutation
+        )
+        .flatMap((event) => event.data.adds)
+        .find((add) => add.node.tagName === 'style')
+      expect(styleAdd).toBeDefined()
+      expect(styleAdd.node.attributes._cssText).toContain('color: red')
+      expect(
+        emittedRecords.some(
+          (event) => event.type === RecordType.FullSnapshot
+        )
+      ).toBeFalse()
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.StyleSheetRule
+        )
+      ).toBeFalse()
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should not recover an unserialized stylesheet in a hidden subtree', () => {
+    let captureEmits = false
+    let replacementSnapshotCount = 0
+    const recorder = record({
+      emit: (event) => {
+        if (captureEmits && event.type === RecordType.FullSnapshot) {
+          replacementSnapshotCount += 1
+        }
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const hiddenSubtree = document.createElement('div')
+    hiddenSubtree.setAttribute('data-gc-privacy', 'hidden')
+    const style = document.createElement('style')
+    hiddenSubtree.appendChild(style)
+    container.appendChild(hiddenSubtree)
+
+    try {
+      expect(style.sheet).not.toBeNull()
+      style.sheet.insertRule('body { color: private; }', 0)
+
+      expect(replacementSnapshotCount).toBe(0)
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should time-slice deferred state records at a mutation barrier', () => {
+    jasmine.clock().install()
+    spyOn(performance, 'now').and.returnValue(0)
+    let admissionBlocked = true
+    let captureEmits = false
+    const acceptedSources = []
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot
+        ) {
+          if (
+            event.data.source === IncrementalSource.Mutation &&
+            admissionBlocked
+          ) {
+            return false
+          }
+          acceptedSources.push(event.data.source)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const input = document.createElement('input')
+    container.appendChild(input)
+
+    try {
+      recorder.flushMutations()
+      for (let index = 0; index < 3; index += 1) {
+        input.value = String(index).repeat(70000)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+
+      admissionBlocked = false
+      recorder.flushMutations()
+
+      expect(acceptedSources).toEqual([
+        IncrementalSource.Mutation,
+        IncrementalSource.Input,
+        IncrementalSource.Input
+      ])
+
+      jasmine.clock().tick(0)
+      expect(acceptedSources).toEqual([
+        IncrementalSource.Mutation,
+        IncrementalSource.Input,
+        IncrementalSource.Input,
+        IncrementalSource.Input
+      ])
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should admit a retried previous-tail record before a later DOM baseline', () => {
+    jasmine.clock().install()
+    const acceptedSources = []
+    const emittedRecords = []
+    let emitRecord
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot
+        ) {
+          if (
+            event.data.source === IncrementalSource.Scroll &&
+            admissionBlocked
+          ) {
+            return false
+          }
+          acceptedSources.push(event.data.source)
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        emitRecord = options.emit
+        return {
+          snapshot: jasmine.createSpy('snapshot'),
+          reset: jasmine.createSpy('reset'),
+          stop: jasmine.createSpy('stop')
+        }
+      }
+    })
+    captureEmits = true
+
+    try {
+      recorder.scheduleSubsequentFullSnapshot(1000)
+      emitRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 1001,
+        data: {
+          source: IncrementalSource.Scroll,
+          id: 1,
+          x: 0,
+          y: 10
+        }
+      })
+      // Complete the baseline synchronously. Its unbound Scroll tail is now
+      // waiting on an encoder-backpressure retry.
+      recorder.takeSubsequentFullSnapshot(1000)
+
+      const input = document.createElement('input')
+      container.appendChild(input)
+      recorder.flushMutations()
+      input.value = 'state-after-add'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+
+      admissionBlocked = false
+      jasmine.clock().tick(32)
+      jasmine.clock().tick(0)
+
+      expect(acceptedSources).toEqual([IncrementalSource.Scroll])
+      const fullSnapshot = emittedRecords.find(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(fullSnapshot).toBeDefined()
+      expect(JSON.stringify(fullSnapshot)).toContain('state-after-add')
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should supersede the DOM tail after a deferred CSSOM gap', () => {
+    const emittedRecords = []
+    let transientMutationBackpressure = true
+    let rejectStyleSheetRulePermanently = false
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot
+        ) {
+          if (
+            event.data.source === IncrementalSource.Mutation &&
+            transientMutationBackpressure
+          ) {
+            return false
+          }
+          if (
+            event.data.source === IncrementalSource.StyleSheetRule &&
+            rejectStyleSheetRulePermanently
+          ) {
+            return false
+          }
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () =>
+        transientMutationBackpressure,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const style = document.createElement('style')
+    style.setAttribute('data-role', 'barrier-a')
+    container.appendChild(style)
+
+    try {
+      recorder.flushMutations()
+      style.sheet.insertRule('body { color: green; }', 0)
+
+      const laterNode = document.createElement('div')
+      laterNode.setAttribute('data-role', 'later-b')
+      container.appendChild(laterNode)
+      recorder.flushMutations()
+
+      transientMutationBackpressure = false
+      rejectStyleSheetRulePermanently = true
+      recorder.flushMutations()
+
+      const incrementalRecordsBeforeBaseline = emittedRecords.filter(
+        (event) => event.type === RecordType.IncrementalSnapshot
+      )
+      expect(incrementalRecordsBeforeBaseline.length).toBe(1)
+      expect(
+        incrementalRecordsBeforeBaseline[0].data.adds.some(
+          (add) => add.node.attributes['data-role'] === 'barrier-a'
+        )
+      ).toBeTrue()
+      expect(
+        incrementalRecordsBeforeBaseline[0].data.adds.some(
+          (add) => add.node.attributes['data-role'] === 'later-b'
+        )
+      ).toBeFalse()
+
+      rejectStyleSheetRulePermanently = false
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+
+      const replacementSnapshot = emittedRecords.find(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(replacementSnapshot).toBeDefined()
+      expect(JSON.stringify(replacementSnapshot)).toContain('color: green')
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.StyleSheetRule
+        )
+      ).toBeFalse()
+      expect(
+        emittedRecords
+          .filter(
+            (event) =>
+              event.type === RecordType.IncrementalSnapshot &&
+              event.data.source === IncrementalSource.Mutation
+          )
+          .some((event) =>
+            event.data.adds.some(
+              (add) => add.node.attributes['data-role'] === 'later-b'
+            )
+          )
+      ).toBeFalse()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should retire queued state before an overflow recovery baseline', () => {
+    // This case verifies retirement ordering, not time slicing. Keep the
+    // serializer clock deterministic so the 4,097-attribute recovery tree is
+    // not rejected by the one-slice explicit flush on slower test runs.
+    spyOn(performance, 'now').and.returnValue(0)
+    const overflowElement = document.createElement('div')
+    container.appendChild(overflowElement)
+    const emittedRecords = []
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          admissionBlocked
+        ) {
+          return false
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      onFullSnapshotFailure,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const queuedInput = document.createElement('input')
+    container.appendChild(queuedInput)
+
+    try {
+      recorder.flushMutations()
+      queuedInput.value = 'superseded-input-state'
+      queuedInput.dispatchEvent(new Event('input', { bubbles: true }))
+
+      // Exceed the raw mutation-record watermark while the input add remains
+      // backpressured. Recovery may retain an admitted safe prefix, but this
+      // queued barrier and its state must be retired before the baseline.
+      for (
+        let index = 0;
+        index < MAX_QUEUED_MUTATION_RECORDS + 1;
+        index += 1
+      ) {
+        overflowElement.setAttribute('data-overflow-' + index, 'x')
+      }
+      recorder.flushMutations()
+
+      admissionBlocked = false
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Input
+        )
+      ).toBeFalse()
+      expect(
+        emittedRecords
+          .filter(
+            (event) =>
+              event.type === RecordType.IncrementalSnapshot &&
+              event.data.source === IncrementalSource.Mutation
+          )
+          .some((event) =>
+            event.data.adds.some(
+              (add) => add.node.tagName === 'input'
+            )
+          )
+      ).toBeFalse()
+      const replacementSnapshot = emittedRecords.find(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(replacementSnapshot).toBeDefined()
+      expect(JSON.stringify(replacementSnapshot)).toContain(
+        'superseded-input-state'
+      )
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should retire an unbound deferred tail before overflow recovery', () => {
+    jasmine.clock().install()
+    const overflowElement = document.createElement('div')
+    container.appendChild(overflowElement)
+    const emittedRecords = []
+    let emitRecord
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Scroll &&
+          admissionBlocked
+        ) {
+          return false
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        emitRecord = options.emit
+        return {
+          snapshot: jasmine.createSpy('snapshot'),
+          reset: jasmine.createSpy('reset'),
+          stop: jasmine.createSpy('stop')
+        }
+      }
+    })
+    captureEmits = true
+
+    try {
+      recorder.scheduleSubsequentFullSnapshot(3000)
+      emitRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 3001,
+        data: {
+          source: IncrementalSource.Scroll,
+          id: 1,
+          x: 0,
+          y: 20
+        }
+      })
+      recorder.takeSubsequentFullSnapshot(3000)
+
+      // The Scroll record is now an unbound deferred retry. A later mutation
+      // overflow starts a mandatory transaction that supersedes it entirely.
+      for (
+        let index = 0;
+        index < MAX_QUEUED_MUTATION_RECORDS + 1;
+        index += 1
+      ) {
+        overflowElement.setAttribute('data-overflow-' + index, 'x')
+      }
+      recorder.flushMutations()
+
+      admissionBlocked = false
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+      jasmine.clock().tick(32)
+
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Scroll
+        )
+      ).toBeFalse()
+      expect(
+        emittedRecords.filter(
+          (event) => event.type === RecordType.FullSnapshot
+        ).length
+      ).toBeGreaterThan(0)
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
+    }
+  })
+
+  it('should discard old-view deferred state at the public view boundary', () => {
+    const emittedRecords = []
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          admissionBlocked
+        ) {
+          return false
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    const oldViewInput = document.createElement('input')
+    container.appendChild(oldViewInput)
+
+    try {
+      recorder.flushMutations()
+      oldViewInput.value = 'old-view-state'
+      oldViewInput.dispatchEvent(new Event('input', { bubbles: true }))
+
+      recorder.prepareForViewChange()
+      admissionBlocked = false
+      recorder.takeSubsequentFullSnapshot(2000)
+
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Input
+        )
+      ).toBeFalse()
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.FullSnapshot &&
+            event.timestamp === 2000
+        )
+      ).toBeTrue()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should atomically drop a still-pending view tail before the next baseline', () => {
+    jasmine.clock().install()
+    const emittedRecords = []
+    const flushObservers = jasmine
+      .createSpy('flushObservers')
+      .and.returnValue('pending')
+    const resetObservers = jasmine.createSpy('resetObservers')
+    let serializerTaskCount = 0
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => {
+          emittedRecords.push(event)
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        initObservers: function () {
+          return {
+            stop: function () {},
+            flush: flushObservers,
+            reset: resetObservers
+          }
+        },
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          return {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              state: container.getAttribute('data-view-state'),
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 128,
+            advance: function () {
+              return true
+            }
+          }
+        }
+      })
+      emittedRecords.length = 0
+      container.setAttribute('data-view-state', 'new-view-dom')
+      let now = 0
+      spyOn(performance, 'now').and.callFake(() => {
+        now += 20
+        return now
+      })
+
+      expect(recorder.prepareForViewChange()).toBe('pending')
+      const flushCountAtBoundary = flushObservers.calls.count()
+      expect(resetObservers).toHaveBeenCalled()
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Mutation
+        )
+      ).toBeFalse()
+
+      recorder.takeSubsequentFullSnapshot(2001)
+      const nextViewSnapshot = emittedRecords.find(
+        (event) =>
+          event.type === RecordType.FullSnapshot &&
+          event.timestamp === 2001
+      )
+      expect(nextViewSnapshot.data.node.state).toBe('new-view-dom')
+
+      jasmine.clock().tick(0)
+      expect(flushObservers.calls.count()).toBe(flushCountAtBoundary)
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should stop with no half-published mutation when the bounded drain stays pending', () => {
+    jasmine.clock().install()
+    const emittedRecords = []
+    const cleanupOrder = []
+    const flushObservers = jasmine
+      .createSpy('flushObservers')
+      .and.callFake(() => {
+        cleanupOrder.push('flush')
+        return 'pending'
+      })
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => {
+          emittedRecords.push(event)
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        initObservers: function () {
+          return {
+            stop: function () {
+              cleanupOrder.push('stop')
+            },
+            flush: flushObservers,
+            reset: function () {}
+          }
+        }
+      })
+      emittedRecords.length = 0
+      let now = 0
+      spyOn(performance, 'now').and.callFake(() => {
+        now += 20
+        return now
+      })
+
+      recorder.stop()
+      jasmine.clock().tick(0)
+
+      expect(cleanupOrder).toEqual(['flush', 'stop'])
+      expect(flushObservers).toHaveBeenCalledTimes(1)
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Mutation
+        )
+      ).toBeFalse()
+    } finally {
+      jasmine.clock().uninstall()
+    }
+  })
+
   it('should preserve shadow mutations inside a queued add until admission clears', () => {
     const host = document.createElement('div')
     const shadowRoot = host.attachShadow({ mode: 'open' })
@@ -1015,6 +3878,62 @@ describe('replay/record/record', () => {
       )
     ).toBeTrue()
     recorder.stop()
+  })
+
+  it('should restart a full snapshot for native shadow mutations queued during serialization', () => {
+    jasmine.clock().install()
+    spyOn(performance, 'now').and.returnValue(0)
+    const host = document.createElement('div')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const shadowText = document.createTextNode('before-shadow-change')
+    shadowRoot.appendChild(shadowText)
+    host.appendChild(document.createElement('span'))
+    const marker = document.createElement('p')
+    const markerText = document.createTextNode('snapshot-marker')
+    marker.appendChild(markerText)
+    container.appendChild(host)
+    container.appendChild(marker)
+    const emittedRecords = []
+    let mutateDuringSnapshot = false
+    const recorder = record({
+      emit: (event) => {
+        emittedRecords.push(event)
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        shouldMaskNode: function (node) {
+          if (mutateDuringSnapshot && node === markerText) {
+            mutateDuringSnapshot = false
+            shadowText.textContent = 'during-shadow-change'
+          }
+          return false
+        }
+      },
+      lifeCycle: createLifeCycle()
+    })
+    emittedRecords.length = 0
+
+    try {
+      mutateDuringSnapshot = true
+      recorder.takeSubsequentFullSnapshot(1501)
+      jasmine.clock().tick(1)
+
+      const fullSnapshots = emittedRecords.filter(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(fullSnapshots.length).toBe(1)
+      expect(fullSnapshots[0].timestamp).toBeGreaterThanOrEqual(1501)
+      expect(JSON.stringify(fullSnapshots[0].data.node)).toContain(
+        'during-shadow-change'
+      )
+      expect(JSON.stringify(fullSnapshots[0].data.node)).not.toContain(
+        'before-shadow-change'
+      )
+    } finally {
+      recorder.stop()
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should publish a dynamically attached open shadow root before its internal mutations', () => {
@@ -1500,7 +4419,7 @@ describe('replay/record/record', () => {
     recorder.stop()
   })
 
-  it('should keep dynamic shadow-root admission bounded by controller capacity', () => {
+  it('should observe dynamic shadow roots beyond one flush page', () => {
     spyOn(performance, 'now').and.returnValue(0)
     const hosts = []
     for (
@@ -1525,7 +4444,7 @@ describe('replay/record/record', () => {
     const shadowRoots = hosts.map((host) =>
       host.attachShadow({ mode: 'open' })
     )
-    recorder.flushMutations()
+    while (recorder.flushMutations() === 'pending') {}
     emittedRecords.length = 0
 
     const admittedChild = document.createElement('span')
@@ -1534,19 +4453,19 @@ describe('replay/record/record', () => {
     shadowRoots[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT].appendChild(
       skippedChild
     )
-    recorder.flushMutations()
+    while (recorder.flushMutations() === 'pending') {}
 
     expect(
       recorder.getSerializedNodeIdForDebug(admittedChild)
     ).toEqual(jasmine.any(Number))
     expect(
       recorder.getSerializedNodeIdForDebug(skippedChild)
-    ).toBeUndefined()
+    ).toEqual(jasmine.any(Number))
 
     recorder.stop()
   })
 
-  it('should keep outer replay active when shadow-root observation capacity is exceeded', () => {
+  it('should keep every shadow root active beyond one flush page', () => {
     spyOn(performance, 'now').and.returnValue(0)
     const shadowHosts = []
     const shadowRoots = []
@@ -1596,6 +4515,9 @@ describe('replay/record/record', () => {
         }
       }
     })
+    const flushAllMutations = function () {
+      while (recorder.flushMutations() === 'pending') {}
+    }
 
     expect(
       emittedRecords.some((event) => event.type === RecordType.FullSnapshot)
@@ -1613,7 +4535,7 @@ describe('replay/record/record', () => {
       recorder.getSerializedNodeIdForDebug(
         shadowInputs[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT]
       )
-    ).toBeUndefined()
+    ).toEqual(jasmine.any(Number))
 
     emittedRecords.length = 0
     outerElement.setAttribute('data-outer', 'changed')
@@ -1623,7 +4545,7 @@ describe('replay/record/record', () => {
     shadowRoots[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT].appendChild(
       skippedShadowChild
     )
-    recorder.flushMutations()
+    flushAllMutations()
 
     const mutationSnapshots = emittedRecords.filter(
       (event) =>
@@ -1654,7 +4576,7 @@ describe('replay/record/record', () => {
     ).toBeTrue()
     expect(
       recorder.getSerializedNodeIdForDebug(skippedShadowChild)
-    ).toBeUndefined()
+    ).toEqual(jasmine.any(Number))
 
     emittedRecords.length = 0
     shadowInputs[0].value = 'captured-change'
@@ -1680,26 +4602,26 @@ describe('replay/record/record', () => {
       inputSnapshots.some(
         (event) => event.data.text === 'skipped-change'
       )
-    ).toBeFalse()
+    ).toBeTrue()
 
     emittedRecords.length = 0
-    // Change the first-64 membership without replacing nodes. Root 0 keeps
-    // global serializer ids from the initial baseline, but the next baseline
-    // must make those ids unavailable while root 64 becomes active.
+    // Reordering hosts must not rotate observation membership: every root is
+    // part of the next baseline as well.
     container.appendChild(shadowHosts[0])
     recorder.takeSubsequentFullSnapshot(1600)
+    // Native shadow queues are reset in bounded pages before publishing the
+    // baseline. This fixture deliberately spans two pages.
+    recorder.flushScheduledFullSnapshot()
     expect(
       emittedRecords.some(
-        (event) =>
-          event.type === RecordType.FullSnapshot &&
-          event.timestamp === 1600
+        (event) => event.type === RecordType.FullSnapshot
       )
     ).toBeTrue()
-    expect(recorder.shadowRootsController.flush()).toBeTrue()
+    while (recorder.shadowRootsController.flush() === 'pending') {}
     expect(onFullSnapshotFailure).not.toHaveBeenCalled()
     expect(
       recorder.getSerializedNodeIdForDebug(shadowInputs[0])
-    ).toBeUndefined()
+    ).toEqual(jasmine.any(Number))
     expect(
       recorder.getSerializedNodeIdForDebug(
         shadowInputs[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT]
@@ -1734,20 +4656,24 @@ describe('replay/record/record', () => {
           event.data.source === IncrementalSource.Input &&
           event.data.text === 'skipped-after-snapshot'
       )
-    ).toBeFalse()
+    ).toBeTrue()
 
     snapshotCanvas.calls.reset()
     recorder.snapshotCanvas(shadowCanvases[0])
     recorder.snapshotCanvas(
       shadowCanvases[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT]
     )
-    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+    expect(snapshotCanvas).toHaveBeenCalledTimes(2)
+    expect(snapshotCanvas).toHaveBeenCalledWith(
+      shadowCanvases[0],
+      jasmine.objectContaining({ trigger: 'manual' })
+    )
     expect(snapshotCanvas).toHaveBeenCalledWith(
       shadowCanvases[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT],
       jasmine.objectContaining({ trigger: 'manual' })
     )
 
-    // Moving a node out of a skipped root changes its live ancestor chain
+    // Moving a node out of a shadow root changes its live ancestor chain
     // before MutationObserver can publish the corresponding add. Its old id
     // must remain unusable until that structural record is emitted.
     emittedRecords.length = 0
@@ -1769,7 +4695,7 @@ describe('replay/record/record', () => {
     ).toBeFalse()
     expect(snapshotCanvas).not.toHaveBeenCalled()
 
-    recorder.flushMutations()
+    flushAllMutations()
     expect(
       recorder.getSerializedNodeIdForDebug(escapedInput)
     ).toEqual(jasmine.any(Number))
@@ -1792,13 +4718,13 @@ describe('replay/record/record', () => {
       jasmine.objectContaining({ trigger: 'manual' })
     )
 
-    // A later generation can reactivate a previously skipped root, and must
-    // symmetrically gate the root that falls outside the new first-64 set.
+    // A later generation must keep both roots active as well.
     container.appendChild(
       shadowHosts[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT]
     )
     emittedRecords.length = 0
     recorder.takeSubsequentFullSnapshot(1700)
+    recorder.flushScheduledFullSnapshot()
     expect(
       recorder.getSerializedNodeIdForDebug(shadowInputs[0])
     ).toEqual(jasmine.any(Number))
@@ -1806,16 +4732,20 @@ describe('replay/record/record', () => {
       recorder.getSerializedNodeIdForDebug(
         shadowInputs[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT]
       )
-    ).toBeUndefined()
+    ).toEqual(jasmine.any(Number))
 
     snapshotCanvas.calls.reset()
     recorder.snapshotCanvas(shadowCanvases[0])
     recorder.snapshotCanvas(
       shadowCanvases[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT]
     )
-    expect(snapshotCanvas).toHaveBeenCalledTimes(1)
+    expect(snapshotCanvas).toHaveBeenCalledTimes(2)
     expect(snapshotCanvas).toHaveBeenCalledWith(
       shadowCanvases[0],
+      jasmine.objectContaining({ trigger: 'manual' })
+    )
+    expect(snapshotCanvas).toHaveBeenCalledWith(
+      shadowCanvases[SHADOW_ROOT_ACTIVE_CONTROLLER_LIMIT],
       jasmine.objectContaining({ trigger: 'manual' })
     )
 
@@ -2169,6 +5099,47 @@ describe('replay/record/record', () => {
     expect(replayPerformance.fullSnapshotDuration).toBeGreaterThanOrEqual(0)
   })
 
+  it('should accumulate local mutation root drops and expose the last reason', () => {
+    let observerOptions
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          flush: function () {},
+          reset: function () {},
+          stop: function () {}
+        }
+      }
+    })
+
+    try {
+      observerOptions.mutationPerfCb({
+        mutationLocalDropCount: 1,
+        mutationLocalDropReason: 'mutation_root_admission_watermark'
+      })
+      observerOptions.mutationPerfCb({
+        mutationLocalDropCount: 1,
+        mutationLocalDropReason:
+          'mutation_root_retained_bytes_watermark'
+      })
+
+      expect(recorder.getReplayPerformanceForDebug()).toEqual(
+        jasmine.objectContaining({
+          mutationLocalDropCount: 2,
+          mutationLocalDropLastReason:
+            'mutation_root_retained_bytes_watermark'
+        })
+      )
+    } finally {
+      recorder.stop()
+    }
+  })
+
   it('should batch consecutive mutation payloads into a single emitted snapshot', () => {
     const emittedRecords = []
     const recorder = record({
@@ -2385,12 +5356,12 @@ describe('replay/record/record', () => {
         event.data.source === IncrementalSource.Mutation
     )
     const fullSnapshots = emittedRecords.filter(
-      (event) =>
-        event.type === RecordType.FullSnapshot && event.timestamp === 4321
+      (event) => event.type === RecordType.FullSnapshot
     )
 
     expect(mutationSnapshots.length).toBe(0)
     expect(fullSnapshots.length).toBe(1)
+    expect(fullSnapshots[0].timestamp).toBeGreaterThanOrEqual(4321)
   })
 
   it('should defer lifecycle full snapshots and coalesce them to the latest view', () => {
@@ -2407,6 +5378,7 @@ describe('replay/record/record', () => {
 
     recorder.scheduleSubsequentFullSnapshot(1000)
     recorder.scheduleSubsequentFullSnapshot(2000)
+    recorder.scheduleSubsequentFullSnapshot(1500)
 
     expect(
       emittedRecords.some((event) => event.type === RecordType.FullSnapshot)
@@ -2420,6 +5392,72 @@ describe('replay/record/record', () => {
     expect(fullSnapshots.length).toBe(1)
     expect(fullSnapshots[0].timestamp).toBe(2000)
     jasmine.clock().uninstall()
+  })
+
+  it('should preserve a mandatory transaction deadline across a raw take', () => {
+    jasmine.clock().install()
+    let performanceTime = 0
+    spyOn(performance, 'now').and.callFake(() => performanceTime)
+    let serializerTaskCount = 0
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    const onMandatoryFullSnapshotStarted = jasmine.createSpy(
+      'onMandatoryFullSnapshotStarted'
+    )
+    const onMandatoryFullSnapshotAbandoned = jasmine.createSpy(
+      'onMandatoryFullSnapshotAbandoned'
+    )
+    let recorder
+
+    try {
+      recorder = record({
+        emit: function () {
+          return true
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle(),
+        onFullSnapshotFailure,
+        $rOnMandatoryFullSnapshotStarted:
+          onMandatoryFullSnapshotStarted,
+        $rOnMandatoryFullSnapshotAbandoned:
+          onMandatoryFullSnapshotAbandoned,
+        $rCreateFullSnapshotSerializerTask: function () {
+          serializerTaskCount += 1
+          return {
+            serializedNode: {
+              type: 0,
+              id: serializerTaskCount,
+              childNodes: []
+            },
+            processedNodeCount: 1,
+            approxBytes: 1,
+            advance: function () {
+              return serializerTaskCount === 1
+            }
+          }
+        }
+      })
+
+      recorder.scheduleSubsequentFullSnapshot(5000, false, true)
+      performanceTime = 29000
+      recorder.takeSubsequentFullSnapshot(5001)
+
+      expect(onMandatoryFullSnapshotStarted).toHaveBeenCalledTimes(1)
+      performanceTime = 30001
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+      expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+        'full_snapshot_serialization_timeout'
+      )
+      expect(onMandatoryFullSnapshotAbandoned).toHaveBeenCalledTimes(1)
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should abandon discardable recovery when replacement requests exhaust the restart budget', () => {
@@ -2516,7 +5554,7 @@ describe('replay/record/record', () => {
     }
   })
 
-  it('should synchronously publish a bounded baseline when mutation churn never becomes quiet', () => {
+  it('should bound the synchronous fallback and keep waiting for a quiet baseline', () => {
     const emittedRecords = []
     const onFullSnapshotFailure = jasmine.createSpy('onFullSnapshotFailure')
     let observerOptions
@@ -2659,6 +5697,50 @@ describe('replay/record/record', () => {
       }
 
       expect(pendingAdvanceCount).toBe(3)
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+      expect(
+        scheduledTimers.some(
+          (timer) => !timer.cancelled && timer.delay === 250
+        )
+      ).toBeTrue()
+
+      consumeAdvanceDeadline = false
+      completeNextTask = true
+      runNextTimerWithDelay(250)
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.FullSnapshot &&
+            event.timestamp === 5064
+        )
+      ).toBeTrue()
+
+      completeNextTask = false
+      pendingAdvanceCount = 0
+      recorder.scheduleSubsequentFullSnapshot(5070, false, true)
+      const finalTransactionStartedAt = performanceTime
+      for (let requestIndex = 0; requestIndex < 4; requestIndex += 1) {
+        recorder.scheduleSubsequentFullSnapshot(
+          5071 + requestIndex,
+          false,
+          true
+        )
+        runNextTimerWithDelay(0)
+      }
+      for (let churnIndex = 0; churnIndex < 4; churnIndex += 1) {
+        observerOptions.mutationActivityCb(container)
+        performanceTime += 251
+        if (churnIndex === 3) {
+          consumeAdvanceDeadline = true
+        }
+        runNextTimerWithDelay(250)
+      }
+
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+      performanceTime = finalTransactionStartedAt + 30001
+      observerOptions.mutationActivityCb(container)
+      runNextTimerWithDelay(250)
       expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
         'full_snapshot_serialization_timeout'
       )
@@ -2667,7 +5749,98 @@ describe('replay/record/record', () => {
     }
   })
 
-  it('should still restart a pending full snapshot after ordinary DOM mutation activity', () => {
+  it('should preserve active serialization time across a quiet-window retry', () => {
+    let performanceTime = 0
+    spyOn(performance, 'now').and.callFake(() => performanceTime)
+    let serializerTaskCount = 0
+    const onFullSnapshotFailure = jasmine.createSpy(
+      'onFullSnapshotFailure'
+    )
+    const recorder = record({
+      emit: function () {
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      onFullSnapshotFailure,
+      $rCreateFullSnapshotSerializerTask: function () {
+        serializerTaskCount += 1
+        return {
+          serializedNode: {
+            type: 0,
+            id: serializerTaskCount,
+            childNodes: []
+          },
+          processedNodeCount: 1,
+          approxBytes: 1,
+          advance: function () {
+            if (serializerTaskCount === 1) {
+              return true
+            }
+            if (serializerTaskCount === 2) {
+              performanceTime += 600
+            } else if (serializerTaskCount === 6) {
+              performanceTime += 401
+            }
+            return false
+          }
+        }
+      }
+    })
+
+    let nextTimerId = 0
+    const scheduledTimers = []
+    spyOn(window, 'setTimeout').and.callFake((callback, delay) => {
+      const timer = {
+        callback,
+        cancelled: false,
+        delay,
+        id: ++nextTimerId
+      }
+      scheduledTimers.push(timer)
+      return timer.id
+    })
+    spyOn(window, 'clearTimeout').and.callFake((timerId) => {
+      const timer = scheduledTimers.find((entry) => entry.id === timerId)
+      if (timer) {
+        timer.cancelled = true
+      }
+    })
+
+    function runNextTimerWithDelay(delay) {
+      const timer = scheduledTimers.find(
+        (entry) => !entry.cancelled && entry.delay === delay
+      )
+      expect(timer).toBeDefined()
+      timer.cancelled = true
+      timer.callback()
+    }
+
+    try {
+      recorder.scheduleSubsequentFullSnapshot(5080, false, true)
+      runNextTimerWithDelay(0)
+      for (let requestIndex = 0; requestIndex < 4; requestIndex += 1) {
+        recorder.scheduleSubsequentFullSnapshot(
+          5081 + requestIndex,
+          false,
+          true
+        )
+        runNextTimerWithDelay(0)
+      }
+
+      expect(onFullSnapshotFailure).not.toHaveBeenCalled()
+      runNextTimerWithDelay(250)
+      expect(onFullSnapshotFailure).toHaveBeenCalledOnceWith(
+        'full_snapshot_serialization_timeout'
+      )
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should capture same-task DOM mutation before an optional snapshot flush', () => {
     jasmine.clock().install()
     const emittedRecords = []
     const onFullSnapshotFailure = jasmine.createSpy('onFullSnapshotFailure')
@@ -2684,24 +5857,23 @@ describe('replay/record/record', () => {
     try {
       recorder.scheduleSubsequentFullSnapshot(5100, true)
       container.setAttribute('data-mutated-during-snapshot', 'true')
-      recorder.flushMutations()
-      jasmine.clock().tick(1)
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
 
       expect(onFullSnapshotFailure).not.toHaveBeenCalled()
-      expect(
-        emittedRecords.filter(
-          (event) =>
-            event.type === RecordType.FullSnapshot &&
-            event.timestamp === 5100
-        ).length
-      ).toBe(1)
+      const fullSnapshots = emittedRecords.filter(
+        (event) => event.type === RecordType.FullSnapshot
+      )
+      expect(fullSnapshots.length).toBe(1)
+      expect(JSON.stringify(fullSnapshots[0])).toContain(
+        'data-mutated-during-snapshot'
+      )
     } finally {
       recorder.stop()
       jasmine.clock().uninstall()
     }
   })
 
-  it('should discard deferred records and reset canvas baselines when a full snapshot restarts', () => {
+  it('should keep admitted old-tail records and reset canvas baselines when a full snapshot restarts', () => {
     jasmine.clock().install()
     const emittedRecords = []
     let emitRecord
@@ -2780,13 +5952,12 @@ describe('replay/record/record', () => {
     container.appendChild(document.createElement('div'))
     recorder.flushMutations()
 
-    expect(emittedRecords).toEqual([])
+    expect(emittedRecords).toEqual([canvasRecord, scrollRecord])
 
     jasmine.clock().tick(1)
 
     const fullSnapshotIndex = emittedRecords.findIndex(
-      (event) =>
-        event.type === RecordType.FullSnapshot && event.timestamp === 1000
+      (event) => event.type === RecordType.FullSnapshot
     )
     const canvasRecordIndex = emittedRecords.indexOf(canvasRecord)
     const scrollRecordIndex = emittedRecords.indexOf(scrollRecord)
@@ -2797,8 +5968,8 @@ describe('replay/record/record', () => {
     )
 
     expect(fullSnapshotIndex).toBeGreaterThanOrEqual(0)
-    expect(canvasRecordIndex).toBe(-1)
-    expect(scrollRecordIndex).toBe(-1)
+    expect(canvasRecordIndex).toBeLessThan(fullSnapshotIndex)
+    expect(scrollRecordIndex).toBeLessThan(fullSnapshotIndex)
     expect(mutationRecords).toEqual([])
     expect(canvasObserverReset).toHaveBeenCalledTimes(2)
     expect(canvasCommandCaptureReset).toHaveBeenCalledTimes(2)
@@ -2809,7 +5980,7 @@ describe('replay/record/record', () => {
     jasmine.clock().uninstall()
   })
 
-  it('should flush deferred non-DOM records after a synchronous subsequent full snapshot', () => {
+  it('should admit old-tail non-DOM records before a synchronous subsequent full snapshot', () => {
     jasmine.clock().install()
     const emittedRecords = []
     let emitRecord
@@ -2845,11 +6016,10 @@ describe('replay/record/record', () => {
     recorder.takeSubsequentFullSnapshot(2000)
 
     const fullSnapshotIndex = emittedRecords.findIndex(
-      (event) =>
-        event.type === RecordType.FullSnapshot && event.timestamp === 2000
+      (event) => event.type === RecordType.FullSnapshot
     )
     expect(fullSnapshotIndex).toBeGreaterThanOrEqual(0)
-    expect(emittedRecords.indexOf(interactionRecord)).toBeGreaterThan(
+    expect(emittedRecords.indexOf(interactionRecord)).toBeLessThan(
       fullSnapshotIndex
     )
 
@@ -2863,7 +6033,7 @@ describe('replay/record/record', () => {
     jasmine.clock().uninstall()
   })
 
-  it('should retry deferred Canvas records in order after baseline backpressure', () => {
+  it('should retry previous-tail Canvas records in order before the baseline', () => {
     jasmine.clock().install()
     const emittedRecords = []
     let emitRecord
@@ -2946,15 +6116,16 @@ describe('replay/record/record', () => {
             add.node.attributes['data-after-deferred-canvas'] === 'true'
         )
     )
-    expect(canvasRecordIndex).toBeGreaterThan(fullSnapshotIndex)
+    expect(canvasRecordIndex).toBeLessThan(fullSnapshotIndex)
     expect(scrollRecordIndex).toBeGreaterThan(canvasRecordIndex)
-    expect(domRecordIndex).toBeGreaterThan(scrollRecordIndex)
+    expect(scrollRecordIndex).toBeLessThan(fullSnapshotIndex)
+    expect(domRecordIndex).toBe(-1)
 
     recorder.stop()
     jasmine.clock().uninstall()
   })
 
-  it('should not start an obsolete Canvas baseline after a deferred permanent rejection', () => {
+  it('should replace a permanently rejected previous-tail Canvas state', () => {
     jasmine.clock().install()
     const canvas = document.createElement('canvas')
     container.appendChild(canvas)
@@ -3002,14 +6173,13 @@ describe('replay/record/record', () => {
     }
 
     recorder.scheduleSubsequentFullSnapshot(2100)
-    emitRecord(canvasRecord)
     rejectDeferredCanvas = true
+    emitRecord(canvasRecord)
     recorder.takeSubsequentFullSnapshot(2100)
 
-    // The rejected stateful record starts a second mandatory recovery. The
-    // baseline belonging to the superseded snapshot must not consume an
-    // encode slot while that new transaction is active.
-    expect(snapshot).not.toHaveBeenCalled()
+    // The rejected state record makes the candidate mandatory; its Canvas
+    // baseline supersedes the missing old-tail state.
+    expect(snapshot).toHaveBeenCalled()
 
     recorder.stop()
     jasmine.clock().uninstall()
@@ -3233,8 +6403,20 @@ describe('replay/record/record', () => {
     jasmine.clock().install()
     const emittedRecords = []
     let emitRecord
+    let interactionBackpressured = false
     const recorder = record({
-      emit: (event) => emittedRecords.push(event),
+      emit: (event) => {
+        if (
+          interactionBackpressured &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.MouseInteraction
+        ) {
+          return false
+        }
+        emittedRecords.push(event)
+        return true
+      },
+      $rWasLastEmitBackpressured: () => interactionBackpressured,
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
@@ -3251,23 +6433,26 @@ describe('replay/record/record', () => {
     emittedRecords.length = 0
 
     recorder.scheduleSubsequentFullSnapshot(3000)
+    interactionBackpressured = true
     for (let index = 0; index < MAX_DEFERRED_RECORDS + 5; index += 1) {
       emitRecord({
         type: RecordType.IncrementalSnapshot,
         timestamp: index,
         data: {
-          source: IncrementalSource.Scroll,
-          id: index
+          source: IncrementalSource.MouseInteraction,
+          id: index,
+          type: 0
         }
       })
     }
 
+    interactionBackpressured = false
     jasmine.clock().tick(1)
 
     const deferredRecords = emittedRecords.filter(
       (event) =>
         event.type === RecordType.IncrementalSnapshot &&
-        event.data.source === IncrementalSource.Scroll
+        event.data.source === IncrementalSource.MouseInteraction
     )
     expect(deferredRecords.length).toBe(MAX_DEFERRED_RECORDS)
     expect(deferredRecords[0].timestamp).toBe(5)
@@ -3283,8 +6468,20 @@ describe('replay/record/record', () => {
     jasmine.clock().install()
     const emittedRecords = []
     let emitRecord
+    let interactionBackpressured = false
     const recorder = record({
-      emit: (event) => emittedRecords.push(event),
+      emit: (event) => {
+        if (
+          interactionBackpressured &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.MouseInteraction
+        ) {
+          return false
+        }
+        emittedRecords.push(event)
+        return true
+      },
+      $rWasLastEmitBackpressured: () => interactionBackpressured,
       configuration: {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
@@ -3301,24 +6498,27 @@ describe('replay/record/record', () => {
     emittedRecords.length = 0
 
     recorder.scheduleSubsequentFullSnapshot(3050)
+    interactionBackpressured = true
     for (let index = 0; index < 6; index += 1) {
       emitRecord({
         type: RecordType.IncrementalSnapshot,
         timestamp: index,
         data: {
-          source: IncrementalSource.Scroll,
+          source: IncrementalSource.MouseInteraction,
           id: index,
+          type: 0,
           payload: 'x'.repeat(100000)
         }
       })
     }
 
+    interactionBackpressured = false
     jasmine.clock().tick(1)
 
     const deferredRecords = emittedRecords.filter(
       (event) =>
         event.type === RecordType.IncrementalSnapshot &&
-        event.data.source === IncrementalSource.Scroll
+        event.data.source === IncrementalSource.MouseInteraction
     )
     expect(deferredRecords.length).toBeLessThan(6)
     expect(
@@ -3333,7 +6533,153 @@ describe('replay/record/record', () => {
     jasmine.clock().uninstall()
   })
 
-  it('should emit the scheduled full snapshot and deferred records before stop', () => {
+  it('should drop a stateless barrier flood without starting a baseline', () => {
+    const emittedRecords = []
+    let emitRecord
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          admissionBlocked
+        ) {
+          return false
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        emitRecord = options.emit
+        return {
+          snapshot: jasmine.createSpy('snapshot'),
+          reset: jasmine.createSpy('reset'),
+          stop: jasmine.createSpy('stop')
+        }
+      }
+    })
+    captureEmits = true
+
+    const pendingNode = document.createElement('div')
+    container.appendChild(pendingNode)
+
+    try {
+      recorder.flushMutations()
+      for (let index = 0; index < MAX_DEFERRED_RECORDS + 5; index += 1) {
+        emitRecord({
+          type: RecordType.IncrementalSnapshot,
+          timestamp: index,
+          data: {
+            source: IncrementalSource.MouseInteraction,
+            id: 1,
+            type: 0
+          }
+        })
+      }
+
+      admissionBlocked = false
+      recorder.flushMutations()
+
+      expect(
+        emittedRecords.filter(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.MouseInteraction
+        ).length
+      ).toBe(MAX_DEFERRED_RECORDS)
+      expect(
+        emittedRecords.some(
+          (event) => event.type === RecordType.FullSnapshot
+        )
+      ).toBeFalse()
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should recover when deferred input state is evicted', () => {
+    const emittedRecords = []
+    let emitRecord
+    let admissionBlocked = true
+    let captureEmits = false
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation &&
+          admissionBlocked
+        ) {
+          return false
+        }
+        if (captureEmits) {
+          emittedRecords.push(event)
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function (options) {
+        emitRecord = options.emit
+        return {
+          snapshot: jasmine.createSpy('snapshot'),
+          reset: jasmine.createSpy('reset'),
+          stop: jasmine.createSpy('stop')
+        }
+      }
+    })
+    captureEmits = true
+
+    const pendingInput = document.createElement('input')
+    container.appendChild(pendingInput)
+
+    try {
+      recorder.flushMutations()
+      for (let index = 0; index < MAX_DEFERRED_RECORDS + 1; index += 1) {
+        emitRecord({
+          type: RecordType.IncrementalSnapshot,
+          timestamp: index,
+          data: {
+            source: IncrementalSource.Input,
+            id: 1,
+            text: String(index)
+          }
+        })
+      }
+
+      admissionBlocked = false
+      expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+      expect(
+        emittedRecords.some(
+          (event) => event.type === RecordType.FullSnapshot
+        )
+      ).toBeTrue()
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Input
+        )
+      ).toBeFalse()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should emit previous-tail records and the scheduled full snapshot before stop', () => {
     jasmine.clock().install()
     const emittedRecords = []
     let emitRecord
@@ -3368,8 +6714,7 @@ describe('replay/record/record', () => {
     jasmine.clock().tick(1)
 
     const fullSnapshotIndex = emittedRecords.findIndex(
-      (event) =>
-        event.type === RecordType.FullSnapshot && event.timestamp === 4000
+      (event) => event.type === RecordType.FullSnapshot
     )
     const canvasMutationIndex = emittedRecords.findIndex(
       (event) =>
@@ -3377,7 +6722,7 @@ describe('replay/record/record', () => {
         event.data.source === IncrementalSource.CanvasMutation
     )
     expect(fullSnapshotIndex).toBeGreaterThanOrEqual(0)
-    expect(canvasMutationIndex).toBeGreaterThan(fullSnapshotIndex)
+    expect(canvasMutationIndex).toBeLessThan(fullSnapshotIndex)
     expect(
       emittedRecords.filter((event) => event.type === RecordType.FullSnapshot)
         .length
@@ -3457,7 +6802,7 @@ describe('replay/record/record', () => {
     ).toBeFalse()
   })
 
-  it('should discard a shadow add when the document side of a final cross-root move overflows', () => {
+  it('should publish both sides of a final chunked cross-root move atomically', () => {
     const destinationHost = document.createElement('div')
     const destinationRoot = destinationHost.attachShadow({ mode: 'open' })
     const child = document.createElement('span')
@@ -3499,9 +6844,10 @@ describe('replay/record/record', () => {
       mutationSnapshots.some((event) =>
         event.data.adds.some(
           (add) => add.node && add.node.id === childId
-        )
+        ) &&
+        event.data.removes.some((remove) => remove.id === childId)
       )
-    ).toBeFalse()
+    ).toBeTrue()
   })
 
   it('should stop when a mandatory oversized recovery cannot be serialized', () => {
@@ -3589,6 +6935,8 @@ describe('replay/record/record', () => {
     for (let index = 0; index < 300; index += 1) {
       container.appendChild(document.createElement('div'))
     }
+    recorder.flushMutations()
+    emittedRecords.length = 0
     let now = performance.now()
     spyOn(performance, 'now').and.callFake(() => {
       now += 0.1
@@ -3863,7 +7211,11 @@ describe('replay/record/record', () => {
     })
     emittedRecords.length = 0
 
-    for (let index = 0; index < 1001; index += 1) {
+    for (
+      let index = 0;
+      index < MAX_QUEUED_MUTATION_RECORDS + 1;
+      index += 1
+    ) {
       overflowTargets[index % overflowTargets.length].setAttribute(
         `data-overflow-${index}`,
         String(index)
@@ -3891,12 +7243,7 @@ describe('replay/record/record', () => {
 
   it('should treat mutation overflow metadata as mandatory recovery', () => {
     const emittedRecords = []
-    const overflowTargets = []
-    for (let index = 0; index < 11; index += 1) {
-      const target = document.createElement('div')
-      container.appendChild(target)
-      overflowTargets.push(target)
-    }
+    let observerOptions
     const onFullSnapshotFailure = jasmine.createSpy(
       'onFullSnapshotFailure'
     )
@@ -3906,18 +7253,25 @@ describe('replay/record/record', () => {
         defaultPrivacyLevel: NodePrivacyLevel.ALLOW
       },
       lifeCycle: createLifeCycle(),
+      initObservers: function (options) {
+        observerOptions = options
+        return {
+          stop: function () {},
+          flush: function () {
+            return true
+          },
+          reset: function () {}
+        }
+      },
       onFullSnapshotFailure
     })
     emittedRecords.length = 0
 
     try {
-      for (let index = 0; index < 1001; index += 1) {
-        overflowTargets[index % overflowTargets.length].setAttribute(
-          `data-discardable-overflow-${index}`,
-          String(index)
-        )
-      }
-      recorder.flushMutations()
+      observerOptions.mutationOverflowCb({
+        reason: 'raw_mutation_queue_watermark',
+        mutationRecordCount: MAX_QUEUED_MUTATION_RECORDS + 1
+      })
 
       expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
       expect(onFullSnapshotFailure).not.toHaveBeenCalled()
@@ -3927,24 +7281,11 @@ describe('replay/record/record', () => {
         )
       ).toBeTrue()
 
-      overflowTargets[0].setAttribute(
+      container.setAttribute(
         'data-after-discardable-overflow',
         'captured'
       )
-      recorder.flushMutations()
-      expect(
-        emittedRecords.some(
-          (event) =>
-            event.type === RecordType.IncrementalSnapshot &&
-            event.data.source === IncrementalSource.Mutation &&
-            event.data.attributes.some(
-              (attributeMutation) =>
-                attributeMutation.attributes[
-                  'data-after-discardable-overflow'
-                ] === 'captured'
-            )
-        )
-      ).toBeTrue()
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
     } finally {
       recorder.stop()
     }
@@ -4837,6 +8178,15 @@ describe('replay/record/record', () => {
       })
 
       recorder.flushMutations()
+      expect(mutationSnapshotCount).toBeLessThan(expectedAddCount)
+      for (
+        let drainCount = 0;
+        drainCount < expectedAddCount &&
+        admittedAddCount < expectedAddCount;
+        drainCount += 1
+      ) {
+        recorder.flushMutations()
+      }
 
       expect(expectedAddCount).toBe(257)
       expect(mutationSnapshotCount).toBe(expectedAddCount)
@@ -4920,7 +8270,16 @@ describe('replay/record/record', () => {
       expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
 
       admissionBlocked = false
-      recorder.flushMutations()
+      for (
+        let drainCount = 0;
+        drainCount < expectedAddCount &&
+        admittedAddCount < expectedAddCount;
+        drainCount += 1
+      ) {
+        // Explicit drains deterministically stand in for the scheduled
+        // admission slices; no wall-clock delay is needed in this coverage.
+        recorder.flushMutations()
+      }
 
       expect(admittedAddCount).toBe(expectedAddCount)
       expect(subsequentFullSnapshotCount).toBe(0)
@@ -5013,6 +8372,150 @@ describe('replay/record/record', () => {
       expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
     } finally {
       recorder.stop()
+    }
+  })
+
+  it('should preserve a 520-root pure-add burst through serializer and encoder backpressure', () => {
+    spyOn(performance, 'now').and.returnValue(0)
+    const rootCount = 520
+    const chunkSize = 20
+    const admittedRootIndexes = []
+    let admissionBlocked = true
+    let attemptedMutationCount = 0
+    let subsequentFullSnapshotCount = 0
+    let captureEmits = false
+    const onMandatoryFullSnapshotStarted = jasmine.createSpy(
+      'onMandatoryFullSnapshotStarted'
+    )
+    const recorder = record({
+      emit: (event) => {
+        if (!captureEmits) {
+          return true
+        }
+        if (
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation
+        ) {
+          attemptedMutationCount += 1
+          if (admissionBlocked) {
+            return false
+          }
+          event.data.adds.forEach((add) => {
+            admittedRootIndexes.push(
+              Number(add.node.attributes['data-root-index'])
+            )
+          })
+        } else if (event.type === RecordType.FullSnapshot) {
+          subsequentFullSnapshotCount += 1
+        }
+        return true
+      },
+      $rWasLastEmitBackpressured: () => admissionBlocked,
+      $rOnMandatoryFullSnapshotStarted: onMandatoryFullSnapshotStarted,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    try {
+      for (let offset = 0; offset < rootCount; offset += chunkSize) {
+        const fragment = document.createDocumentFragment()
+        for (
+          let index = offset;
+          index < Math.min(offset + chunkSize, rootCount);
+          index += 1
+        ) {
+          const child = document.createElement('div')
+          child.setAttribute('data-root-index', String(index))
+          fragment.appendChild(child)
+        }
+        container.appendChild(fragment)
+      }
+
+      let flushResult
+      do {
+        flushResult = recorder.flushMutations()
+      } while (flushResult === 'pending')
+
+      expect(flushResult).toBeTrue()
+      expect(attemptedMutationCount).toBe(1)
+      expect(admittedRootIndexes).toEqual([])
+      expect(onMandatoryFullSnapshotStarted).not.toHaveBeenCalled()
+      expect(subsequentFullSnapshotCount).toBe(0)
+
+      admissionBlocked = false
+      for (
+        let drainCount = 0;
+        drainCount < rootCount && admittedRootIndexes.length < rootCount;
+        drainCount += 1
+      ) {
+        recorder.flushMutations()
+      }
+
+      expect(admittedRootIndexes).toEqual(
+        Array.from(
+          { length: rootCount },
+          (_, index) => rootCount - index - 1
+        )
+      )
+      expect(onMandatoryFullSnapshotStarted).not.toHaveBeenCalled()
+      expect(subsequentFullSnapshotCount).toBe(0)
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      recorder.stop()
+    }
+  })
+
+  it('should time-slice one large mutation callback without prior backpressure', () => {
+    jasmine.clock().install()
+    spyOn(performance, 'now').and.returnValue(0)
+    let captureEmits = false
+    let admittedMutationCount = 0
+    const recorder = record({
+      emit: (event) => {
+        if (
+          captureEmits &&
+          event.type === RecordType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation
+        ) {
+          admittedMutationCount += 1
+        }
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    captureEmits = true
+
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        const child = document.createElement('div')
+        child.textContent = String(index).repeat(70000)
+        container.appendChild(child)
+      }
+
+      // One observer callback produces three independent ~140 KiB entries.
+      // Enqueue the complete batch, then apply one shared drain budget.
+      recorder.flushMutations()
+
+      // Two ~140 KiB admissions exhaust the 256 KiB slice. The final entry
+      // is left for the scheduled continuation rather than synchronously
+      // draining the whole pending-raw window.
+      expect(admittedMutationCount).toBe(2)
+
+      jasmine.clock().tick(0)
+      expect(admittedMutationCount).toBe(3)
+      expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
+    } finally {
+      try {
+        recorder.stop()
+      } finally {
+        jasmine.clock().uninstall()
+      }
     }
   })
 
@@ -5322,7 +8825,7 @@ describe('replay/record/record', () => {
     }
   })
 
-  it('should drop a 5 MB attribute entry, flush safe entries, and request a full snapshot', () => {
+  it('should truncate a 5 MB attribute after sanitization without replacing the baseline', () => {
     const emittedRecords = []
     const safeElement = document.createElement('div')
     const oversizedElement = document.createElement('div')
@@ -5348,35 +8851,41 @@ describe('replay/record/record', () => {
         event.type === RecordType.IncrementalSnapshot &&
         event.data.source === IncrementalSource.Mutation
     )
-    expect(mutationSnapshots.length).toBe(1)
-    expect(mutationSnapshots[0].data.attributes).toEqual([
-      jasmine.objectContaining({
-        attributes: {
-          'data-safe': 'kept'
-        }
-      })
-    ])
+    const attributes = [].concat.apply(
+      [],
+      mutationSnapshots.map((event) => event.data.attributes)
+    )
     expect(
-      mutationSnapshots.some((event) =>
-        event.data.attributes.some(
-          (attributeMutation) =>
-            attributeMutation.attributes['data-oversized'] === oversizedValue
-        )
+      attributes.some(
+        (attributeMutation) =>
+          attributeMutation.attributes['data-safe'] === 'kept'
       )
-    ).toBeFalse()
-    expect(recorder.getLastDomMutationForDebug().attributes).toEqual([
-      jasmine.objectContaining({
-        attributeNames: ['data-safe'],
-        attributeNamesTruncated: false
-      })
-    ])
+    ).toBeTrue()
+    const oversizedAttribute = attributes.find(
+      (attributeMutation) =>
+        typeof attributeMutation.attributes['data-oversized'] === 'string'
+    ).attributes['data-oversized']
+    expect(oversizedAttribute.length).toBe(
+      MAX_MUTATION_SERIALIZED_VALUE_CHARACTERS
+    )
+    expect(oversizedAttribute.endsWith('…')).toBeTrue()
+    expect(oversizedAttribute).not.toBe(oversizedValue)
+    expect(
+      recorder
+        .getDomMutationHistoryForDebug()
+        .some((entry) =>
+          entry.attributes.some((attribute) =>
+            attribute.attributeNames.includes('data-oversized')
+          )
+        )
+    ).toBeTrue()
     expect(stringify).not.toHaveBeenCalled()
-    expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+    expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
 
     recorder.stop()
   })
 
-  it('should drop a 5 MB text entry without emitting or retaining it and request a full snapshot', () => {
+  it('should truncate a 5 MB text entry without replacing the baseline', () => {
     const emittedRecords = []
     const textNode = document.createTextNode('initial')
     container.appendChild(textNode)
@@ -5393,17 +8902,22 @@ describe('replay/record/record', () => {
     textNode.textContent = 'x'.repeat(5 * 1024 * 1024)
     recorder.flushMutations()
 
-    expect(
-      emittedRecords.some(
+    const textMutation = emittedRecords
+      .filter(
         (event) =>
           event.type === RecordType.IncrementalSnapshot &&
           event.data.source === IncrementalSource.Mutation
       )
-    ).toBeFalse()
-    expect(recorder.getLastDomMutationForDebug()).toBeUndefined()
-    expect(recorder.getDomMutationHistoryForDebug()).toEqual([])
+      .map((event) => event.data.texts)
+      .reduce((texts, entries) => texts.concat(entries), [])[0]
+    expect(textMutation.value.length).toBe(
+      MAX_MUTATION_SERIALIZED_VALUE_CHARACTERS
+    )
+    expect(textMutation.value.endsWith('…')).toBeTrue()
+    expect(recorder.getLastDomMutationForDebug().textsCount).toBe(1)
+    expect(recorder.getDomMutationHistoryForDebug().length).toBe(1)
     expect(stringify).not.toHaveBeenCalled()
-    expect(recorder.flushScheduledFullSnapshot()).toBeTrue()
+    expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
 
     recorder.stop()
   })
@@ -5625,12 +9139,18 @@ describe('replay/record/record', () => {
     }
   })
 
-  it('should use an atomic command-capture bitmap for a public manual snapshot', async () => {
+  it('should keep a public manual snapshot outside the authoritative command baseline', async () => {
     const canvas = document.createElement('canvas')
     container.appendChild(canvas)
     const snapshot = jasmine
       .createSpy('snapshot')
       .and.returnValue(Promise.resolve({ ok: true }))
+    const createCanvasSnapshotBaselineToken = jasmine.createSpy(
+      'createCanvasSnapshotBaselineToken'
+    )
+    const markCanvasSnapshotBaseline = jasmine.createSpy(
+      'markCanvasSnapshotBaseline'
+    )
     const recorder = record({
       emit: jasmine.createSpy('emit'),
       configuration: {
@@ -5651,21 +9171,87 @@ describe('replay/record/record', () => {
         return {
           reset: jasmine.createSpy('resetCanvasCommandCapture'),
           scanExistingCanvases: jasmine.createSpy('scanExistingCanvases'),
-          stop: jasmine.createSpy('stopCanvasCommandCapture')
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          createCanvasSnapshotBaselineToken:
+            createCanvasSnapshotBaselineToken,
+          markCanvasSnapshotBaseline: markCanvasSnapshotBaseline
         }
       }
     })
     await flushPromises()
     snapshot.calls.reset()
+    createCanvasSnapshotBaselineToken.calls.reset()
+    markCanvasSnapshotBaseline.calls.reset()
 
     expect(await recorder.snapshotCanvas(canvas)).toEqual({ ok: true })
     expect(snapshot).toHaveBeenCalledOnceWith(
       canvas,
-      jasmine.objectContaining({
-        trigger: 'manual',
-        scheduler: 'command_capture'
-      })
+      jasmine.objectContaining({ trigger: 'manual' })
     )
+    expect(snapshot.calls.mostRecent().args[1].scheduler).toBeUndefined()
+    expect(createCanvasSnapshotBaselineToken).toHaveBeenCalledOnceWith(canvas)
+    expect(markCanvasSnapshotBaseline).not.toHaveBeenCalled()
+    recorder.stop()
+  })
+
+  it('should keep recording 2d commands after a public manual snapshot', async () => {
+    const emittedRecords = []
+    let scheduledFrameCallback
+    const recorder = record({
+      emit: (event) => {
+        emittedRecords.push(event)
+        return true
+      },
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function () {
+        return {
+          snapshot: jasmine
+            .createSpy('snapshot')
+            .and.resolveTo({ ok: true }),
+          reset: jasmine.createSpy('resetCanvasObserver'),
+          stop: jasmine.createSpy('stopCanvasObserver')
+        }
+      },
+      startCanvasCommandCapture: function (options) {
+        return startRealCanvasCommandCapture(
+          Object.assign({}, options, {
+            requestAnimationFrameImpl: function (callback) {
+              scheduledFrameCallback = callback
+              return 1
+            },
+            cancelAnimationFrameImpl: function () {}
+          })
+        )
+      }
+    })
+    const canvas = document.createElement('canvas')
+    container.appendChild(canvas)
+    recorder.flushMutations()
+    const context = canvas.getContext('2d')
+    emittedRecords.length = 0
+
+    expect(await recorder.snapshotCanvas(canvas)).toEqual({ ok: true })
+    context.fillRect(1, 2, 3, 4)
+    expect(scheduledFrameCallback).toEqual(jasmine.any(Function))
+    scheduledFrameCallback()
+
+    const commandMutation = emittedRecords.find(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation &&
+        event.data.commands &&
+        event.data.commands.some(
+          (command) => command.property === 'fillRect'
+        )
+    )
+    expect(commandMutation).toBeDefined()
+
     recorder.stop()
   })
 
@@ -6274,25 +9860,24 @@ describe('replay/record/record', () => {
     recorder.stop()
   })
 
-  it('should serially baseline static WebGL and unknown canvases without filtering or probing contexts', async () => {
+  it('should skip known WebGL canvases in the asynchronous full snapshot baseline', async () => {
     const webglCanvas = document.createElement('canvas')
+    const bootstrapWebGLCanvas = document.createElement('canvas')
     const unknownCanvas = document.createElement('canvas')
     setReplayCanvasContextType(webglCanvas, 'webgl')
     container.appendChild(webglCanvas)
+    container.appendChild(bootstrapWebGLCanvas)
     container.appendChild(unknownCanvas)
     const webglGetContext = spyOn(webglCanvas, 'getContext').and.callThrough()
+    const bootstrapWebGLGetContext = spyOn(
+      bootstrapWebGLCanvas,
+      'getContext'
+    ).and.callThrough()
     const unknownGetContext = spyOn(unknownCanvas, 'getContext').and.callThrough()
-    let releaseWebGLSnapshot
-    const webGLSnapshot = new Promise((resolve) => {
-      releaseWebGLSnapshot = resolve
-    })
     const snapshot = jasmine
       .createSpy('snapshot')
-      .and.callFake(function (canvas) {
-        return canvas === webglCanvas
-          ? webGLSnapshot
-          : Promise.resolve({ ok: true })
-      })
+      .and.resolveTo({ ok: true })
+    let loopOptions
 
     const recorder = record({
       emit: jasmine.createSpy('emit'),
@@ -6310,7 +9895,8 @@ describe('replay/record/record', () => {
           reset: jasmine.createSpy('resetCanvasObserver')
         }
       },
-      startContinuousCanvasSnapshotLoop: function () {
+      startContinuousCanvasSnapshotLoop: function (options) {
+        loopOptions = options
         return {
           stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
           reset: jasmine.createSpy('resetContinuousCanvasSnapshots')
@@ -6318,6 +9904,9 @@ describe('replay/record/record', () => {
       },
       startCanvasWebGLSnapshotObserver: function () {
         return {
+          isWebGLCanvas: function (canvas) {
+            return canvas === bootstrapWebGLCanvas
+          },
           stop: jasmine.createSpy('stopCanvasWebGLSnapshotObserver'),
           reset: jasmine.createSpy('resetCanvasWebGLSnapshotObserver')
         }
@@ -6325,14 +9914,12 @@ describe('replay/record/record', () => {
     })
 
     expect(snapshot.calls.count()).toBe(1)
-    expect(snapshot.calls.argsFor(0)[0]).toBe(webglCanvas)
-    releaseWebGLSnapshot({ ok: true })
-    await flushPromises()
-
-    expect(snapshot.calls.count()).toBe(2)
-    expect(snapshot.calls.argsFor(1)[0]).toBe(unknownCanvas)
+    expect(snapshot.calls.argsFor(0)[0]).toBe(unknownCanvas)
+    expect(loopOptions.getCanvases()).toEqual([unknownCanvas])
     expect(webglGetContext).not.toHaveBeenCalled()
+    expect(bootstrapWebGLGetContext).not.toHaveBeenCalled()
     expect(unknownGetContext).not.toHaveBeenCalled()
+    await flushPromises()
     recorder.stop()
   })
 
@@ -7005,6 +10592,103 @@ describe('replay/record/record', () => {
 
     recorder.stop()
     expect(stopCanvasCommandCapture).toHaveBeenCalledTimes(1)
+  })
+
+  it('should flush canvas commands without stopping command capture', () => {
+    const flushCanvasCommandCapture = jasmine.createSpy(
+      'flushCanvasCommandCapture'
+    )
+    const stopCanvasCommandCapture = jasmine.createSpy(
+      'stopCanvasCommandCapture'
+    )
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      startCanvasCommandCapture: function () {
+        return {
+          flush: flushCanvasCommandCapture,
+          stop: stopCanvasCommandCapture,
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy('scanExistingCanvases')
+        }
+      }
+    })
+
+    recorder.$rFlushCanvasCommands()
+
+    expect(flushCanvasCommandCapture).toHaveBeenCalledTimes(1)
+    expect(stopCanvasCommandCapture).not.toHaveBeenCalled()
+
+    recorder.stop()
+    expect(stopCanvasCommandCapture).toHaveBeenCalledTimes(1)
+  })
+
+  it('should retry a backpressured canvas boundary before flushing newer commands', () => {
+    let commandCaptureOptions
+    let commandWasCaptured = false
+    let backpressured = false
+    const canvasRecord = {
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 10,
+      data: {
+        source: IncrementalSource.CanvasMutation,
+        id: 1,
+        type: '2D',
+        commands: [{ property: 'fillRect', args: [1, 2, 3, 4] }]
+      }
+    }
+    const canvasAttempts = []
+    const emit = jasmine.createSpy('emit').and.callFake((event) => {
+      if (
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.CanvasMutation
+      ) {
+        canvasAttempts.push(event)
+        return !backpressured
+      }
+      return true
+    })
+    const recorder = record({
+      emit,
+      $rWasLastEmitBackpressured: () => backpressured,
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      startCanvasCommandCapture: function (options) {
+        commandCaptureOptions = options
+        return {
+          flush: function () {
+            if (!commandWasCaptured) {
+              commandWasCaptured = true
+              expect(commandCaptureOptions.emit(canvasRecord)).toBeTrue()
+            }
+          },
+          stop: function () {},
+          reset: function () {},
+          scanExistingCanvases: function () {}
+        }
+      }
+    })
+
+    backpressured = true
+    recorder.$rFlushCanvasCommands()
+    expect(canvasAttempts).toEqual([canvasRecord])
+
+    backpressured = false
+    recorder.$rFlushCanvasCommands()
+    expect(canvasAttempts).toEqual([canvasRecord, canvasRecord])
+
+    recorder.stop()
   })
 
   it('should default auto mode to the continuous snapshot path for numeric sampling', () => {
@@ -7982,6 +11666,59 @@ describe('replay/record/record', () => {
     expect(loopOptions.getCanvases()).not.toContain(canvas)
   })
 
+  it('should unwind canvas command capture before the WebGL bootstrap wrapper', () => {
+    const canvasPrototype = window.HTMLCanvasElement.prototype
+    const nativeGetContext = canvasPrototype.getContext
+    const webGLBootstrapGetContext = function () {
+      return nativeGetContext.apply(this, arguments)
+    }
+    canvasPrototype.getContext = webGLBootstrapGetContext
+    let recorder
+
+    try {
+      recorder = record({
+        emit: jasmine.createSpy('emit'),
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+          replayCanvasEnabled: true,
+          replayCanvasMode: 'auto',
+          replayCanvasSampling: 'all'
+        },
+        lifeCycle: createLifeCycle(),
+        startCanvasCommandCapture: function () {
+          const commandOriginalGetContext = canvasPrototype.getContext
+          const commandGetContext = function () {
+            return commandOriginalGetContext.apply(this, arguments)
+          }
+          canvasPrototype.getContext = commandGetContext
+          return {
+            stop: function () {
+              if (canvasPrototype.getContext === commandGetContext) {
+                canvasPrototype.getContext = commandOriginalGetContext
+              }
+            },
+            reset: jasmine.createSpy('resetCanvasCommandCapture')
+          }
+        },
+        startCanvasWebGLSnapshotObserver: function () {
+          return {
+            stop: function () {
+              if (canvasPrototype.getContext === webGLBootstrapGetContext) {
+                canvasPrototype.getContext = nativeGetContext
+              }
+            },
+            reset: jasmine.createSpy('resetCanvasWebGLSnapshotObserver')
+          }
+        }
+      })
+
+      recorder.stop()
+      expect(canvasPrototype.getContext).toBe(nativeGetContext)
+    } finally {
+      canvasPrototype.getContext = nativeGetContext
+    }
+  })
+
   it('should roll back initialized resources when observer initialization fails', () => {
     const canvas = document.createElement('canvas')
     container.appendChild(canvas)
@@ -7989,12 +11726,17 @@ describe('replay/record/record', () => {
     const stopContinuousCanvasSnapshots = jasmine.createSpy(
       'stopContinuousCanvasSnapshots'
     )
-    const stopCanvasCommandCapture = jasmine.createSpy(
-      'stopCanvasCommandCapture'
-    )
-    const stopCanvasWebGLSnapshotObserver = jasmine.createSpy(
-      'stopCanvasWebGLSnapshotObserver'
-    )
+    const canvasCleanupOrder = []
+    const stopCanvasCommandCapture = jasmine
+      .createSpy('stopCanvasCommandCapture')
+      .and.callFake(function () {
+        canvasCleanupOrder.push('command')
+      })
+    const stopCanvasWebGLSnapshotObserver = jasmine
+      .createSpy('stopCanvasWebGLSnapshotObserver')
+      .and.callFake(function () {
+        canvasCleanupOrder.push('webgl')
+      })
     const onFullSnapshotFailure = jasmine.createSpy('onFullSnapshotFailure')
     let loopOptions
 
@@ -8046,6 +11788,7 @@ describe('replay/record/record', () => {
     expect(stopContinuousCanvasSnapshots).toHaveBeenCalledTimes(1)
     expect(stopCanvasCommandCapture).toHaveBeenCalledTimes(1)
     expect(stopCanvasWebGLSnapshotObserver).toHaveBeenCalledTimes(1)
+    expect(canvasCleanupOrder).toEqual(['command', 'webgl'])
     expect(loopOptions.getCanvases()).not.toContain(canvas)
     expect(recorder.flushScheduledFullSnapshot()).toBeFalse()
 

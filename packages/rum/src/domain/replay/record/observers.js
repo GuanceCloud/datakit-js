@@ -57,9 +57,13 @@ export function getRecordIdForEvent(event) {
 export function initObservers(o) {
   var cleanupTasks = []
   var mutationHandler
-  var isNodeIgnored = createNodeIgnorePredicate(
+  var isNodeIgnoredForStateObserver = createNodeIgnorePredicate(
     o.shadowRootsController,
     o.isNodeIgnored
+  )
+  var isNodeIgnoredForStatelessObserver = createNodeIgnorePredicate(
+    o.shadowRootsController,
+    o.isNodeIgnoredForStatelessObserver || o.isNodeIgnored
   )
   try {
     mutationHandler = initMutationObserver(
@@ -70,24 +74,29 @@ export function initObservers(o) {
       o.mutationOverflowCb,
       o.mutationActivityCb,
       o.mutationNodeSerializationCb,
-      // DOM mutations use the ordered admission queue, so they may be staged
-      // behind a serialized-but-not-yet-published add. Other observer sources
-      // keep the stricter published-only predicate below.
+      // DOM mutation assembly and stateful observers use the queued-aware
+      // predicate. Stateless interactions use the strict published-only
+      // predicate below and never advance a pending serializer.
       o.isNodeIgnored &&
         function (node) {
           return o.isNodeIgnored(node, true)
         },
-      o.isNodePublished
+      o.isNodePublished,
+      o.mutationResourceBudget
     )
     cleanupTasks.push(mutationHandler.stop)
     cleanupTasks.push(
-      initMoveObserver(o.mousemoveCb, o.configuration, isNodeIgnored)
+      initMoveObserver(
+        o.mousemoveCb,
+        o.configuration,
+        isNodeIgnoredForStatelessObserver
+      )
     )
     cleanupTasks.push(
       initMouseInteractionObserver(
         o.mouseInteractionCb,
         o.configuration,
-        isNodeIgnored
+        isNodeIgnoredForStatelessObserver
       )
     )
     cleanupTasks.push(
@@ -95,7 +104,7 @@ export function initObservers(o) {
         o.scrollCb,
         o.configuration,
         o.elementsScrollPositions,
-        isNodeIgnored
+        isNodeIgnoredForStateObserver
       )
     )
     cleanupTasks.push(
@@ -106,21 +115,21 @@ export function initObservers(o) {
         o.inputCb,
         o.configuration,
         undefined,
-        isNodeIgnored
+        isNodeIgnoredForStateObserver
       )
     )
     cleanupTasks.push(
       initMediaInteractionObserver(
         o.mediaInteractionCb,
         o.configuration,
-        isNodeIgnored
+        isNodeIgnoredForStateObserver
       )
     )
     cleanupTasks.push(
       initStyleSheetObserver(
         o.styleSheetCb,
         o.configuration,
-        isNodeIgnored
+        isNodeIgnoredForStateObserver
       )
     )
     cleanupTasks.push(initFocusObserver(o.focusCb, o.configuration))
@@ -135,7 +144,7 @@ export function initObservers(o) {
         o.lifeCycle,
         o.frustrationCb,
         o.configuration,
-        isNodeIgnored
+        isNodeIgnoredForStatelessObserver
       )
     )
   } catch (error) {
@@ -224,7 +233,8 @@ export function initMutationObserver(
   mutationActivityCb,
   mutationNodeSerializationCb,
   isNodeIgnored,
-  isNodePublished
+  isNodePublished,
+  mutationResourceBudget
 ) {
   return startMutationObserver(
     cb,
@@ -236,7 +246,9 @@ export function initMutationObserver(
     mutationActivityCb,
     mutationNodeSerializationCb,
     isNodeIgnored,
-    isNodePublished
+    isNodePublished,
+    undefined,
+    mutationResourceBudget
   )
 }
 
@@ -289,26 +301,26 @@ export function initMoveObserver(cb, configuration, isNodeIgnored) {
   }
 }
 
-var eventTypeToMouseInteraction = {
-  // Listen for pointerup DOM events instead of mouseup for MouseInteraction/MouseUp records. This
-  // allows to reference such records from Frustration records.
-  //
-  // In the context of supporting Mobile Session Replay, we introduced `PointerInteraction` records
-  // used by the Mobile SDKs in place of `MouseInteraction`. In the future, we should replace
-  // `MouseInteraction` by `PointerInteraction` in the Browser SDK so we have an uniform way to
-  // convey such interaction. This would cleanly solve the issue since we would have
-  // `PointerInteraction/Up` records that we could reference from `Frustration` records.
-  [DOM_EVENT.POINTER_UP]: MouseInteractionType.MouseUp,
-
-  [DOM_EVENT.MOUSE_DOWN]: MouseInteractionType.MouseDown,
-  [DOM_EVENT.CLICK]: MouseInteractionType.Click,
-  [DOM_EVENT.CONTEXT_MENU]: MouseInteractionType.ContextMenu,
-  [DOM_EVENT.DBL_CLICK]: MouseInteractionType.DblClick,
-  [DOM_EVENT.FOCUS]: MouseInteractionType.Focus,
-  [DOM_EVENT.BLUR]: MouseInteractionType.Blur,
-  [DOM_EVENT.TOUCH_START]: MouseInteractionType.TouchStart,
-  [DOM_EVENT.TOUCH_END]: MouseInteractionType.TouchEnd
-}
+var eventTypeToMouseInteraction = {}
+// Listen for pointerup DOM events instead of mouseup for MouseInteraction/MouseUp records. This
+// allows to reference such records from Frustration records.
+//
+// In the context of supporting Mobile Session Replay, we introduced `PointerInteraction` records
+// used by the Mobile SDKs in place of `MouseInteraction`. In the future, we should replace
+// `MouseInteraction` by `PointerInteraction` in the Browser SDK so we have an uniform way to
+// convey such interaction. This would cleanly solve the issue since we would have
+// `PointerInteraction/Up` records that we could reference from `Frustration` records.
+eventTypeToMouseInteraction[DOM_EVENT.POINTER_UP] = MouseInteractionType.MouseUp
+eventTypeToMouseInteraction[DOM_EVENT.MOUSE_DOWN] = MouseInteractionType.MouseDown
+eventTypeToMouseInteraction[DOM_EVENT.CLICK] = MouseInteractionType.Click
+eventTypeToMouseInteraction[DOM_EVENT.CONTEXT_MENU] =
+  MouseInteractionType.ContextMenu
+eventTypeToMouseInteraction[DOM_EVENT.DBL_CLICK] = MouseInteractionType.DblClick
+eventTypeToMouseInteraction[DOM_EVENT.FOCUS] = MouseInteractionType.Focus
+eventTypeToMouseInteraction[DOM_EVENT.BLUR] = MouseInteractionType.Blur
+eventTypeToMouseInteraction[DOM_EVENT.TOUCH_START] =
+  MouseInteractionType.TouchStart
+eventTypeToMouseInteraction[DOM_EVENT.TOUCH_END] = MouseInteractionType.TouchEnd
 export function initMouseInteractionObserver(
   cb,
   configuration,

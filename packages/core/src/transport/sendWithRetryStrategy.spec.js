@@ -2,7 +2,9 @@ import {
   drainQueuedPayloads,
   INITIAL_BACKOFF_TIME,
   MAX_ONGOING_BYTES_COUNT,
+  MAX_QUEUE_BYTES_COUNT,
   newRetryState,
+  ORDERED_REQUEST_TIMEOUT,
   sendWithRetryStrategy
 } from './sendWithRetryStrategy'
 
@@ -102,6 +104,510 @@ describe('sendWithRetryStrategy', () => {
     jasmine.clock().tick(INITIAL_BACKOFF_TIME)
 
     expect(sendStrategy).toHaveBeenCalledTimes(1)
+    expect(state.queuedPayloads.size()).toBe(0)
+    expect(state.transportStatus).toBe(0)
+  })
+
+  it('should notify a payload when a non-recoverable response drops it', () => {
+    const state = newRetryState(3)
+    const onPermanentDrop = jasmine.createSpy('onPermanentDrop')
+
+    sendWithRetryStrategy(
+      { bytesCount: 10, $rOnPermanentDrop: onPermanentDrop },
+      state,
+      (payload, callback) => callback({ status: 400, type: 'basic' }),
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+
+    expect(onPermanentDrop).toHaveBeenCalledOnceWith('http_400')
+  })
+
+  it('should notify a payload once when its retry limit is exhausted', () => {
+    const state = newRetryState(0)
+    const onPermanentDrop = jasmine.createSpy('onPermanentDrop')
+    const sendStrategy = (payload, callback) =>
+      callback({ status: 500, type: 'basic' })
+
+    sendWithRetryStrategy(
+      { bytesCount: 10, $rOnPermanentDrop: onPermanentDrop },
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME)
+
+    expect(onPermanentDrop).toHaveBeenCalledOnceWith('retry_exhausted')
+    expect(state.queuedPayloads.size()).toBe(0)
+  })
+
+  it('should notify a payload rejected by the retry queue', () => {
+    const state = newRetryState(3)
+    const callbacks = []
+    const sendStrategy = (payload, callback) => {
+      callbacks.push(callback)
+    }
+    const onPermanentDrop = jasmine.createSpy('onPermanentDrop')
+
+    sendWithRetryStrategy(
+      { bytesCount: MAX_ONGOING_BYTES_COUNT },
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+    sendWithRetryStrategy(
+      { bytesCount: MAX_QUEUE_BYTES_COUNT },
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+    sendWithRetryStrategy(
+      { bytesCount: 1, $rOnPermanentDrop: onPermanentDrop },
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+
+    expect(callbacks).toHaveSize(1)
+    expect(onPermanentDrop).toHaveBeenCalledOnceWith('queue_full')
+  })
+
+  it('should reclaim an invalid queued generation before dropping a new valid payload', () => {
+    const state = newRetryState(3)
+    const attempts = []
+    const callbacks = []
+    const sendStrategy = (payload, callback) => {
+      attempts.push(payload)
+      callbacks.push(callback)
+    }
+    const activePayload = { bytesCount: MAX_ONGOING_BYTES_COUNT }
+    let staleGenerationValid = true
+    const stalePayload = {
+      bytesCount: MAX_QUEUE_BYTES_COUNT,
+      $rEnforceOrder: true,
+      $rIsValid: () => staleGenerationValid
+    }
+    const onPermanentDrop = jasmine.createSpy('onPermanentDrop')
+    const nextPayload = {
+      bytesCount: 1,
+      $rEnforceOrder: true,
+      $rOnPermanentDrop: onPermanentDrop
+    }
+
+    sendWithRetryStrategy(
+      activePayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+    sendWithRetryStrategy(
+      stalePayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+    staleGenerationValid = false
+    sendWithRetryStrategy(
+      nextPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+
+    expect(onPermanentDrop).not.toHaveBeenCalled()
+    expect(state.queuedPayloads.size()).toBe(1)
+    expect(state.queuedPayloads.first()).toBe(nextPayload)
+    expect(state.$rPayloadSequenceByPayload.has(stalePayload)).toBeFalse()
+
+    callbacks[0]({ status: 200, type: 'basic' })
+    expect(attempts).toEqual([activePayload, nextPayload])
+    callbacks[1]({ status: 200, type: 'basic' })
+    expect(state.queuedPayloads.size()).toBe(0)
+    expect(state.$rPayloadSequenceByPayload.size).toBe(0)
+  })
+
+  it('should preserve a valid tail while pruning an oversized ordered queue', () => {
+    const state = newRetryState(3)
+    const sendStrategy = jasmine.createSpy('sendStrategy')
+    const activePayload = { bytesCount: MAX_ONGOING_BYTES_COUNT }
+    sendWithRetryStrategy(
+      activePayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+
+    const orderedHead = {
+      bytesCount: MAX_QUEUE_BYTES_COUNT,
+      $rEnforceOrder: true
+    }
+    const invalidMiddle = {
+      bytesCount: 1,
+      $rIsValid: () => false
+    }
+    const validTail = { bytesCount: 1, $rEnforceOrder: true }
+    ;[orderedHead, invalidMiddle, validTail].forEach(
+      (payload, index) =>
+        state.$rPayloadSequenceByPayload.set(payload, index + 1)
+    )
+    state.$rNextPayloadSequence = 4
+    expect(state.queuedPayloads.enqueue(invalidMiddle)).toBeTrue()
+    expect(state.queuedPayloads.enqueue(validTail)).toBeTrue()
+    expect(state.queuedPayloads.enqueueFirst(orderedHead)).toBeTrue()
+    expect(state.queuedPayloads.bytesCount).toBe(
+      MAX_QUEUE_BYTES_COUNT + 2
+    )
+
+    const onPermanentDrop = jasmine.createSpy('onPermanentDrop')
+    const rejectedPayload = {
+      bytesCount: 1,
+      $rOnPermanentDrop: onPermanentDrop
+    }
+    sendWithRetryStrategy(
+      rejectedPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+
+    expect(onPermanentDrop).toHaveBeenCalledOnceWith('queue_full')
+    expect(state.queuedPayloads.size()).toBe(2)
+    expect(state.queuedPayloads.dequeue()).toBe(orderedHead)
+    expect(state.queuedPayloads.dequeue()).toBe(validTail)
+    expect(state.$rPayloadSequenceByPayload.has(orderedHead)).toBeTrue()
+    expect(state.$rPayloadSequenceByPayload.has(validTail)).toBeTrue()
+    expect(state.$rPayloadSequenceByPayload.has(invalidMiddle)).toBeFalse()
+    expect(state.$rPayloadSequenceByPayload.has(rejectedPayload)).toBeFalse()
+
+    drainQueuedPayloads(state)
+  })
+
+  it('should abort a hung invalid ordered generation after the retry queue fills', () => {
+    const state = newRetryState(3)
+    const attempts = []
+    let firstResponse
+    let generationValid = true
+    const abort = jasmine.createSpy('abort').and.callFake(() => {
+      firstResponse({ status: 0, $rForceRetry: true })
+    })
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((payload, callback) => {
+        attempts.push(payload)
+        if (attempts.length === 1) {
+          firstResponse = callback
+          return { abort }
+        }
+        return { abort: jasmine.createSpy('replacementAbort') }
+      })
+    const reportError = jasmine.createSpy('reportError')
+    const sharedProperties = {
+      $rEnforceOrder: true,
+      $rIsValid: () => generationValid
+    }
+    const hungPayload = { ...sharedProperties, bytesCount: 10 }
+    const queuedPayload = {
+      ...sharedProperties,
+      bytesCount: MAX_QUEUE_BYTES_COUNT
+    }
+    const onPermanentDrop = jasmine
+      .createSpy('onPermanentDrop')
+      .and.callFake(() => {
+        generationValid = false
+      })
+    const rejectedPayload = {
+      ...sharedProperties,
+      bytesCount: 1,
+      $rOnPermanentDrop: onPermanentDrop
+    }
+
+    sendWithRetryStrategy(
+      hungPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      reportError
+    )
+    sendWithRetryStrategy(
+      queuedPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      reportError
+    )
+    sendWithRetryStrategy(
+      rejectedPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      reportError
+    )
+
+    expect(onPermanentDrop).toHaveBeenCalledOnceWith('queue_full')
+    expect(abort).toHaveBeenCalledTimes(1)
+    expect(attempts).toEqual([hungPayload])
+    expect(state.$rOngoingRequests.size).toBe(0)
+    expect(state.bandwidthMonitor.ongoingRequestCount).toBe(0)
+    expect(state.bandwidthMonitor.ongoingOrderedRequestCount).toBe(0)
+    expect(state.bandwidthMonitor.ongoingByteCount).toBe(0)
+    expect(state.queuedPayloads.size()).toBe(0)
+    expect(state.$rPayloadSequenceByPayload.size).toBe(0)
+    expect(state.transportStatus).toBe(0)
+
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME)
+    expect(sendStrategy).toHaveBeenCalledTimes(1)
+
+    const replacementPayload = {
+      bytesCount: 10,
+      $rEnforceOrder: true,
+      $rIsValid: () => true
+    }
+    sendWithRetryStrategy(
+      replacementPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      reportError
+    )
+
+    expect(attempts).toEqual([hungPayload, replacementPayload])
+    expect(state.queuedPayloads.size()).toBe(0)
+    expect(state.$rOngoingRequests.size).toBe(1)
+  })
+
+  it('should time out a hung ordered request and retry it before its dependent tail', () => {
+    const state = newRetryState(3)
+    const attempts = []
+    const callbacks = []
+    const aborts = []
+    const firstPayload = { bytesCount: 10, $rEnforceOrder: true }
+    const secondPayload = { bytesCount: 10, $rEnforceOrder: true }
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((payload, callback) => {
+        const abort = jasmine.createSpy('abort')
+        attempts.push(payload)
+        callbacks.push(callback)
+        aborts.push(abort)
+        return { abort }
+      })
+
+    sendWithRetryStrategy(
+      firstPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+    sendWithRetryStrategy(
+      secondPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+
+    expect(attempts).toEqual([firstPayload])
+    expect(state.queuedPayloads.first()).toBe(secondPayload)
+
+    jasmine.clock().tick(ORDERED_REQUEST_TIMEOUT)
+
+    expect(aborts[0]).toHaveBeenCalledTimes(1)
+    expect(state.$rOngoingRequests.size).toBe(0)
+    expect(state.bandwidthMonitor.ongoingOrderedRequestCount).toBe(0)
+    expect(state.queuedPayloads.size()).toBe(2)
+    expect(state.queuedPayloads.first()).toBe(firstPayload)
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME)
+
+    expect(attempts).toEqual([firstPayload, firstPayload])
+    callbacks[1]({ status: 200, type: 'basic' })
+    expect(attempts).toEqual([firstPayload, firstPayload, secondPayload])
+    callbacks[2]({ status: 200, type: 'basic' })
+    expect(state.queuedPayloads.size()).toBe(0)
+    expect(state.$rOngoingRequests.size).toBe(0)
+    expect(state.$rPayloadSequenceByPayload.size).toBe(0)
+  })
+
+  it('should keep ordered dependents behind a payload and skip them when its generation is invalidated', () => {
+    const state = newRetryState(3)
+    const callbacks = []
+    let generationValid = true
+    const onPermanentDrop = jasmine
+      .createSpy('onPermanentDrop')
+      .and.callFake(() => {
+        generationValid = false
+      })
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((payload, callback) => callbacks.push(callback))
+    const sharedProperties = {
+      bytesCount: 10,
+      $rEnforceOrder: true,
+      $rIsValid: () => generationValid
+    }
+
+    sendWithRetryStrategy(
+      { ...sharedProperties, $rOnPermanentDrop: onPermanentDrop },
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+    sendWithRetryStrategy(
+      { ...sharedProperties },
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+
+    expect(sendStrategy).toHaveBeenCalledTimes(1)
+    expect(state.queuedPayloads.size()).toBe(1)
+
+    callbacks[0]({ status: 400, type: 'basic' })
+
+    expect(onPermanentDrop).toHaveBeenCalledOnceWith('http_400')
+    expect(sendStrategy).toHaveBeenCalledTimes(1)
+    expect(state.queuedPayloads.size()).toBe(0)
+    expect(state.$rPayloadSequenceByPayload.size).toBe(0)
+  })
+
+  it('should retry a failed ordered payload before later queued payloads', () => {
+    const state = newRetryState(3)
+    const firstPayload = { bytesCount: 10, $rEnforceOrder: true }
+    const secondPayload = { bytesCount: 10, $rEnforceOrder: true }
+    const attempts = []
+    const callbacks = []
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((payload, callback) => {
+        attempts.push(payload)
+        callbacks.push(callback)
+      })
+
+    sendWithRetryStrategy(
+      firstPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+    sendWithRetryStrategy(
+      secondPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+
+    callbacks[0]({ status: 500, type: 'basic' })
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME)
+
+    expect(attempts).toEqual([firstPayload, firstPayload])
+    callbacks[1]({ status: 200, type: 'basic' })
+
+    expect(attempts).toEqual([
+      firstPayload,
+      firstPayload,
+      secondPayload
+    ])
+  })
+
+  it('should discard payloads invalidated while waiting for an ordered retry', () => {
+    const state = newRetryState(3)
+    const attempts = []
+    const callbacks = []
+    let generationValid = true
+    const invalidatedPayload = {
+      bytesCount: 10,
+      $rEnforceOrder: true,
+      $rIsValid: () => generationValid
+    }
+    const validPayload = { bytesCount: 10, $rEnforceOrder: true }
+    const sendStrategy = (payload, callback) => {
+      attempts.push(payload)
+      callbacks.push(callback)
+    }
+
+    sendWithRetryStrategy(
+      invalidatedPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+    sendWithRetryStrategy(
+      validPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+
+    callbacks[0]({ status: 500, type: 'basic' })
+    generationValid = false
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME)
+
+    expect(attempts).toEqual([invalidatedPayload, validPayload])
+    expect(state.queuedPayloads.size()).toBe(1)
+    expect(state.queuedPayloads.first()).toBe(validPayload)
+
+    callbacks[1]({ status: 200, type: 'basic' })
+    expect(state.queuedPayloads.size()).toBe(0)
+    expect(state.$rPayloadSequenceByPayload.size).toBe(0)
+  })
+
+  it('should restart recovery when an invalid retry leaves the transport down and a new payload arrives', () => {
+    const state = newRetryState(3)
+    const attempts = []
+    const callbacks = []
+    let generationValid = true
+    const invalidatedPayload = {
+      bytesCount: 10,
+      $rEnforceOrder: true,
+      $rIsValid: () => generationValid
+    }
+    const validPayload = { bytesCount: 10, $rEnforceOrder: true }
+    const sendStrategy = (payload, callback) => {
+      attempts.push(payload)
+      callbacks.push(callback)
+    }
+
+    sendWithRetryStrategy(
+      invalidatedPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+    callbacks[0]({ status: 500, type: 'basic' })
+    generationValid = false
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME)
+
+    expect(state.transportStatus).toBe(2)
+    expect(state.queuedPayloads.size()).toBe(0)
+
+    sendWithRetryStrategy(
+      validPayload,
+      state,
+      sendStrategy,
+      '/replay',
+      jasmine.createSpy('reportError')
+    )
+    expect(state.queuedPayloads.first()).toBe(validPayload)
+
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME * 2)
+    expect(attempts).toEqual([invalidatedPayload, validPayload])
+    callbacks[1]({ status: 200, type: 'basic' })
     expect(state.queuedPayloads.size()).toBe(0)
     expect(state.transportStatus).toBe(0)
   })
