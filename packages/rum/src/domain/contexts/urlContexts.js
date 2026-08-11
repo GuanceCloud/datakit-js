@@ -1,6 +1,7 @@
 import {
   LifeCycleEventType,
   SESSION_TIME_OUT_DELAY,
+  assign,
   relativeNow,
   createValueHistory,
   replaceNumberCharByPath,
@@ -88,12 +89,23 @@ export function startUrlContexts(
       host: data.location.host,
       path: path,
       pathGroup: replaceNumberCharByPath(path),
-      urlQuery:
-        typeof data.location.search === 'string'
-          ? getURLSearchParams(data.location.search)
-          : getQueryParamsFromUrl(data.location.href),
+      urlQuery: getLocationQuery(data.location),
       pathname: pathname
     }
+  }
+
+  function getLocationQuery(location) {
+    var urlQuery =
+      typeof location.search === 'string'
+        ? getURLSearchParams(location.search)
+        : getQueryParamsFromUrl(location.href.split('#')[0])
+    var hash = location.hash
+    var hashQueryIndex =
+      hash && hash.indexOf('#/') === 0 ? hash.indexOf('?') : -1
+    if (hashQueryIndex >= 0) {
+      assign(urlQuery, getURLSearchParams(hash.slice(hashQueryIndex)))
+    }
+    return urlQuery
   }
 
   return {
