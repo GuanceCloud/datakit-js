@@ -42,7 +42,8 @@
         "build:bundle": "lerna run build:bundle --stream",
         "check:bundle-size": "npm run build:bundle --workspace @cloudcare/browser-rum",
         "check:bundle-size:artifact": "node scripts/check-bundle-size.js",
-        "publish:npm": "npm run build && lerna publish from-package",
+        "publish:npm": "npm run release:preflight && npm run build && npm run release:preflight && lerna publish from-package",
+        "release:preflight": "node scripts/release/check-webgl-publish-contract.js",
         "publish:oss:current": "lerna run publish:oss:current --stream",
         "publish:oss:lts": "lerna run publish:oss:lts --stream",
         "publish:oss:test": "lerna run publish:oss:test --stream",
@@ -71,6 +72,7 @@
         "test:unit:grep": "node ./scripts/test-unit.js --grep",
         "test:exports:frameworks": "node ./scripts/test-framework-package-exports.js",
         "test:types:frameworks": "tsc --project test/types/framework-plugins.tsconfig.json",
+        "test:release-scripts": "node scripts/release/check-webgl-publish-contract.test.js && node scripts/publish-oss-base.test.js",
         "test:unit:watch": "npm run test:unit --no-single-run"
     },
     "keywords": [

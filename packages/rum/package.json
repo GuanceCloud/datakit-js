@@ -9,6 +9,9 @@
         "@cloudcare/browser-worker": "3.3.6"
     },
     "description": "Guance Browser SDK RUM Package",
+    "browserSdkCapabilities": {
+        "sessionReplayWebGLPlugin": 1
+    },
     "scripts": {
         "dev": "webpack serve --open --mode=development",
         "build": "run-s build:cjs build:esm build:bundle",

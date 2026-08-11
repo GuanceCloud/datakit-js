@@ -39,12 +39,23 @@ const loadableEntries = {
 async function main() {
   require('@angular/compiler')
 
-  const expectedRumWebGLPeerVersion = '>=' + rumWebGLPackage.version
+  const persistedRumWebGLHostMinimum =
+    rumWebGLPackage.browserSdkPeerMinimums &&
+    rumWebGLPackage.browserSdkPeerMinimums['@cloudcare/browser-rum']
+  const expectedRumWebGLPeerVersion =
+    '>=' + (persistedRumWebGLHostMinimum || rumWebGLPackage.version)
   assert.strictEqual(
     rumWebGLPackage.peerDependencies['@cloudcare/browser-rum'],
     expectedRumWebGLPeerVersion,
     '@cloudcare/browser-rum-webgl should remain installable in the current workspace'
   )
+  if (persistedRumWebGLHostMinimum) {
+    assert.strictEqual(
+      rumWebGLPackage.peerDependencies['@cloudcare/browser-rum'],
+      '>=' + persistedRumWebGLHostMinimum,
+      'the WebGL peer range should match its persisted capable host floor'
+    )
+  }
   const updatedRumWebGLPackage = JSON.parse(
     updateJsonPeerDependencies(
       JSON.stringify(rumWebGLPackage),
@@ -72,6 +83,32 @@ async function main() {
     nextRumWebGLPackage.peerDependencies['@cloudcare/browser-rum'],
     '>=' + nextRumVersion,
     'the release peer updater should write the next unified WebGL host minimum'
+  )
+  assert.strictEqual(
+    nextRumWebGLPackage.browserSdkPeerMinimums[
+      '@cloudcare/browser-rum'
+    ],
+    nextRumVersion,
+    'the first WebGL release should persist its capable host floor'
+  )
+  const laterPluginVersion = getNextPatchVersion(nextRumVersion)
+  nextRumWebGLPackage.version = laterPluginVersion
+  const laterRumWebGLPackage = JSON.parse(
+    updateJsonPeerDependencies(
+      JSON.stringify(nextRumWebGLPackage),
+      laterPluginVersion
+    )
+  )
+  assert.strictEqual(
+    laterRumWebGLPackage.peerDependencies['@cloudcare/browser-rum'],
+    '>=' + nextRumVersion,
+    'a plugin-only patch should retain the first capable host floor'
+  )
+  assert.strictEqual(
+    laterRumWebGLPackage.browserSdkPeerMinimums[
+      '@cloudcare/browser-rum'
+    ],
+    nextRumVersion
   )
 
   resolvableEntries.forEach(function (entry) {

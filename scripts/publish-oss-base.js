@@ -1,59 +1,92 @@
 const OSS = require('ali-oss')
 const fs = require('fs')
 const path = require('path')
-const { printError, printLog } = require('./utils')
+const { printLog } = require('./utils')
 
 const packageJSON = require('../lerna.json')
-const configJson = require('../config/config.json')
-let sdkVersion = packageJSON.version
-// publish-oss-base.js
-module.exports = ({ filename }) => {
-  if (!configJson) {
-    printError('load oss config fail')
-    return
+const sdkVersion = packageJSON.version
+
+async function publishOss({ filename, filenames }, dependencies = {}) {
+  const buildArg = dependencies.buildArg || process.argv[2]
+  const bundleNames = filenames || [filename]
+  const objectNames = bundleNames.reduce(
+    (entries, bundleName) =>
+      entries.concat(getObjectNames(bundleName, buildArg, sdkVersion)),
+    []
+  )
+  const client =
+    dependencies.client ||
+    createClient(
+      dependencies.configuration || require('../config/config.json')
+    )
+  const readFile = dependencies.readFile || fs.promises.readFile
+  const log = dependencies.printLog || printLog
+  const bundleDirectory =
+    dependencies.bundleDirectory || path.resolve('./bundle')
+
+  // Fail before mutating OSS when any local artifact is missing.  Upload
+  // source maps first and executable entry points last so a later failure
+  // cannot replace the runtime while leaving its map stale or absent.
+  const artifacts = await Promise.all(
+    objectNames.map(async ({ fileName, objectName }) => {
+      const fullPath = path.join(bundleDirectory, fileName)
+      const content = await readFile(fullPath)
+      return { fileName, objectName, content }
+    })
+  )
+  artifacts.sort((left, right) => {
+    const leftIsMap = left.fileName.endsWith('.map')
+    const rightIsMap = right.fileName.endsWith('.map')
+    return leftIsMap === rightIsMap ? 0 : leftIsMap ? -1 : 1
+  })
+  for (const artifact of artifacts) {
+    log('file publish oss:', artifact.objectName)
+    await client.put(artifact.objectName, artifact.content, {
+      mime: 'application/javascript'
+    })
   }
-  const { region, accessKeyId, accessKeySecret, bucket } = configJson.oss
-  const client = new OSS({
+}
+
+function createClient(configuration) {
+  if (!configuration || !configuration.oss) {
+    throw new Error('load oss config fail')
+  }
+  const { region, accessKeyId, accessKeySecret, bucket } = configuration.oss
+  return new OSS({
     region,
     accessKeyId,
     accessKeySecret,
     bucket
   })
+}
+
+function getObjectNames(filename, buildArg, version) {
+  const versionMajor = `v${version.split('.')[0]}`
   const files = [`${filename}.js`, `${filename}.js.map`]
-  files.forEach((name) => {
-    const fullpath = path.resolve('./bundle', name)
-    const jscontent = fs.readFileSync(fullpath)
-    const buildArg = process.argv[2]
-    // 获取大版本信息
-    const versionMajor = `v${sdkVersion.split('.')[0]}`
-    let objectName = ''
+
+  if (!['test', 'lts', 'current', 'beta'].includes(buildArg)) {
+    throw new Error(`Unknown OSS publish channel: ${buildArg || '<missing>'}`)
+  }
+
+  return files.map((fileName) => {
+    let publishedFileName = fileName
+    let directory = `browser-sdk/${versionMajor}`
     if (buildArg === 'test') {
-      // 测试版本
-      name = `${name.slice(0, name.indexOf('.'))}-test${name.slice(
-        name.indexOf('.')
-      )}`
-      objectName = `browser-sdk/${versionMajor}/${name}`
+      publishedFileName = `${fileName.slice(
+        0,
+        fileName.indexOf('.')
+      )}-test${fileName.slice(fileName.indexOf('.'))}`
     } else if (buildArg === 'lts') {
-      // LTS 版本
-      objectName = `browser-sdk/${versionMajor}/LTS/${name}`
-    } else if (buildArg === 'current') {
-      // Current 版本
-      objectName = `browser-sdk/${versionMajor}/${name}`
+      directory += '/LTS'
     } else if (buildArg === 'beta') {
-      // beta 版本
-      objectName = `browser-sdk/${versionMajor}/BETA/${name}`
+      directory += '/BETA'
     }
-    printLog('file publish oss:', objectName)
-    if (!objectName) return
-    client
-      .put(objectName, jscontent, {
-        mime: 'application/javascript'
-      })
-      .then((result) => {
-        // flushCdn()
-      })
-      .catch((err) => {
-        printError('file publish oss fail:', err)
-      })
+    return {
+      fileName,
+      objectName: `${directory}/${publishedFileName}`
+    }
   })
 }
+
+module.exports = publishOss
+module.exports.getObjectNames = getObjectNames

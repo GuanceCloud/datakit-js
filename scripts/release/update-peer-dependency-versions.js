@@ -41,7 +41,17 @@ function updateJsonPeerDependencies(
 ) {
   const json = JSON.parse(content)
   const indentation = content.match(/^\{\n(\s+)"/)
-  const minimumRumVersion = getMinimumRumPeerVersion(json.name, rumVersion)
+  const configuredMinimums = json.browserSdkPeerMinimums || {}
+  const minimumRumVersion = getMinimumRumPeerVersion(
+    json.name,
+    rumVersion,
+    configuredMinimums['@cloudcare/browser-rum']
+  )
+  if (json.name === '@cloudcare/browser-rum-webgl') {
+    json.browserSdkPeerMinimums = Object.assign({}, configuredMinimums, {
+      '@cloudcare/browser-rum': minimumRumVersion
+    })
+  }
   RUM_PEER_DEPENDENCIES.forEach((packageName) => {
     if (json.peerDependencies[packageName]) {
       json.peerDependencies[packageName] = `>=${minimumRumVersion}`
@@ -55,9 +65,17 @@ function updateJsonPeerDependencies(
 }
 
 function getMinimumRumPeerVersion(
-  _packageName,
-  rumVersion = lernaConfig.version
+  packageName,
+  rumVersion = lernaConfig.version,
+  configuredMinimumVersion
 ) {
+  if (
+    packageName === '@cloudcare/browser-rum-webgl' &&
+    typeof configuredMinimumVersion === 'string' &&
+    configuredMinimumVersion
+  ) {
+    return configuredMinimumVersion
+  }
   return rumVersion
 }
 

@@ -1,5 +1,8 @@
 const runOss = require('../../../scripts/publish-oss-base')
+const { runMain } = require('../../../scripts/utils')
 
-runOss({
-  filename: 'dataflux-rum-slim'
-})
+runMain(() =>
+  runOss({
+    filename: 'dataflux-rum-slim'
+  })
+)

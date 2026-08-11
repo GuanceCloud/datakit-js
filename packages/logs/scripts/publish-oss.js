@@ -1,4 +1,8 @@
 const runOss = require('../../../scripts/publish-oss-base')
-runOss({
-  filename: 'dataflux-logs'
-})
+const { runMain } = require('../../../scripts/utils')
+
+runMain(() =>
+  runOss({
+    filename: 'dataflux-logs'
+  })
+)

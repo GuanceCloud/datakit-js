@@ -1,7 +1,8 @@
 const runOss = require('../../../scripts/publish-oss-base')
-runOss({
-  filename: 'worker'
-})
-runOss({
-  filename: 'canvas-worker'
-})
+const { runMain } = require('../../../scripts/utils')
+
+runMain(() =>
+  runOss({
+    filenames: ['worker', 'canvas-worker']
+  })
+)
