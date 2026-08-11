@@ -75,6 +75,7 @@ describe('urlContexts', () => {
     const location = {
       href: 'https://example.com/#/products?sku=1',
       pathname: '/',
+      search: '',
       hash: '#/products?sku=1',
       host: 'example.com'
     }
@@ -97,25 +98,60 @@ describe('urlContexts', () => {
 
     const firstContext = urlContexts.findUrl(5)
     expect(firstContext.path).toBe('/#/products')
+    expect(firstContext.urlQuery).toEqual({ sku: '1' })
 
     onLocationChange({
       newLocation: {
-        href: 'https://example.com/account/profile?id=9',
-        pathname: '/account/profile',
-        hash: '',
+        href:
+          'https://example.com/?language=zh-CN&id=outside#/account/profile?id=9&title=%E6%B4%A5%E5%B8%82%E5%9B%BE%E4%B9%A6%E9%A6%86',
+        pathname: '/',
+        search: '?language=zh-CN&id=outside',
+        hash:
+          '#/account/profile?id=9&title=%E6%B4%A5%E5%B8%82%E5%9B%BE%E4%B9%A6%E9%A6%86',
         host: 'example.com'
       }
     })
 
     const changedContext = urlContexts.findUrl()
     expect(changedContext).toEqual({
-      url: 'https://example.com/account/profile?id=9',
+      url:
+        'https://example.com/?language=zh-CN&id=outside#/account/profile?id=9&title=%E6%B4%A5%E5%B8%82%E5%9B%BE%E4%B9%A6%E9%A6%86',
       referrer: 'https://referrer.example/landing',
       host: 'example.com',
-      path: '/account/profile',
-      pathGroup: '/account/profile',
-      urlQuery: { id: '9' },
-      pathname: '/account/profile'
+      path: '/#/account/profile',
+      pathGroup: '/#/account/profile',
+      urlQuery: { language: 'zh-CN', id: '9', title: '津市图书馆' },
+      pathname: '/'
+    })
+  })
+
+  it('should parse query parameters from an explicit hash route view URL', () => {
+    const lifeCycle = new LifeCycle()
+    const location = {
+      href: 'https://example.com/current',
+      pathname: '/current',
+      search: '',
+      hash: '',
+      host: 'example.com'
+    }
+    const urlContexts = startUrlContexts(
+      lifeCycle,
+      {
+        subscribe() {
+          return { unsubscribe() {} }
+        }
+      },
+      location
+    )
+
+    lifeCycle.notify(LifeCycleEventType.BEFORE_VIEW_CREATED, {
+      startClocks: { relative: 10 },
+      url: '/#/home?xybModuleCode=XYB_4307_430700_JSTSG_TSGWGBZ&title=%E6%B4%A5%E5%B8%82%E5%9B%BE%E4%B9%A6%E9%A6%86'
+    })
+
+    expect(urlContexts.findUrl(10).urlQuery).toEqual({
+      xybModuleCode: 'XYB_4307_430700_JSTSG_TSGWGBZ',
+      title: '津市图书馆'
     })
   })
 
