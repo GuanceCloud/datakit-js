@@ -4,6 +4,11 @@
 
 Guance Browser RUM can record `canvas` content as part of Session Replay.
 
+Canvas 2D recording configuration is available from SDK `3.3.0`. The optional
+WebGL/WebGL2 Replay addon is available from SDK `3.3.7` and requires
+`@cloudcare/browser-rum >= 3.3.7`. Use the RUM package and
+`@cloudcare/browser-rum-webgl` from the same SDK release when possible.
+
 The first thing to keep clear is this:
 
 **Setting `replayCanvasEnabled` alone is not enough.**
@@ -44,7 +49,9 @@ Current scope limitations:
 
 The WebGL implementation is not part of the `@cloudcare/browser-rum` main
 bundle. DOM and ordinary Canvas 2D replay do not need the addon. Install it only
-for applications that need WebGL replay:
+for applications that need WebGL replay. WebGL Replay is available from SDK
+`3.3.7`, requires `@cloudcare/browser-rum >= 3.3.7`, and should use the addon
+from the same SDK release when possible:
 
 ```js
 import { datafluxRum } from '@cloudcare/browser-rum'

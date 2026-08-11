@@ -4,6 +4,11 @@
 
 Guance Browser RUM 现在支持在 Session Replay 中录制 `canvas` 画面。
 
+Canvas 2D 录制配置从 SDK `3.3.0` 起可用；可选的 WebGL/WebGL2 Replay
+插件从 SDK `3.3.7` 起提供，要求 `@cloudcare/browser-rum` 版本不低于
+`3.3.7`。建议 RUM 主包与 `@cloudcare/browser-rum-webgl` 使用同一 SDK
+发布版本。
+
 先说明最重要的一点：
 
 **只配置 `replayCanvasEnabled` 还不够。**
@@ -42,7 +47,9 @@ canvas 录制要真正生效，至少还需要同时满足下面这些前置条�
 ## WebGL 插件接入
 
 WebGL 实现不在 `@cloudcare/browser-rum` 主包中。普通 DOM 和 2D Canvas
-无需安装插件；只有需要 WebGL Replay 的应用才额外引入：
+无需安装插件；只有需要 WebGL Replay 的应用才额外引入。WebGL Replay 从
+SDK `3.3.7` 起提供，RUM 主包版本必须 `>= 3.3.7`，并建议插件与主包使用同一
+SDK 发布版本：
 
 ```js
 import { datafluxRum } from '@cloudcare/browser-rum'

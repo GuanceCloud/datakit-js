@@ -9,11 +9,13 @@ The package does not contain a second replay recorder, segment pipeline, or
 canvas worker. Ordinary DOM and Canvas 2D replay remain owned by
 `@cloudcare/browser-rum`.
 
-Install the addon from the same SDK release as `@cloudcare/browser-rum`. Its
-peer dependency is advanced with the unified SDK release, and the build checks
-the private `onInit` runtime registration and positional runtime shape in both
-bundles. If registration is absent or runtime creation fails, the host keeps
-DOM, Canvas 2D, and other RUM collection active while WebGL capture stays off.
+WebGL Replay is available from SDK `3.3.7` and requires
+`@cloudcare/browser-rum >= 3.3.7`. Install the addon from the same SDK release
+as `@cloudcare/browser-rum` when possible. The package keeps its minimum capable
+host version as a peer dependency, and the build checks the private `onInit`
+runtime registration and positional runtime shape in both bundles. If
+registration is absent or runtime creation fails, the host keeps DOM, Canvas
+2D, and other RUM collection active while WebGL capture stays off.
 
 ## NPM
 
