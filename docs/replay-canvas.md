@@ -423,8 +423,8 @@ canvas 快照编码质量。
 | --- | --- | --- | --- | --- |
 | snapshot 编码质量 | `0.4` | `0.25` | `0.4` | `0.5` |
 | `replayCanvasSampling` | `2` | `1` | `2` | `4` |
-| `replayCanvasAutoInterval` | `1000 ms` | `1500 ms` | `1000 ms` | `700 ms` |
-| `replayCanvasAutoCooldown` | `1000 ms` | `3000 ms` | `2000 ms` | `1400 ms` |
+| `replayCanvasAutoInterval` | `250 ms` | `500 ms` | `250 ms` | `125 ms` |
+| `replayCanvasAutoCooldown` | `250 ms` | `500 ms` | `250 ms` | `125 ms` |
 | `replayCanvasAutoUnchangedBackoff` | `3000 ms` | `5000 ms` | `3000 ms` | `2000 ms` |
 | `replayCanvasAutoFailureBackoff` | `5000 ms` | `7000 ms` | `5000 ms` | `4000 ms` |
 | `replayCanvasAutoMaxPerRun` | `2` | `1` | `2` | `4` |
@@ -433,6 +433,24 @@ canvas 快照编码质量。
 基线默认值。显式传入某个独立配置时，该配置会覆盖预设中的对应值。例如，
 `replayCanvasQuality: 'medium'` 配合 `replayCanvasAutoCooldown: 800` 时，仅
 cooldown 使用 `800 ms`，其他项仍采用 `medium` 的值。
+
+对 Canvas 2D 而言，`replayCanvasAutoUnchangedBackoff` 表示签名持续未变化时两次
+完整编码校验之间的窗口。窗口内仍会执行有界的 `24x24` 轻量签名探测，并逐步退避
+到约 `1000 ms`；一旦发现变化，会立即恢复目标 cadence，而不是等完整校验窗口结束。
+WebGL 继续使用独立且更保守的 GPU 读回节奏。
+
+`replayCanvasAutoInterval` 表示每个 canvas 的目标采集间隔，不是整页的固定扫描
+周期。多 canvas 会按优先级和等待时间公平轮转，并继续受每轮数量、并发和全局
+采集预算约束；因此复杂看板的单 canvas 实际频率可能低于表中的目标值。默认全局
+上限约为每秒 `16.7` 次 snapshot attempt，避免通过提高连贯度把主线程和上传压力
+按 canvas 数量线性放大。
+
+上表的 interval/cooldown 是 Canvas 2D 的自动 snapshot 基线。可选 WebGL 插件
+需要同步读取 GPU 像素：未显式配置 interval/cooldown 时，它继续使用更保守的
+安全节奏——默认 `1000/1000 ms`，`low` 为 `1500/3000 ms`，`medium` 为
+`1000/2000 ms`，`high` 为 `700/1400 ms`。只有显式传入对应单项时，才会分别
+覆盖 WebGL 的 interval 或 cooldown；因此提升 2D 连贯度不会自动放大 WebGL
+`readPixels` 成本。
 
 如果只想改变图片编码质量而不改变采样与调度预算，请传 `0` 到 `1` 之间的数字，
 例如 `replayCanvasQuality: 0.4`。在 `replayCanvasSampling: 'all'` 下，command

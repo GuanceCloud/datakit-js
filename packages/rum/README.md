@@ -166,12 +166,20 @@ Web application integration can be done in three ways: NPM integration, asynchro
 - `replayCanvasWorkerUrl` only affects snapshot encoding. It does not replace `workerUrl`.
 - In `replayCanvasSampling: 'all'` mode, some complex scenes may still fall back to snapshot recording.
 - Without a named quality preset, the automatic scheduling baseline is a
-  `1000 ms` interval, `1000 ms` cooldown, `3000 ms` unchanged backoff,
-  `5000 ms` failure backoff, and at most `2` canvases per run. An explicit
+  per-canvas target interval of `250 ms`, a `250 ms` cooldown, a `3000 ms`
+  unchanged full-encode validation window, a `5000 ms` failure backoff, and at most `2` canvases per
+  run. Multiple canvases are scheduled fairly under a global capture budget,
+  so their effective cadence can be lower than the target interval. Unchanged
+  Canvas 2D frames keep using lightweight, progressively backed-off probes
+  during the validation window instead of pausing capture. An explicit
   individual option overrides only its corresponding preset value. See the
   [Canvas recording guide](../../docs/replay-canvas.en.md) for the complete
   preset matrix. `replayCanvasFlushImmediately` defaults to `true` in `manual`
   mode and `false` in `auto` mode.
+
+This faster baseline applies to Canvas 2D. Unless interval/cooldown are
+explicitly configured, the WebGL addon retains a more conservative GPU
+readback cadence; see the Canvas recording guide for the exact matrix.
 
 Recommended minimum configurations:
 

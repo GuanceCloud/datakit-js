@@ -41,11 +41,16 @@ datafluxRum.startSessionReplayRecording()
 | `replayCanvasQuality` | `0.4` | Canvas snapshot 编码质量。`low`、`medium`、`high` 字符串预设还会一起调整 sampling 和自动调度预算；只改图片质量时请传 `0` 到 `1` 的数字。 |
 | `replayCanvasWorkerUrl` |  | canvas snapshot 编码专用 worker 地址，只影响 canvas 编码，不替代原 `workerUrl`。 |
 
-未使用字符串预设时，自动调度基线为：interval `1000 ms`、cooldown
-`1000 ms`、unchanged backoff `3000 ms`、failure backoff `5000 ms`、每轮最多
-`2` 个 canvas。显式单项配置会覆盖字符串预设里的对应值；完整 preset 矩阵见
+未使用字符串预设时，自动调度基线为：每个 canvas 的目标 interval `250 ms`、
+cooldown `250 ms`、unchanged 完整编码校验窗口 `3000 ms`、failure backoff `5000 ms`、
+每轮最多 `2` 个 canvas。多 canvas 会公平轮转，并受全局采集预算限制，因此实际
+频率可能低于目标 interval。校验窗口内，未变化的 Canvas 2D 仍会以逐步退避且有界
+的轻量探测发现后续变化，不会暂停采集 `3000 ms`。显式单项配置会覆盖字符串预设里的对应值；完整 preset 矩阵见
 [Canvas 录制使用手册](../../docs/replay-canvas.md)。`replayCanvasFlushImmediately`
 在 `manual` 模式默认 `true`，在 `auto` 模式默认 `false`。
+
+以上高频基线用于 Canvas 2D。WebGL 插件未显式配置 interval/cooldown 时继续采用
+更保守的 GPU 读回节奏；显式配置才会分别覆盖。详见 Canvas 录制使用手册。
 
 ## 实际上应视为必填的项
 

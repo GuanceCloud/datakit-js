@@ -154,9 +154,9 @@ Web 应用接入支持三种方式：
 | `replayCanvasMode` | `'manual' \| 'auto'` | 否 | `auto` | canvas 录制模式。`manual` 需要手动调用 `snapshotCanvas(canvas)`；`auto` 为自动录制。 |
 | `replayCanvasSampling` | `number \| 'all'` | 否 | `2` | 仅在 `replayCanvasMode: 'auto'` 下生效。<br>填正数（建议从 `2` 开始）：选择更稳健的自动 snapshot 路径；数值本身不控制采集频率，采集节奏由 `replayCanvasAutoInterval` 及 cooldown/backoff 配置控制。<br>填 `'all'`：走更高还原度的自动录制，尽量保留绘制过程；复杂场景下仍可能自动回退为 snapshot。 |
 | `replayCanvasQuality` | `'low' \| 'medium' \| 'high' \| number` | 否 | `0.4` | canvas snapshot 编码质量。字符串预设还会同时调整采样与自动调度预算。 |
-| `replayCanvasAutoInterval` | `number` | 否 | `1000` | 自动 snapshot 调度间隔，单位为毫秒。 |
-| `replayCanvasAutoCooldown` | `number` | 否 | `1000` | 同一 canvas 自动 snapshot 的最小冷却时间，单位为毫秒。 |
-| `replayCanvasAutoUnchangedBackoff` | `number` | 否 | `3000` | 画面未变化时的退避时间，单位为毫秒。 |
+| `replayCanvasAutoInterval` | `number` | 否 | `250` | 每个 canvas 的自动 snapshot 目标间隔，单位为毫秒。多 canvas 仍受公平轮转与全局采集预算限制。 |
+| `replayCanvasAutoCooldown` | `number` | 否 | `250` | 同一 canvas 自动 snapshot 的最小冷却时间，单位为毫秒。 |
+| `replayCanvasAutoUnchangedBackoff` | `number` | 否 | `3000` | 轻量签名持续未变化时，触发下一次完整编码校验的间隔，单位为毫秒；期间仍会以有界、自适应节奏探测变化。 |
 | `replayCanvasAutoFailureBackoff` | `number` | 否 | `5000` | 自动采集失败后的退避时间，单位为毫秒。 |
 | `replayCanvasAutoMaxPerRun` | `number` | 否 | `2` | 单次自动调度最多处理的 canvas 数。 |
 | `replayCanvasFlushImmediately` | `boolean` | 否 | `manual: true`<br>`auto: false` | canvas 帧成功进入 replay 后是否优先 flush。 |
@@ -196,6 +196,8 @@ datafluxRum.snapshotCanvas(canvas)
   - `'all'`：更高还原度的自动录制，适合更看重绘制过程还原的页面
 
 自动 snapshot 的采集节奏由 `replayCanvasAutoInterval` 以及 cooldown/backoff 配置控制。
+这里的默认高频节奏用于 Canvas 2D；WebGL 插件未显式配置 interval/cooldown 时会
+保留更保守的 GPU 读回节奏，避免默认放大 `readPixels` 成本。
 WebGL/WebGL2 始终使用可选插件的有预算像素快照；`'all'` 只让 Canvas 2D
 尝试 command capture。
 

@@ -240,8 +240,8 @@ capture budget; they are not image-quality-only aliases:
 | --- | --- | --- | --- | --- |
 | Snapshot encode quality | `0.4` | `0.25` | `0.4` | `0.5` |
 | `replayCanvasSampling` | `2` | `1` | `2` | `4` |
-| `replayCanvasAutoInterval` | `1000 ms` | `1500 ms` | `1000 ms` | `700 ms` |
-| `replayCanvasAutoCooldown` | `1000 ms` | `3000 ms` | `2000 ms` | `1400 ms` |
+| `replayCanvasAutoInterval` | `250 ms` | `500 ms` | `250 ms` | `125 ms` |
+| `replayCanvasAutoCooldown` | `250 ms` | `500 ms` | `250 ms` | `125 ms` |
 | `replayCanvasAutoUnchangedBackoff` | `3000 ms` | `5000 ms` | `3000 ms` | `2000 ms` |
 | `replayCanvasAutoFailureBackoff` | `5000 ms` | `7000 ms` | `5000 ms` | `4000 ms` |
 | `replayCanvasAutoMaxPerRun` | `2` | `1` | `2` | `4` |
@@ -252,6 +252,27 @@ overrides only its matching preset value. For example,
 `replayCanvasQuality: 'medium'` together with
 `replayCanvasAutoCooldown: 800` uses `800 ms` for cooldown and keeps the other
 `medium` values.
+
+For Canvas 2D, `replayCanvasAutoUnchangedBackoff` is the interval between full
+encode validations of an unchanged signature. Lightweight `24x24` signature
+probes continue with a bounded adaptive backoff (up to about `1000 ms`) so a
+new animation can resume its target cadence without waiting for the full
+validation window. WebGL keeps its separate conservative GPU-readback cadence.
+
+`replayCanvasAutoInterval` is a per-canvas target cadence, not a fixed global
+page scan. Multiple canvases are scheduled fairly and remain bounded by the
+per-run, concurrency, and global capture budgets, so a busy dashboard can have
+a lower effective per-canvas cadence than the target. The default global cap is
+about `16.7` snapshot attempts per second, preventing capture cost from growing
+linearly with the number of canvases.
+
+The interval/cooldown matrix above is the Canvas 2D automatic-snapshot
+baseline. The optional WebGL addon must synchronously read GPU pixels, so it
+keeps the safer legacy cadence unless those fields are explicitly configured:
+default `1000/1000 ms`, `low` `1500/3000 ms`, `medium` `1000/2000 ms`, and
+`high` `700/1400 ms`. Explicit interval and cooldown values override the WebGL
+policy independently. Improving 2D continuity therefore does not implicitly
+multiply WebGL `readPixels` cost.
 
 If you only want to change image encode quality without changing sampling or
 scheduling, use a number from `0` to `1`, such as
