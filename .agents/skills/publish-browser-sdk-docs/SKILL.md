@@ -21,6 +21,11 @@ Use task-specific variables such as `SDK_REPO`, `DOCS_REPO`, `DOC_BRANCH`, and `
 Inspect the SDK branch diff, public entry points, type declarations, tests, package metadata, and changelog before editing documentation.
 
 - Document every externally observable addition, removal, default change, version requirement, integration change, or usage change.
+- Treat public initialization configuration additions, removals, default or
+  semantic changes, and important user-visible features as changelog-required.
+  For every such change, update both the SDK repository `CHANGELOG.md` and
+  `docs/zh/real-user-monitoring/web/sdk-changelog.md` in dataflux-doc. Updating
+  only a topic-specific guide is not sufficient.
 - Do not infer behavior from a commit title alone. Verify it from source and tests.
 - If an SDK change has no user-visible documentation impact, report the inspected evidence and do not create an empty documentation commit or MR.
 - Keep generated SDK build outputs out of this workflow.

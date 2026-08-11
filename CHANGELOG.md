@@ -2,6 +2,7 @@
 
 ## v3.3.7
 
+- feat(rum): allow trace header injection without a sampled session
 - docs(rum): clarify canvas replay sampling
 - fix(release): guard WebGL package publishing
 - fix(rum): preserve replay fidelity under load

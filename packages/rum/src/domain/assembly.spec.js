@@ -21,7 +21,7 @@ describe('assembly', () => {
     }
   })
 
-  function startAssembly(lifeCycle, beforeSend, reportError) {
+  function startAssembly(lifeCycle, beforeSend, reportError, sessionManager) {
     startRumAssembly(
       {
         sdkName: 'rum-sdk',
@@ -38,7 +38,7 @@ describe('assembly', () => {
         beforeSend
       },
       lifeCycle,
-      {
+      sessionManager || {
         findTrackedSession: () => ({
           id: 'session-1',
           isSessionForced: false,
@@ -155,6 +155,27 @@ describe('assembly', () => {
         }
       },
       domainContext: { requestId: 'req-2' }
+    })
+
+    expect(collected).not.toHaveBeenCalled()
+  })
+
+  it('should not assemble or report events without a tracked session', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    startAssembly(lifeCycle, undefined, undefined, {
+      findTrackedSession: () => undefined
+    })
+    lifeCycle.subscribe(LifeCycleEventType.RUM_EVENT_COLLECTED, collected)
+
+    lifeCycle.notify(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, {
+      startTime: 12,
+      rawRumEvent: {
+        type: RumEventType.RESOURCE,
+        resource: {
+          url: 'https://api.example.com/orders'
+        }
+      }
     })
 
     expect(collected).not.toHaveBeenCalled()

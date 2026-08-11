@@ -246,6 +246,8 @@ export function validateAndBuildRumConfiguration(initConfiguration) {
         initConfiguration.tracingSampleRate,
         100
       ),
+      allowTraceHeaderWithoutSession:
+        !!initConfiguration.allowTraceHeaderWithoutSession,
       allowedTracingUrls: allowedTracingUrls,
       injectTraceHeader:
         initConfiguration.injectTraceHeader &&

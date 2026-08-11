@@ -39,6 +39,7 @@ describe('rum configuration', () => {
     expect(configuration.sessionReplaySampleRate).toBe(100)
     expect(configuration.sessionOnErrorSampleRate).toBe(0)
     expect(configuration.sessionReplayOnErrorSampleRate).toBe(0)
+    expect(configuration.allowTraceHeaderWithoutSession).toBeFalse()
     expect(configuration.defaultPrivacyLevel).toBe(
       DefaultPrivacyLevel.MASK_USER_INPUT
     )
@@ -90,6 +91,7 @@ describe('rum configuration', () => {
       sessionReplaySampleRate: 50,
       sessionOnErrorSampleRate: 10,
       sessionReplayOnErrorSampleRate: 20,
+      allowTraceHeaderWithoutSession: true,
       compressIntakeRequests: 1,
       replayCanvasEnabled: true,
       replayCanvasMode: 'auto',
@@ -111,6 +113,7 @@ describe('rum configuration', () => {
     expect(configuration.sessionReplaySampleRate).toBe(50)
     expect(configuration.sessionOnErrorSampleRate).toBe(10)
     expect(configuration.sessionReplayOnErrorSampleRate).toBe(20)
+    expect(configuration.allowTraceHeaderWithoutSession).toBeTrue()
     expect(configuration.defaultPrivacyLevel).toBe(DefaultPrivacyLevel.ALLOW)
     expect(configuration.compressIntakeRequests).toBeTrue()
     expect(configuration.replayCanvasWorkerUrl).toBe('/canvas-worker.js')

@@ -143,6 +143,7 @@ Web 应用接入支持三种方式：
 | `traceId128Bit` | `boolean` | 否 | `false` | 是否生成 128 位 `traceId`。当前适用于 `zipkin`、`jaeger`。 |
 | `allowedTracingOrigins` | `array` | 否 | `[]` | 允许注入 trace header 的 origin 列表或正则。 |
 | `allowedTracingUrls` | `array` | 否 | `[]` | 允许注入 trace header 的 URL 列表、正则或函数。 |
+| `allowTraceHeaderWithoutSession` | `boolean` | 否 | `false` | 是否允许在当前 RUM session 未命中采样时，仍为命中 `allowedTracingUrls` 的 XHR/Fetch 请求注入 trace header。开启后不会因此创建 session，也不会上报该未采样 session 的 RUM 数据。 |
 | `actionNameAttribute` | `string` | 否 |  | 自定义行为名称属性。 |
 | `beforeSend` | `function` | 否 |  | 事件发送前的拦截与改写函数。 |
 | `storeContextsToLocal` | `boolean` | 否 |  | 是否将用户与上下文信息缓存到 localStorage。 |

@@ -185,6 +185,11 @@ export interface RumBaseInitConfiguration extends InitConfiguration {
       */
   allowedTracingUrls?: Array<MatchOption | TracingOption> | undefined
   /**
+   * Whether trace headers may be injected when the current RUM session is not
+   * sampled. No RUM data is reported for the unsampled session. Defaults to false.
+   */
+  allowTraceHeaderWithoutSession?: boolean | undefined
+  /**
        * List of all requests allowed to inject trace collector required headers. Can be the request origin or a regex. Origin: protocol (including ://), domain name (or IP address) [and port number]. For example:
        ["https://api.example.com", /https:\\/\\/.*\\.my-api-domain\\.com/].
       */

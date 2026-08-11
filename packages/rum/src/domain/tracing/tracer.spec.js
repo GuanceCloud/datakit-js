@@ -122,4 +122,67 @@ describe('tracer', () => {
     )
     expect(xhr.setRequestHeader).not.toHaveBeenCalled()
   })
+
+  it('should not inject xhr tracing headers without a session by default', () => {
+    const tracer = startTracer(
+      {
+        allowedTracingUrls: [
+          {
+            match: /allowed/,
+            traceType: TraceType.W3C_TRACEPARENT
+          }
+        ],
+        tracingSampleRate: 100
+      },
+      {
+        findTrackedSession: () => undefined
+      }
+    )
+    const xhr = {
+      setRequestHeader: jasmine.createSpy('setRequestHeader')
+    }
+
+    tracer.traceXhr(
+      {
+        url: 'https://example.com/allowed'
+      },
+      xhr
+    )
+
+    expect(xhr.setRequestHeader).not.toHaveBeenCalled()
+  })
+
+  it('should inject xhr tracing headers without a session when allowed', () => {
+    const tracer = startTracer(
+      {
+        allowTraceHeaderWithoutSession: true,
+        allowedTracingUrls: [
+          {
+            match: /allowed/,
+            traceType: TraceType.W3C_TRACEPARENT
+          }
+        ],
+        tracingSampleRate: 100
+      },
+      {
+        findTrackedSession: () => undefined
+      }
+    )
+    const xhr = {
+      setRequestHeader: jasmine.createSpy('setRequestHeader')
+    }
+    const context = {
+      url: 'https://example.com/allowed'
+    }
+
+    tracer.traceXhr(context, xhr)
+
+    expect(xhr.setRequestHeader).toHaveBeenCalledWith(
+      'traceparent',
+      jasmine.any(String)
+    )
+    expect(context.traceId).toEqual(jasmine.any(String))
+    expect(context.spanId).toEqual(jasmine.any(String))
+    expect(context.traceSampled).toBeTrue()
+  })
 })
