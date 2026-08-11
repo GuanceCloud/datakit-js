@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.3.7
+
+- docs(rum): clarify canvas replay sampling
+- fix(release): guard WebGL package publishing
+- fix(rum): preserve replay fidelity under load
+- perf(rum): deduplicate replay worker internals
+- fix(rum): preserve replay under mixed canvas load
+- Merge branch 'dev' into codex/session-replay-webgl
+- feat(rum): harden session replay and extract webgl addon
+- fix(rum): parse hash route view query
+- Merge remote-tracking branch 'origin/dev' into codex/session-replay-webgl
+- feat(rum): harden session replay canvas and recovery
+
 ## v3.3.6
 
 - fix: resolve browser SDK docs repository path

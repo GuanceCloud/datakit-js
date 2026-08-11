@@ -1,11 +1,11 @@
 {
     "name": "@cloudcare/browser-rum-slim",
-    "version": "3.3.6",
+    "version": "3.3.7",
     "main": "cjs/index.js",
     "module": "esm/index.js",
     "types": "types/index.d.ts",
     "dependencies": {
-        "@cloudcare/browser-core": "3.3.6"
+        "@cloudcare/browser-core": "3.3.7"
     },
     "description": "Guance Browser SDK RUM Slim Package",
     "scripts": {
