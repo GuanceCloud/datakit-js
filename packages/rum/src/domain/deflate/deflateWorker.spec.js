@@ -9,6 +9,7 @@ import {
   DeflateWorkerStatus,
   doStartDeflateWorker,
   getDeflateWorkerStatus,
+  isWorkerErrorCspRelated,
   resetDeflateWorkerState,
   startDeflateWorker
 } from './deflateWorker'
@@ -39,6 +40,26 @@ describe('deflateWorker', () => {
     resetDeflateWorkerState()
     resetTelemetry()
     jasmine.clock().uninstall()
+  })
+
+  it('should recognize worker CSP failures without classifying unrelated errors', () => {
+    expect(isWorkerErrorCspRelated(new Event('error'))).toBeTrue()
+    expect(
+      isWorkerErrorCspRelated(
+        new Error('Refused by Content Security Policy')
+      )
+    ).toBeTrue()
+    expect(
+      isWorkerErrorCspRelated(
+        new Error("This operation requires 'TrustedScriptURL'")
+      )
+    ).toBeTrue()
+    expect(isWorkerErrorCspRelated(new Error('network failed'))).toBeFalse()
+    expect(
+      isWorkerErrorCspRelated({
+        message: 'Refused by Content Security Policy'
+      })
+    ).toBeFalse()
   })
 
   it('should start and initialize the worker once', () => {

@@ -3,10 +3,10 @@ import {
   addEventListener,
   clearTimeout,
   display,
-  includes,
   ONE_SECOND,
   setTimeout
 } from '@cloudcare/browser-core'
+import { isWorkerErrorCspRelated } from '../../deflate/deflateWorker'
 
 export var CANVAS_WORKER_INITIALIZATION_TIME_OUT_DELAY = 10 * ONE_SECOND
 
@@ -128,8 +128,7 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
         error
       )
       if (
-        error instanceof Event ||
-        (error instanceof Error && isMessageCspRelated(error.message))
+        isWorkerErrorCspRelated(error)
       ) {
         if (configuration.replayCanvasWorkerUrl) {
           displayError(
@@ -233,11 +232,4 @@ export function createCanvasEncodeWorkerManager(configuration, options) {
     }
   }
   return manager
-}
-
-function isMessageCspRelated(message) {
-  return (
-    includes(message, 'Content Security Policy') ||
-    includes(message, "requires 'TrustedScriptURL'")
-  )
 }

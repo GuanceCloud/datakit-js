@@ -14,6 +14,7 @@ import {
   MAX_PENDING_MUTATION_ROOT_APPROX_BYTES,
   MAX_PENDING_MUTATION_ROOT_TASKS,
   MAX_REMOVED_SUBTREE_TRAVERSAL_NODES,
+  getMutationPayloadApproxBytes,
   processMutations,
   startMutationObserver
 } from './mutationObserver'
@@ -87,6 +88,42 @@ describe('replay/record/mutationObserver', () => {
     })
     window.requestIdleCallback = originalRequestIdleCallback
     window.cancelIdleCallback = originalCancelIdleCallback
+  })
+
+  it('should estimate fallback and tracked mutation payload entries consistently', () => {
+    const entries = {
+      removes: [{ parentId: 1, id: 2 }],
+      texts: [{ id: 3, value: 'abc' }],
+      attributes: [{ id: 4, attributes: { title: 'value' } }]
+    }
+    const fallbackPayload = {
+      adds: [{}, {}],
+      removes: entries.removes,
+      texts: entries.texts,
+      attributes: entries.attributes
+    }
+
+    expect(getMutationPayloadApproxBytes(fallbackPayload)).toBe(290)
+
+    const mutationCallback = jasmine.createSpy('mutationCallback')
+    const controller = createMutationTasksController(
+      mutationCallback,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      {}
+    )
+    const mutationGroup = controller.createMutationGroup()
+    controller.completeMutationGroup(mutationGroup, {
+      adds: [],
+      removes: entries.removes,
+      texts: entries.texts,
+      attributes: entries.attributes
+    })
+
+    expect(mutationCallback).toHaveBeenCalledTimes(1)
+    expect(
+      getMutationPayloadApproxBytes(mutationCallback.calls.argsFor(0)[0])
+    ).toBe(162)
+    controller.stop()
   })
 
   it('should bound pending atomic mutation groups', () => {

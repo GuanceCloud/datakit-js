@@ -84,26 +84,34 @@ export function getMutationPayloadApproxBytes(payload) {
 }
 
 function estimateFallbackMutationPayloadApproxBytes(payload) {
-  var approxBytes = 64
   if (!payload) {
-    return approxBytes
+    return 64
   }
-  approxBytes += (payload.adds || []).length * 64
-  approxBytes += (payload.removes || []).length * 24
+  return (
+    64 +
+    (payload.adds || []).length * 64 +
+    estimateMutationPayloadEntriesApproxBytes(payload)
+  )
+}
+
+function estimateMutationPayloadEntriesApproxBytes(payload) {
+  var approxBytes = (payload.removes || []).length * 24
   ;(payload.texts || []).forEach(function (text) {
-    approxBytes +=
-      24 +
-      (typeof text.value === 'string' ? text.value.length * 2 : 0)
+    approxBytes += 24 + getMutationPayloadStringApproxBytes(text.value)
   })
   ;(payload.attributes || []).forEach(function (attribute) {
     approxBytes += 24
     Object.keys(attribute.attributes || {}).forEach(function (name) {
-      var value = attribute.attributes[name]
-      approxBytes += name.length * 2
-      approxBytes += typeof value === 'string' ? value.length * 2 : 0
+      approxBytes +=
+        getMutationPayloadStringApproxBytes(name) +
+        getMutationPayloadStringApproxBytes(attribute.attributes[name])
     })
   })
   return approxBytes
+}
+
+function getMutationPayloadStringApproxBytes(value) {
+  return typeof value === 'string' ? value.length * 2 : 0
 }
 
 function getMutationDependencyState(shadowRootsController) {
@@ -2099,23 +2107,7 @@ export function createMutationTasksController(
   }
 
   function estimateMutationGroupPayloadApproxBytes(payload) {
-    var approxBytes = payload.removes.length * 24
-    payload.texts.forEach(function (text) {
-      approxBytes += 24 + getMutationGroupStringApproxBytes(text.value)
-    })
-    payload.attributes.forEach(function (attribute) {
-      approxBytes += 24
-      Object.keys(attribute.attributes).forEach(function (name) {
-        approxBytes +=
-          getMutationGroupStringApproxBytes(name) +
-          getMutationGroupStringApproxBytes(attribute.attributes[name])
-      })
-    })
-    return approxBytes
-  }
-
-  function getMutationGroupStringApproxBytes(value) {
-    return typeof value === 'string' ? value.length * 2 : 0
+    return estimateMutationPayloadEntriesApproxBytes(payload)
   }
 
   function getRetainedMutationApproxBytes() {

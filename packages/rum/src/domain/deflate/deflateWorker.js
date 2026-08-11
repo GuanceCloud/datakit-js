@@ -198,8 +198,7 @@ export function createDeflateWorkerController() {
         error
       )
       if (
-        error instanceof Event ||
-        (error instanceof Error && isMessageCspRelated(error.message))
+        isWorkerErrorCspRelated(error)
       ) {
         let baseMessage
         if (configuration.workerUrl) {
@@ -276,10 +275,12 @@ export function doStartDeflateWorker(
     createDeflateWorkerImpl
   )
 }
-function isMessageCspRelated(message) {
+export function isWorkerErrorCspRelated(error) {
   return (
-    includes(message, 'Content Security Policy') ||
-    // Related to `require-trusted-types-for` CSP: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/require-trusted-types-for
-    includes(message, "requires 'TrustedScriptURL'")
+    error instanceof Event ||
+    (error instanceof Error &&
+      (includes(error.message, 'Content Security Policy') ||
+        // Related to `require-trusted-types-for` CSP: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/require-trusted-types-for
+        includes(error.message, "requires 'TrustedScriptURL'")))
   )
 }
