@@ -1,5 +1,6 @@
 import { display } from './display'
 import { setTimeout, clearTimeout } from './timer'
+import { computeNavigationStart } from './navigationStart'
 var ArrayProto = Array.prototype
 var FuncProto = Function.prototype
 var ObjProto = Object.prototype
@@ -1361,7 +1362,7 @@ function getCorrectedTimeStamp(relativeTime) {
 var navigationStart
 export function getNavigationStart() {
   if (navigationStart === undefined) {
-    navigationStart = performance.timing.navigationStart
+    navigationStart = computeNavigationStart(performance, dateNow())
   }
   return navigationStart
 }

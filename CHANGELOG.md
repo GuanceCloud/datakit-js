@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- fix(rum): prevent invalid initial view time spent when navigation start is unavailable
+
 ## v3.3.7
 
 - feat(rum): allow trace header injection without a sampled session
