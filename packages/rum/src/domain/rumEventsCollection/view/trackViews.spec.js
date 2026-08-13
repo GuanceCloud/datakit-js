@@ -10,6 +10,8 @@ describe('trackViews', () => {
   let OriginalPerformanceObserver
   let originalVisibilityState
   let originalPrerendering
+  let originalBridge
+  let originalHasFocus
 
   beforeEach(() => {
     jasmine.clock().install()
@@ -19,6 +21,8 @@ describe('trackViews', () => {
     globalThis.PerformanceObserver = undefined
     originalVisibilityState = document.visibilityState
     originalPrerendering = document.prerendering
+    originalBridge = window.FTWebViewJavascriptBridge
+    originalHasFocus = document.hasFocus
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
       value: 'visible'
@@ -41,6 +45,8 @@ describe('trackViews', () => {
       configurable: true,
       value: originalPrerendering
     })
+    window.FTWebViewJavascriptBridge = originalBridge
+    document.hasFocus = originalHasFocus
   })
 
   it('should start a manual route-change view and publish sanitized custom timings', () => {
@@ -338,6 +344,194 @@ describe('trackViews', () => {
         sessionIsActive: false
       })
     )
+
+    tracking.stop()
+  })
+
+  it('should end and renew bridged WebView views across lifecycle changes', () => {
+    window.FTWebViewJavascriptBridge = {}
+    document.hasFocus = jasmine.createSpy('hasFocus').and.returnValue(true)
+    const lifeCycle = new LifeCycle()
+    const createdEvents = []
+    const endedEvents = []
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_CREATED, (event) => {
+      createdEvents.push(event)
+    })
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_ENDED, (event) => {
+      endedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      {
+        pathname: '/flash-news',
+        hash: '',
+        href: 'https://example.com/flash-news'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      new Observable(),
+      false,
+      { name: '/flash-news', context: { source: 'webview' } }
+    )
+
+    window.dispatchEvent(new Event('blur'))
+    window.dispatchEvent(new Event('blur'))
+
+    expect(endedEvents.length).toBe(1)
+
+    window.dispatchEvent(new Event('focus'))
+    window.dispatchEvent(new Event('focus'))
+
+    expect(createdEvents.length).toBe(2)
+    expect(createdEvents[1]).toEqual(
+      jasmine.objectContaining({
+        name: '/flash-news'
+      })
+    )
+    expect(tracking.getViewContext()).toEqual({ source: 'webview' })
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden'
+    })
+    window.dispatchEvent(new Event('visibilitychange'))
+    expect(endedEvents.length).toBe(2)
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible'
+    })
+    window.dispatchEvent(new Event('resume'))
+    expect(createdEvents.length).toBe(3)
+
+    tracking.stop()
+    window.dispatchEvent(new Event('blur'))
+    window.dispatchEvent(new Event('focus'))
+    expect(createdEvents.length).toBe(3)
+  })
+
+  it('should end an initially unfocused bridged WebView', () => {
+    window.FTWebViewJavascriptBridge = {}
+    document.hasFocus = jasmine.createSpy('hasFocus').and.returnValue(false)
+    const lifeCycle = new LifeCycle()
+    const updatedEvents = []
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      {
+        pathname: '/flash-news',
+        hash: '',
+        href: 'https://example.com/flash-news'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      new Observable(),
+      false
+    )
+
+    expect(updatedEvents[updatedEvents.length - 1]).toEqual(
+      jasmine.objectContaining({
+        isActive: false,
+        sessionIsActive: false
+      })
+    )
+
+    tracking.stop()
+  })
+
+  it('should immediately end views created while a bridged WebView is inactive', () => {
+    window.FTWebViewJavascriptBridge = {}
+    document.hasFocus = jasmine.createSpy('hasFocus').and.returnValue(true)
+    const lifeCycle = new LifeCycle()
+    const locationChangeObservable = new Observable()
+    const createdEvents = []
+    const updatedEvents = []
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_CREATED, (event) => {
+      createdEvents.push(event)
+    })
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      {
+        pathname: '/flash-news',
+        hash: '',
+        href: 'https://example.com/flash-news'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      locationChangeObservable,
+      true
+    )
+
+    window.dispatchEvent(new Event('blur'))
+    locationChangeObservable.notify({
+      oldLocation: { pathname: '/flash-news', hash: '' },
+      newLocation: { pathname: '/detail', hash: '' }
+    })
+
+    expect(createdEvents.length).toBe(2)
+    expect(updatedEvents[updatedEvents.length - 1]).toEqual(
+      jasmine.objectContaining({
+        duration: 0,
+        isActive: false,
+        sessionIsActive: false
+      })
+    )
+
+    jasmine.clock().tick(24 * 60 * 60 * 1000)
+    expect(updatedEvents[updatedEvents.length - 1].duration).toBe(0)
+
+    window.dispatchEvent(new Event('focus'))
+    expect(createdEvents.length).toBe(3)
+
+    tracking.stop()
+  })
+
+  it('should ignore focus changes outside bridged WebViews', () => {
+    window.FTWebViewJavascriptBridge = undefined
+    document.hasFocus = jasmine.createSpy('hasFocus').and.returnValue(false)
+    const lifeCycle = new LifeCycle()
+    const createdSpy = jasmine.createSpy('created')
+    const endedSpy = jasmine.createSpy('ended')
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_CREATED, createdSpy)
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_ENDED, endedSpy)
+
+    const tracking = trackViews(
+      {
+        pathname: '/flash-news',
+        hash: '',
+        href: 'https://example.com/flash-news'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      new Observable(),
+      false
+    )
+
+    window.dispatchEvent(new Event('blur'))
+    window.dispatchEvent(new Event('focus'))
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden'
+    })
+    window.dispatchEvent(new Event('visibilitychange'))
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible'
+    })
+    window.dispatchEvent(new Event('resume'))
+
+    expect(createdSpy).toHaveBeenCalledTimes(1)
+    expect(endedSpy).not.toHaveBeenCalled()
+    expect(document.hasFocus).not.toHaveBeenCalled()
 
     tracking.stop()
   })

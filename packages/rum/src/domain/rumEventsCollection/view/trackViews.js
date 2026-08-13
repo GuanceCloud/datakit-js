@@ -19,7 +19,9 @@ import {
   clearInterval,
   setTimeout,
   isNullUndefinedDefaultValue,
-  createContextManager
+  createContextManager,
+  addEventListeners,
+  canUseEventBridge
 } from '@cloudcare/browser-core'
 
 import { trackInitialViewMetrics } from './trackInitialViewTimings'
@@ -37,6 +39,10 @@ export function trackViews(
   areViewsTrackedAutomatically,
   initialViewOptions
 ) {
+  var eventBridgeAvailable = canUseEventBridge()
+  var isWebViewActive =
+    !eventBridgeAvailable ||
+    (document.visibilityState !== 'hidden' && document.hasFocus())
   var activeViews = new Set()
   function startNewView(loadingType, startClocks, viewOptions) {
     var newlyCreatedView = newView(
@@ -52,6 +58,10 @@ export function trackViews(
     newlyCreatedView.stopObservable.subscribe(function () {
       activeViews.delete(newlyCreatedView)
     })
+    if (!isWebViewActive) {
+      newlyCreatedView.end({ sessionIsActive: false })
+      newlyCreatedView.stop()
+    }
     return newlyCreatedView
   }
   var currentView = startNewView(
@@ -59,6 +69,7 @@ export function trackViews(
     clocksOrigin(),
     initialViewOptions
   )
+  var stopWebViewLifecycleTracking = noop
   startViewLifeCycle()
   var locationChangeSubscription
   if (areViewsTrackedAutomatically) {
@@ -67,27 +78,39 @@ export function trackViews(
     )
   }
   function startViewLifeCycle() {
-    lifeCycle.subscribe(LifeCycleEventType.SESSION_RENEWED, function () {
+    function renewCurrentView() {
       currentView = startNewView(ViewLoadingType.ROUTE_CHANGE, undefined, {
         name: currentView.name,
         service: currentView.service,
         version: currentView.version,
         context: currentView.contextManager.getContext()
       })
-    })
+    }
+    function endWebView() {
+      currentView.end({ sessionIsActive: false })
+      currentView.stop()
+    }
+    lifeCycle.subscribe(LifeCycleEventType.SESSION_RENEWED, renewCurrentView)
 
     lifeCycle.subscribe(LifeCycleEventType.SESSION_EXPIRED, function () {
       currentView.end({ sessionIsActive: false })
     })
-    // // End the current view on page unload
-    // lifeCycle.subscribe(
-    //   LifeCycleEventType.PAGE_EXITED,
-    //   function (pageExitEvent) {
-    //     if (pageExitEvent.reason === PageExitReason.UNLOADING) {
-    //       currentView.end()
-    //     }
-    //   }
-    // )
+
+    if (eventBridgeAvailable) {
+      function updateWebViewLifecycle(event) {
+        var nextIsActive =
+          document.visibilityState !== 'hidden' && event.type !== 'blur'
+        if (nextIsActive !== isWebViewActive) {
+          isWebViewActive = nextIsActive
+          isWebViewActive ? renewCurrentView() : endWebView()
+        }
+      }
+      stopWebViewLifecycleTracking = addEventListeners(
+        window,
+        ['blur', 'focus', 'resume', 'visibilitychange'],
+        updateWebViewLifecycle
+      ).stop
+    }
   }
 
   function renewViewOnLocationChange(locationChangeObservable) {
@@ -131,6 +154,7 @@ export function trackViews(
       if (locationChangeSubscription) {
         locationChangeSubscription.unsubscribe()
       }
+      stopWebViewLifecycleTracking()
       currentView.end()
       activeViews.forEach(function (view) {
         view.stop()
