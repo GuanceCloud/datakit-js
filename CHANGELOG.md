@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.3.8
+
+- feat(rum): expose WebSocket end view path
+- fix(rum): renew bridged WebView views on lifecycle changes
+- fix(rum): prevent invalid initial view time spent
+- feat(rum): allow trace headers without sampled session
+- docs(rum): document webgl replay in v3.3.7
+
 ## Unreleased
 
 - feat(rum): record the WebSocket segment end View path for readable viewer filtering

@@ -1,6 +1,6 @@
 {
     "name": "@cloudcare/browser-rum-vue",
-    "version": "3.3.7",
+    "version": "3.3.8",
     "main": "cjs/index.js",
     "module": "esm/index.js",
     "types": "types/index.d.ts",
@@ -43,11 +43,11 @@
         "prepack": "npm run build"
     },
     "dependencies": {
-        "@cloudcare/browser-core": "3.3.7"
+        "@cloudcare/browser-core": "3.3.8"
     },
     "peerDependencies": {
-        "@cloudcare/browser-rum": ">=3.3.7",
-        "@cloudcare/browser-rum-slim": ">=3.3.7",
+        "@cloudcare/browser-rum": ">=3.3.8",
+        "@cloudcare/browser-rum-slim": ">=3.3.8",
         "vue": "2.7 || 3",
         "vue-router": "3 || 4"
     },
