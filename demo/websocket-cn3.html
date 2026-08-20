@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>cn3 WebSocket RUM Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        color: #182230;
+        background: #f4f6f8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 32px 20px;
+      }
+
+      main {
+        width: min(1040px, 100%);
+        margin: 0 auto;
+      }
+
+      header,
+      .actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      header {
+        justify-content: space-between;
+        padding-bottom: 18px;
+        border-bottom: 1px solid #cfd6df;
+      }
+
+      h1,
+      h2 {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 24px;
+      }
+
+      h2 {
+        margin-top: 24px;
+        font-size: 16px;
+      }
+
+      button {
+        min-height: 40px;
+        padding: 0 16px;
+        border: 1px solid #8b99aa;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #182230;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .hint {
+        margin: 12px 0 0;
+        color: #475467;
+        line-height: 1.6;
+      }
+
+      .status {
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        gap: 10px 16px;
+        padding: 22px 0;
+        border-bottom: 1px solid #cfd6df;
+      }
+
+      .status dt {
+        font-weight: 700;
+      }
+
+      .status dd {
+        margin: 0;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .pass {
+        color: #177245;
+      }
+
+      .fail {
+        color: #b42318;
+      }
+
+      pre {
+        min-height: 260px;
+        margin: 12px 0 0;
+        padding: 18px;
+        overflow: auto;
+        border: 1px solid #cfd6df;
+        border-radius: 6px;
+        background: #ffffff;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>cn3 WebSocket RUM Demo</h1>
+          <p class="hint">
+            数据上报到 cn3，应用 <code>test_dcl</code>，服务
+            <code>browser-sdk-websocket-demo</code>。
+          </p>
+        </div>
+        <div class="actions">
+          <button id="run" type="button">重新运行完整流程</button>
+          <button id="send-text" type="button" disabled>发送文本</button>
+          <button id="send-binary" type="button" disabled>发送二进制</button>
+          <button id="close" type="button" disabled>正常关闭</button>
+        </div>
+      </header>
+
+      <dl class="status">
+        <dt>运行 ID</dt>
+        <dd id="run-id"></dd>
+        <dt>WebSocket</dt>
+        <dd id="socket-status">准备中</dd>
+        <dt>消息</dt>
+        <dd id="message-status">入站 0 / 出站 0</dd>
+        <dt>RUM Resource</dt>
+        <dd id="rum-status">等待连接关闭</dd>
+        <dt>平台查询</dt>
+        <dd>R::resource:(resource_type='websocket' AND service='browser-sdk-websocket-demo')</dd>
+      </dl>
+
+      <h2>SDK beforeSend 捕获的数据</h2>
+      <pre id="event-details">等待 WebSocket Resource…</pre>
+      <h2>运行日志</h2>
+      <pre id="logs"></pre>
+    </main>
+
+    <script src="./dataflux-rum.js"></script>
+    <script>
+      ;(function () {
+        var CN3_SITE = 'https://cn3-rum-openway.guance.com'
+        var CLIENT_TOKEN = 'b806cd20126446c4848605cb254f92ed'
+        var APPLICATION_ID = 'test_dcl'
+        var SERVICE = 'browser-sdk-websocket-demo'
+        var runId =
+          new URLSearchParams(location.search).get('run') || String(Date.now())
+        var socket
+        var messagesIn = 0
+        var messagesOut = 0
+        var autoSequenceStarted = false
+        var eventDetails = document.getElementById('event-details')
+        var logElement = document.getElementById('logs')
+        var socketStatus = document.getElementById('socket-status')
+        var messageStatus = document.getElementById('message-status')
+        var rumStatus = document.getElementById('rum-status')
+        var sendTextButton = document.getElementById('send-text')
+        var sendBinaryButton = document.getElementById('send-binary')
+        var closeButton = document.getElementById('close')
+
+        document.getElementById('run-id').textContent = runId
+
+        function log(message) {
+          logElement.textContent +=
+            new Date().toISOString() + '  ' + message + '\n'
+          logElement.scrollTop = logElement.scrollHeight
+        }
+
+        function renderMessageCount() {
+          messageStatus.textContent =
+            '入站 ' + messagesIn + ' / 出站 ' + messagesOut
+        }
+
+        function setSocketControls(enabled) {
+          sendTextButton.disabled = !enabled
+          sendBinaryButton.disabled = !enabled
+          closeButton.disabled = !enabled
+        }
+
+        function sendText() {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return
+          socket.send('hello-cn3-' + runId)
+          messagesOut += 1
+          renderMessageCount()
+          log('发送文本消息')
+        }
+
+        function sendBinary() {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return
+          socket.send(new Uint8Array([1, 2, 3, 4, 5, 6]))
+          messagesOut += 1
+          renderMessageCount()
+          log('发送 6 B 二进制消息')
+        }
+
+        function closeSocket() {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return
+          socket.close(1000, 'cn3-demo-complete')
+          socketStatus.textContent = '正在关闭'
+          setSocketControls(false)
+          log('请求正常关闭，code=1000')
+        }
+
+        function startSocket() {
+          var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+          socket = new WebSocket(
+            protocol +
+              '//' +
+              location.host +
+              '/ws-echo?run=' +
+              encodeURIComponent(runId),
+            'rum-cn3-demo-v1'
+          )
+          socket.binaryType = 'arraybuffer'
+          socketStatus.textContent = '正在连接'
+          log('创建 WebSocket：' + socket.url)
+
+          socket.addEventListener('open', function () {
+            socketStatus.textContent = '已连接 / ' + socket.protocol
+            setSocketControls(true)
+            log('连接成功，开始自动收发流程')
+            if (!autoSequenceStarted) {
+              autoSequenceStarted = true
+              sendText()
+              window.setTimeout(sendBinary, 150)
+            }
+          })
+
+          socket.addEventListener('message', function (event) {
+            messagesIn += 1
+            renderMessageCount()
+            log(
+              '收到消息：' +
+                (typeof event.data === 'string'
+                  ? event.data
+                  : event.data.byteLength + ' B binary')
+            )
+            if (messagesIn === 3) {
+              window.setTimeout(closeSocket, 150)
+            }
+          })
+
+          socket.addEventListener('close', function (event) {
+            socketStatus.textContent =
+              '已关闭 / code=' + event.code + ' / clean=' + event.wasClean
+            setSocketControls(false)
+            log('连接已关闭；等待 SDK 组装 Resource')
+            window.setTimeout(function () {
+              window.dispatchEvent(new Event('beforeunload'))
+              log('已触发 transport flush，请到 cn3 查询 Resource')
+            }, 300)
+          })
+
+          socket.addEventListener('error', function () {
+            socketStatus.textContent = '连接失败'
+            socketStatus.className = 'fail'
+            setSocketControls(false)
+            log('WebSocket 连接失败，请确认 npm run dev 正常运行')
+          })
+        }
+
+        document.getElementById('run').addEventListener('click', function () {
+          location.href =
+            location.pathname + '?run=' + encodeURIComponent(Date.now())
+        })
+        sendTextButton.addEventListener('click', sendText)
+        sendBinaryButton.addEventListener('click', sendBinary)
+        closeButton.addEventListener('click', closeSocket)
+
+        if (!window.DATAFLUX_RUM) {
+          rumStatus.textContent = 'SDK bundle 加载失败'
+          rumStatus.className = 'fail'
+          log('请先运行 npm run dev')
+          return
+        }
+
+        window.DATAFLUX_RUM.init({
+          applicationId: APPLICATION_ID,
+          site: CN3_SITE,
+          clientToken: CLIENT_TOKEN,
+          service: SERVICE,
+          env: 'cn3-demo',
+          version: '3.3.7-dev',
+          sessionSampleRate: 100,
+          sessionReplaySampleRate: 0,
+          enableExperimentalFeatures: ['track_websockets'],
+          beforeSend: function (event) {
+            if (
+              event.type === 'resource' &&
+              event.resource &&
+              event.resource.type === 'websocket'
+            ) {
+              event.context = Object.assign({}, event.context, {
+                websocket_demo_run_id: runId
+              })
+              eventDetails.textContent = JSON.stringify(event, null, 2)
+              rumStatus.textContent =
+                '已生成 WebSocket Resource，正在发送到 cn3'
+              rumStatus.className = 'pass'
+              log(
+                '捕获 RUM Resource：connection_id=' +
+                  event.resource.websocket.connection_id
+              )
+            }
+            return true
+          }
+        })
+        window.DATAFLUX_RUM.startView({ name: 'websocket-cn3-demo' })
+        log('RUM 已初始化：' + CN3_SITE)
+        startSocket()
+      })()
+    </script>
+  </body>
+</html>

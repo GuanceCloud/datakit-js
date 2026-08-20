@@ -247,6 +247,7 @@ function buildCompletedEvent(
     endClocks: endClocks,
     startViewId: connection.startViewId,
     endViewId: endView && endView.id,
+    endViewPath: endView && endView.path,
     messagesIn: connection.messagesIn,
     messagesOut: connection.messagesOut,
     firstMessageInOffset: connection.firstMessageInOffset,

@@ -11,6 +11,7 @@ describe('viewContexts', () => {
       name: 'Home',
       service: 'web',
       version: '1.0.0',
+      url: 'https://example.com/home?tab=summary',
       context: { step: 1 },
       startClocks: { relative: 10 }
     })
@@ -20,6 +21,7 @@ describe('viewContexts', () => {
       name: 'Home',
       service: 'web',
       version: '1.0.0',
+      path: '/home',
       context: { step: 1 },
       startClocks: { relative: 10 }
     })

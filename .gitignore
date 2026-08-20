@@ -18,5 +18,6 @@ demo/*
 !demo/webgl-replay-game.css
 !demo/webgl-replay-game.js
 !demo/websocket-smoke.html
+!demo/websocket-cn3.html
 !demo/framework-demo.css
 !demo/framework-demo-runtime.js

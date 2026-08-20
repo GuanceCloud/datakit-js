@@ -1,7 +1,8 @@
 import {
   SESSION_TIME_OUT_DELAY,
   createValueHistory,
-  LifeCycleEventType
+  LifeCycleEventType,
+  urlParse
 } from '@cloudcare/browser-core'
 
 export var VIEW_CONTEXT_TIME_OUT_DELAY = SESSION_TIME_OUT_DELAY
@@ -38,6 +39,7 @@ export function startViewContexts(lifeCycle) {
       context: view.context,
       id: view.id,
       name: view.name,
+      path: urlParse(view.url || location.href).getParse().Path,
       startClocks: view.startClocks
     }
   }

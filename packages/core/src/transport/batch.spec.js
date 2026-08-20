@@ -62,6 +62,7 @@ describe('batch', () => {
         websocket: {
           connection_id: 'connection-1',
           handshake_succeeded: true,
+          end_view_path: '/end',
           tracking_end_reason: 'close_event',
           messages_in: { count: 2, size: 16 },
           messages_out: { count: 1, size: 4 },
@@ -75,6 +76,7 @@ describe('batch', () => {
         resource_type: 'websocket',
         resource_websocket_connection_id: 'connection-1',
         resource_websocket_handshake_succeeded: true,
+        resource_websocket_end_view_path: '/end',
         resource_websocket_tracking_end_reason: 'close_event',
         resource_websocket_messages_in_count: 2,
         resource_websocket_messages_in_size: 16,
@@ -85,6 +87,9 @@ describe('batch', () => {
     )
     expect(processed.rowStr).toContain(
       'resource_websocket_connection_id="connection-1"'
+    )
+    expect(processed.rowStr).toContain(
+      'resource_websocket_end_view_path="/end"'
     )
   })
 

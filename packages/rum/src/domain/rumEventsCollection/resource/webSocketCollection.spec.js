@@ -22,7 +22,9 @@ describe('webSocketCollection', () => {
     completed = []
     viewContexts = {
       findView: jasmine.createSpy('findView').and.callFake(function (time) {
-        return { id: time < 50 ? 'view-a' : 'view-b' }
+        return time < 50
+          ? { id: 'view-a', path: '/start' }
+          : { id: 'view-b', path: '/end' }
       })
     }
     lifeCycle.subscribe(
@@ -89,6 +91,7 @@ describe('webSocketCollection', () => {
         protocol: 'chat.v1',
         startViewId: 'view-a',
         endViewId: 'view-b',
+        endViewPath: '/end',
         messagesIn: { count: 2, size: 16 },
         messagesOut: { count: 2, size: 9 },
         firstMessageInOffset: 10,

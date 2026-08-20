@@ -164,6 +164,7 @@ export function processWebSocket(event) {
           endTime: event.endClocks.timeStamp,
           startViewId: event.startViewId,
           endViewId: event.endViewId,
+          endViewPath: event.endViewPath,
           trackingEndReason: event.trackingEndReason,
           closeCode: event.closeCode,
           closeReason: event.closeReason,
