@@ -195,6 +195,7 @@ function processViewUpdate(view, configuration, recorderApi, pageStateHistory) {
         toServerDuration(view.commonViewMetrics.loadingTime)
       ),
       loading_type: view.loadingType,
+      navigation_type: view.navigationType,
       long_task: {
         count: view.eventCounts.longTaskCount
       },

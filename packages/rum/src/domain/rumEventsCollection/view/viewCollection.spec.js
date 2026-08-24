@@ -1,4 +1,8 @@
-import { LifeCycle, LifeCycleEventType, Observable } from '@cloudcare/browser-core'
+import {
+  LifeCycle,
+  LifeCycleEventType,
+  Observable
+} from '@cloudcare/browser-core'
 import { startViewCollection } from './viewCollection'
 
 describe('viewCollection', () => {
@@ -67,6 +71,7 @@ describe('viewCollection', () => {
       id: 'view-1',
       name: 'Products',
       loadingType: 'initial_load',
+      navigationType: 'push',
       isActive: true,
       sessionIsActive: true,
       documentVersion: 3,
@@ -139,6 +144,7 @@ describe('viewCollection', () => {
     expect(event.rawRumEvent.type).toBe('view')
     expect(event.rawRumEvent.view.name).toBe('Products')
     expect(event.rawRumEvent.view.loading_type).toBe('initial_load')
+    expect(event.rawRumEvent.view.navigation_type).toBe('push')
     expect(event.rawRumEvent.view.loading_time).toBe(30000000)
     expect(event.rawRumEvent.view.first_contentful_paint).toBe(15000000)
     expect(event.rawRumEvent.view.largest_contentful_paint).toBe(25000000)

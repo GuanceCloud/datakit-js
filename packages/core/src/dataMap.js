@@ -57,6 +57,7 @@ export var dataMap = {
     type: RumEventType.VIEW,
     tags: {
       view_loading_type: 'view.loading_type',
+      view_navigation_type: 'view.navigation_type',
       view_apdex_level: 'view.apdex_level',
       view_privacy_replay_level: 'privacy.replay_level'
     },

@@ -44,6 +44,9 @@ describe('dataMap', () => {
     expect(dataMap.view.fields.first_contentful_paint).toBe(
       'view.first_contentful_paint'
     )
+    expect(dataMap.view.tags.view_navigation_type).toBe(
+      'view.navigation_type'
+    )
     expect(dataMap.view.fields.custom_timings).toBe('view.custom_timings')
   })
 

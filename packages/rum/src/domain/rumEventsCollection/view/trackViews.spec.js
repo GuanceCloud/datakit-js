@@ -575,6 +575,127 @@ describe('trackViews', () => {
     expect(createdEvents.length).toBe(1)
   })
 
+  it('should add native soft navigation metrics to the matching route view', () => {
+    class FakePerformanceObserver {
+      constructor(callback) {
+        this.callback = callback
+        this.observe = jasmine.createSpy('observe')
+        this.disconnect = jasmine.createSpy('disconnect')
+        FakePerformanceObserver.instances.push(this)
+      }
+    }
+    FakePerformanceObserver.instances = []
+    FakePerformanceObserver.supportedEntryTypes = [
+      'soft-navigation',
+      'interaction-contentful-paint'
+    ]
+    window.PerformanceObserver = FakePerformanceObserver
+    globalThis.PerformanceObserver = FakePerformanceObserver
+
+    const lifeCycle = new LifeCycle()
+    const locationChangeObservable = new Observable()
+    const updatedEvents = []
+    const location = {
+      pathname: '/products',
+      hash: '',
+      href: 'https://example.com/products'
+    }
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      location,
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      locationChangeObservable,
+      true
+    )
+    location.pathname = '/checkout'
+    location.href = 'https://example.com/checkout'
+    locationChangeObservable.notify({
+      oldLocation: { pathname: '/products', hash: '' },
+      newLocation: { pathname: '/checkout', hash: '' }
+    })
+
+    const softNavigationObserver = FakePerformanceObserver.instances.find(
+      (observer) =>
+        observer.observe.calls
+          .allArgs()
+          .some((args) => args[0].type === 'soft-navigation')
+    )
+    softNavigationObserver.callback({
+      getEntries: () => [
+        {
+          entryType: 'soft-navigation',
+          name: 'https://example.com/unrelated',
+          startTime: 0,
+          duration: 10,
+          interactionId: 6,
+          navigationType: 'replace'
+        }
+      ]
+    })
+    jasmine.clock().tick(THROTTLE_VIEW_UPDATE_PERIOD)
+    expect(
+      updatedEvents
+        .filter((event) => event.loadingType === 'route_change')
+        .pop().navigationType
+    ).toBeUndefined()
+
+    softNavigationObserver.callback({
+      getEntries: () => [
+        {
+          entryType: 'soft-navigation',
+          name: 'https://example.com/checkout',
+          startTime: 0,
+          duration: 20,
+          interactionId: 7,
+          navigationType: 'push',
+          getLargestInteractionContentfulPaint: () => ({
+            startTime: 0,
+            largestContentfulPaint: { renderTime: 50 }
+          })
+        }
+      ]
+    })
+    softNavigationObserver.callback({
+      getEntries: () => [
+        {
+          entryType: 'interaction-contentful-paint',
+          startTime: 0,
+          interactionId: 8,
+          largestContentfulPaint: { renderTime: 70 }
+        },
+        {
+          entryType: 'interaction-contentful-paint',
+          startTime: 0,
+          interactionId: 7,
+          largestContentfulPaint: { renderTime: 80 }
+        }
+      ]
+    })
+    jasmine.clock().tick(THROTTLE_VIEW_UPDATE_PERIOD)
+
+    const routeChangeUpdate = updatedEvents
+      .filter((event) => event.loadingType === 'route_change')
+      .pop()
+    expect(routeChangeUpdate.navigationType).toBe('push')
+    expect(routeChangeUpdate.initialViewMetrics).toEqual(
+      jasmine.objectContaining({
+        firstContentfulPaint: 20,
+        largestContentfulPaint: {
+          value: 80,
+          targetSelector: undefined
+        }
+      })
+    )
+
+    tracking.stop()
+    expect(softNavigationObserver.disconnect).toHaveBeenCalled()
+  })
+
   it('should replace the whole view context and publish it on the next update', () => {
     const lifeCycle = new LifeCycle()
     const updatedEvents = []

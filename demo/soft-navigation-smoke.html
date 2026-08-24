@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Soft Navigation RUM Smoke Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+        color: #182230;
+        background: #f4f6f8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px 20px;
+      }
+      main {
+        width: min(920px, 100%);
+        margin: 0 auto;
+      }
+      header,
+      nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      header {
+        padding-bottom: 18px;
+        border-bottom: 1px solid #cfd6df;
+      }
+      h1,
+      h2,
+      p {
+        margin-top: 0;
+      }
+      h1 {
+        margin-bottom: 6px;
+        font-size: 24px;
+      }
+      header p {
+        margin-bottom: 0;
+        color: #536273;
+      }
+      button,
+      a {
+        font: inherit;
+      }
+      button {
+        min-height: 40px;
+        padding: 0 16px;
+        border: 1px solid #8b99aa;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #182230;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+      nav {
+        justify-content: flex-start;
+        padding: 16px 0;
+      }
+      nav a {
+        color: #175cd3;
+      }
+      #content {
+        min-height: 140px;
+        padding: 22px;
+        border: 1px solid #cfd6df;
+        border-radius: 6px;
+        background: #ffffff;
+      }
+      .status {
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        gap: 10px 16px;
+        padding: 22px 0;
+        border-bottom: 1px solid #cfd6df;
+      }
+      .status dt {
+        font-weight: 700;
+      }
+      .status dd {
+        margin: 0;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .pass {
+        color: #177245;
+      }
+      .fail {
+        color: #b42318;
+      }
+      pre {
+        min-height: 300px;
+        margin: 22px 0 0;
+        padding: 18px;
+        overflow: auto;
+        border: 1px solid #cfd6df;
+        border-radius: 6px;
+        background: #ffffff;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+    </style>
+    <script>
+      ;(function () {
+        var nativeObserver = window.PerformanceObserver
+        var forceFallback = new URLSearchParams(location.search).has('fallback')
+        window.__softNavigationDemoSetup = {
+          forceFallback: forceFallback,
+          nativeObserver: nativeObserver
+        }
+        if (
+          forceFallback &&
+          nativeObserver &&
+          nativeObserver.supportedEntryTypes
+        ) {
+          function FilteredPerformanceObserver(callback) {
+            return new nativeObserver(callback)
+          }
+          FilteredPerformanceObserver.supportedEntryTypes =
+            nativeObserver.supportedEntryTypes.filter(function (entryType) {
+              return entryType !== 'soft-navigation'
+            })
+          window.PerformanceObserver = FilteredPerformanceObserver
+        }
+      })()
+    </script>
+    <script src="./dataflux-rum.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Soft Navigation RUM Smoke Demo</h1>
+          <p>Validates native enrichment and the existing History fallback.</p>
+        </div>
+        <button id="navigate" type="button">Open checkout</button>
+      </header>
+      <nav>
+        <a href="/soft-navigation-smoke.html">Native mode</a>
+        <a href="/soft-navigation-smoke.html?fallback=1"
+          >Forced fallback mode</a
+        >
+        <a href="/">Demo workbench</a>
+      </nav>
+      <section id="content">
+        <h2>Products</h2>
+        <p>The button performs pushState and a visible DOM update.</p>
+      </section>
+      <dl class="status">
+        <dt>Result</dt>
+        <dd id="result-status">Waiting for a trusted click</dd>
+        <dt>Mode</dt>
+        <dd id="mode-status"></dd>
+        <dt>Native API</dt>
+        <dd id="api-status"></dd>
+        <dt>Original route View</dt>
+        <dd id="route-status">Waiting</dd>
+        <dt>Soft navigation metrics</dt>
+        <dd id="metric-status">Waiting</dd>
+      </dl>
+      <pre id="details"></pre>
+    </main>
+    <script>
+      ;(function () {
+        var setup = window.__softNavigationDemoSetup
+        var NativePerformanceObserver = setup.nativeObserver
+        var forceFallback = setup.forceFallback
+        var status = {
+          result: document.getElementById('result-status'),
+          mode: document.getElementById('mode-status'),
+          api: document.getElementById('api-status'),
+          route: document.getElementById('route-status'),
+          metric: document.getElementById('metric-status'),
+          details: document.getElementById('details')
+        }
+        var navigateButton = document.getElementById('navigate')
+        var nativeSupported =
+          !!NativePerformanceObserver &&
+          !!NativePerformanceObserver.supportedEntryTypes &&
+          NativePerformanceObserver.supportedEntryTypes.includes(
+            'soft-navigation'
+          )
+        var result = (window.__softNavigationSmoke = {
+          mode: forceFallback
+            ? 'forced-fallback'
+            : nativeSupported
+              ? 'native'
+              : 'automatic-fallback',
+          supported: nativeSupported,
+          clickTrusted: false,
+          completed: false,
+          passed: false,
+          originalRouteViewPreserved: false,
+          sameViewEnriched: false,
+          nativeEntries: [],
+          routeViews: [],
+          errors: []
+        })
+
+        function render() {
+          var lastView = result.routeViews[result.routeViews.length - 1]
+          status.result.textContent = result.completed
+            ? result.passed
+              ? 'Passed'
+              : 'Failed'
+            : 'Waiting for completion'
+          status.result.className = result.completed
+            ? result.passed
+              ? 'pass'
+              : 'fail'
+            : ''
+          status.mode.textContent = result.mode
+          status.api.textContent = result.supported
+            ? 'soft-navigation supported'
+            : 'soft-navigation unavailable'
+          status.route.textContent = result.originalRouteViewPreserved
+            ? 'existing route_change View preserved'
+            : 'waiting'
+          status.metric.textContent = lastView
+            ? 'navigation_type=' +
+              String(lastView.navigationType) +
+              ', FCP=' +
+              String(lastView.firstContentfulPaintMs) +
+              'ms, LCP=' +
+              String(lastView.largestContentfulPaintMs) +
+              'ms'
+            : 'waiting'
+          status.details.textContent = JSON.stringify(result, null, 2)
+        }
+
+        function recordError(error) {
+          result.errors.push(
+            error && error.message ? error.message : String(error)
+          )
+          render()
+        }
+
+        function complete() {
+          var nativeSoftNavigationSeen = result.nativeEntries.some(
+            function (entry) {
+              return entry.entryType === 'soft-navigation'
+            }
+          )
+          var firstView = result.routeViews[0]
+          var lastView = result.routeViews[result.routeViews.length - 1]
+          result.originalRouteViewPreserved =
+            !!firstView &&
+            firstView.loadingType === 'route_change' &&
+            firstView.url.endsWith('/checkout')
+          result.sameViewEnriched =
+            !!firstView && !!lastView && firstView.id === lastView.id
+          var fallbackPreserved =
+            result.routeViews.length > 0 &&
+            result.routeViews.every(function (view) {
+              return (
+                view.navigationType === undefined &&
+                view.firstContentfulPaintMs === undefined &&
+                view.largestContentfulPaintMs === undefined
+              )
+            })
+          var nativeEnhanced =
+            result.sameViewEnriched &&
+            lastView.navigationType === 'push' &&
+            typeof lastView.firstContentfulPaintMs === 'number' &&
+            typeof lastView.largestContentfulPaintMs === 'number'
+          var usesFallback = forceFallback || !result.supported
+
+          result.completed = true
+          result.passed =
+            result.clickTrusted &&
+            result.originalRouteViewPreserved &&
+            (usesFallback
+              ? fallbackPreserved
+              : nativeSoftNavigationSeen && nativeEnhanced) &&
+            result.errors.length === 0
+          render()
+        }
+
+        try {
+          window.DATAFLUX_RUM.init({
+            applicationId: 'soft-navigation-smoke',
+            datakitOrigin: window.location.origin,
+            sessionSampleRate: 100,
+            service: 'soft-navigation-smoke',
+            env: 'demo',
+            sendContentTypeByJson: true,
+            beforeSend: function (event) {
+              if (
+                event.type === 'view' &&
+                event.view.loading_type === 'route_change'
+              ) {
+                result.routeViews.push({
+                  id: event.view.id,
+                  firstContentfulPaintMs:
+                    typeof event.view.first_contentful_paint === 'number'
+                      ? event.view.first_contentful_paint / 1000000
+                      : undefined,
+                  largestContentfulPaintMs:
+                    typeof event.view.largest_contentful_paint === 'number'
+                      ? event.view.largest_contentful_paint / 1000000
+                      : undefined,
+                  loadingType: event.view.loading_type,
+                  navigationType: event.view.navigation_type,
+                  url: event.view.url
+                })
+                render()
+              }
+              return true
+            }
+          })
+
+          // The wrapper only affects SDK initialization in forced fallback mode.
+          // Restore the native constructor for the demo's own evidence observer.
+          window.PerformanceObserver = NativePerformanceObserver
+          if (result.supported) {
+            var observer = new NativePerformanceObserver(function (list) {
+              list.getEntries().forEach(function (entry) {
+                result.nativeEntries.push({
+                  entryType: entry.entryType,
+                  interactionId: entry.interactionId,
+                  name: entry.name,
+                  navigationType: entry.navigationType
+                })
+              })
+              render()
+            })
+            observer.observe({ type: 'soft-navigation', buffered: true })
+            observer.observe({
+              type: 'interaction-contentful-paint',
+              buffered: true
+            })
+          }
+
+          navigateButton.addEventListener('click', function (event) {
+            navigateButton.disabled = true
+            result.clickTrusted = event.isTrusted
+            history.pushState({}, '', '/checkout')
+            document.getElementById('content').innerHTML =
+              '<h2>Checkout</h2><p style="font-size:48px">Native soft navigation content</p>'
+            window.setTimeout(complete, 4000)
+            render()
+          })
+        } catch (error) {
+          window.PerformanceObserver = NativePerformanceObserver
+          recordError(error)
+          result.completed = true
+        }
+        render()
+      })()
+    </script>
+  </body>
+</html>
