@@ -125,9 +125,47 @@
       ;(function () {
         var nativeObserver = window.PerformanceObserver
         var forceFallback = new URLSearchParams(location.search).has('fallback')
+        var transportEvidence = []
         window.__softNavigationDemoSetup = {
           forceFallback: forceFallback,
-          nativeObserver: nativeObserver
+          nativeObserver: nativeObserver,
+          transportEvidence: transportEvidence
+        }
+        var nativeFetch = window.fetch
+        function updateTransportBody(record, body) {
+          record.bytes = body.length
+          record.containsRouteChange = body.includes(
+            '"view_loading_type":"route_change"'
+          )
+          record.containsNavigationType = body.includes(
+            '"view_navigation_type":"push"'
+          )
+          record.containsRunId = body.includes('"soft_navigation_demo_run_id"')
+          window.dispatchEvent(new Event('soft-navigation-transport-updated'))
+        }
+        window.fetch = function (input, init) {
+          var requestUrl = typeof input === 'string' ? input : input.url
+          var record = {
+            strategy: 'fetch',
+            url: requestUrl.replace(/([?&]token=)[^&]+/, '$1<redacted>')
+          }
+          transportEvidence.push(record)
+          if (init && typeof init.body === 'string') {
+            updateTransportBody(record, init.body)
+          } else if (
+            init &&
+            init.body &&
+            typeof init.body.text === 'function'
+          ) {
+            init.body.text().then(function (body) {
+              updateTransportBody(record, body)
+            })
+          }
+          return nativeFetch.apply(this, arguments).then(function (response) {
+            record.status = response.status
+            window.dispatchEvent(new Event('soft-navigation-transport-updated'))
+            return response
+          })
         }
         if (
           forceFallback &&
@@ -174,6 +212,8 @@
         <dd id="mode-status"></dd>
         <dt>Native API</dt>
         <dd id="api-status"></dd>
+        <dt>cn3 query</dt>
+        <dd id="intake-status"></dd>
         <dt>Original route View</dt>
         <dd id="route-status">Waiting</dd>
         <dt>Soft navigation metrics</dt>
@@ -186,10 +226,19 @@
         var setup = window.__softNavigationDemoSetup
         var NativePerformanceObserver = setup.nativeObserver
         var forceFallback = setup.forceFallback
+        var CN3_SITE = 'https://cn3-rum-openway.guance.com'
+        var CLIENT_TOKEN = 'b806cd20126446c4848605cb254f92ed'
+        var APPLICATION_ID = 'test_dcl'
+        var SERVICE = 'browser-sdk-soft-navigation-demo'
+        var ENV = 'cn3-demo'
+        var VERSION = '3.3.8-soft-navigation-dev'
+        var runId =
+          new URLSearchParams(location.search).get('run') || String(Date.now())
         var status = {
           result: document.getElementById('result-status'),
           mode: document.getElementById('mode-status'),
           api: document.getElementById('api-status'),
+          intake: document.getElementById('intake-status'),
           route: document.getElementById('route-status'),
           metric: document.getElementById('metric-status'),
           details: document.getElementById('details')
@@ -208,6 +257,13 @@
               ? 'native'
               : 'automatic-fallback',
           supported: nativeSupported,
+          applicationId: APPLICATION_ID,
+          service: SERVICE,
+          env: ENV,
+          version: VERSION,
+          runId: runId,
+          site: CN3_SITE,
+          transportEvidence: setup.transportEvidence,
           clickTrusted: false,
           completed: false,
           passed: false,
@@ -234,6 +290,7 @@
           status.api.textContent = result.supported
             ? 'soft-navigation supported'
             : 'soft-navigation unavailable'
+          status.intake.textContent = 'service=' + SERVICE + ', run_id=' + runId
           status.route.textContent = result.originalRouteViewPreserved
             ? 'existing route_change View preserved'
             : 'waiting'
@@ -299,17 +356,23 @@
 
         try {
           window.DATAFLUX_RUM.init({
-            applicationId: 'soft-navigation-smoke',
-            datakitOrigin: window.location.origin,
+            applicationId: APPLICATION_ID,
+            site: CN3_SITE,
+            clientToken: CLIENT_TOKEN,
             sessionSampleRate: 100,
-            service: 'soft-navigation-smoke',
-            env: 'demo',
+            sessionReplaySampleRate: 0,
+            service: SERVICE,
+            env: ENV,
+            version: VERSION,
             sendContentTypeByJson: true,
             beforeSend: function (event) {
               if (
                 event.type === 'view' &&
                 event.view.loading_type === 'route_change'
               ) {
+                event.context = Object.assign({}, event.context, {
+                  soft_navigation_demo_run_id: runId
+                })
                 result.routeViews.push({
                   id: event.view.id,
                   firstContentfulPaintMs:
@@ -321,7 +384,9 @@
                       ? event.view.largest_contentful_paint / 1000000
                       : undefined,
                   loadingType: event.view.loading_type,
+                  name: event.view.name,
                   navigationType: event.view.navigation_type,
+                  runId: runId,
                   url: event.view.url
                 })
                 render()
@@ -356,9 +421,12 @@
             navigateButton.disabled = true
             result.clickTrusted = event.isTrusted
             history.pushState({}, '', '/checkout')
+            window.DATAFLUX_RUM.setViewName('soft-navigation-checkout')
             document.getElementById('content').innerHTML =
               '<h2>Checkout</h2><p style="font-size:48px">Native soft navigation content</p>'
-            window.setTimeout(complete, 4000)
+            window.setTimeout(function () {
+              complete()
+            }, 4000)
             render()
           })
         } catch (error) {
@@ -366,6 +434,7 @@
           recordError(error)
           result.completed = true
         }
+        window.addEventListener('soft-navigation-transport-updated', render)
         render()
       })()
     </script>

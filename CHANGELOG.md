@@ -10,6 +10,7 @@
 
 ## Unreleased
 
+- feat(rum): enrich SPA route Views with native Soft Navigation FCP, LCP, and navigation type
 - feat(rum): record the WebSocket segment end View path for readable viewer filtering
 - fix(rum): prevent invalid initial view time spent when navigation start is unavailable
 - fix(rum): renew bridged WebView views across foreground lifecycle changes to prevent stale performance and time-spent metrics
