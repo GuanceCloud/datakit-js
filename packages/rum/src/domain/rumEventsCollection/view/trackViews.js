@@ -27,6 +27,8 @@ import {
 import { trackInitialViewMetrics } from './trackInitialViewTimings'
 import { trackCommonViewMetrics } from './trackCommonViewMetrics'
 import { trackViewEventCounts } from './trackViewEventCounts'
+import { trackSoftNavigationMetrics } from './trackSoftNavigationMetrics'
+import { getSelectorFromElement } from '../actions/getSelectorsFromElement'
 export var THROTTLE_VIEW_UPDATE_PERIOD = 3000
 export var SESSION_KEEP_ALIVE_INTERVAL = 5 * ONE_MINUTE
 export var KEEP_TRACKING_AFTER_VIEW_DELAY = 5 * ONE_MINUTE
@@ -57,6 +59,9 @@ export function trackViews(
     activeViews.add(newlyCreatedView)
     newlyCreatedView.stopObservable.subscribe(function () {
       activeViews.delete(newlyCreatedView)
+      if (softNavigationView === newlyCreatedView) {
+        softNavigationView = undefined
+      }
     })
     if (!isWebViewActive) {
       newlyCreatedView.end({ sessionIsActive: false })
@@ -68,6 +73,36 @@ export function trackViews(
     ViewLoadingType.INITIAL_LOAD,
     clocksOrigin(),
     initialViewOptions
+  )
+  var softNavigationView
+  var softNavigationInteractionId
+  var softNavigationMetricsTracking = trackSoftNavigationMetrics(
+    function (entry) {
+      if (entry.entryType === 'soft-navigation') {
+        softNavigationView = findSoftNavigationView(activeViews, entry)
+        softNavigationInteractionId = entry.interactionId
+        if (softNavigationView) {
+          softNavigationView.$rSetSoftNavigationMetrics(
+            entry.navigationType,
+            entry.duration,
+            getSoftNavigationLcp(
+              configuration,
+              entry.getLargestInteractionContentfulPaint &&
+                entry.getLargestInteractionContentfulPaint()
+            )
+          )
+        }
+      } else if (
+        softNavigationView &&
+        softNavigationInteractionId === entry.interactionId
+      ) {
+        softNavigationView.$rSetSoftNavigationMetrics(
+          undefined,
+          undefined,
+          getSoftNavigationLcp(configuration, entry)
+        )
+      }
+    }
   )
   var stopWebViewLifecycleTracking = noop
   startViewLifeCycle()
@@ -155,6 +190,7 @@ export function trackViews(
         locationChangeSubscription.unsubscribe()
       }
       stopWebViewLifecycleTracking()
+      softNavigationMetricsTracking()
       currentView.end()
       activeViews.forEach(function (view) {
         view.stop()
@@ -246,6 +282,7 @@ function newView(
         }
   var stopInitialViewMetricsTracking = _trackInitialViewTimings.stop
   var initialViewMetrics = _trackInitialViewTimings.initialViewMetrics
+  var navigationType
   var _trackViewEventCounts = trackViewEventCounts(
     lifeCycle,
     id,
@@ -299,6 +336,7 @@ function newView(
       version: version,
       context: contextManager.getContext(),
       loadingType: loadingType,
+      navigationType: navigationType,
       location: location,
       startClocks: startClocks,
       commonViewMetrics: getCommonViewMetrics(),
@@ -360,9 +398,62 @@ function newView(
     setViewName(updatedName) {
       name = updatedName
       triggerViewUpdate()
+    },
+    $rSetSoftNavigationMetrics: function (
+      softNavigationType,
+      firstContentfulPaint,
+      largestContentfulPaint
+    ) {
+      navigationType = softNavigationType || navigationType
+      if (typeof firstContentfulPaint === 'number') {
+        initialViewMetrics.firstContentfulPaint = firstContentfulPaint
+      }
+      if (largestContentfulPaint) {
+        initialViewMetrics.largestContentfulPaint = largestContentfulPaint
+      }
+      scheduleViewUpdate()
     }
   }
+  result.$rLoadingType = loadingType
+  result.$rLocation = location
+  result.$rStartClocks = startClocks
   return result
+}
+
+function findSoftNavigationView(activeViews, softNavigation) {
+  // History tracking creates the View before Chrome emits its paint-backed
+  // soft-navigation entry. Enrich that View instead of creating a duplicate.
+  var matchingView
+  var closestStart = Infinity
+  activeViews.forEach(function (view) {
+    var startDelay = view.$rStartClocks.relative - softNavigation.startTime
+    if (
+      view.$rLoadingType === ViewLoadingType.ROUTE_CHANGE &&
+      startDelay >= -1 &&
+      startDelay < closestStart &&
+      view.$rLocation.href === softNavigation.name
+    ) {
+      matchingView = view
+      closestStart = startDelay
+    }
+  })
+  return matchingView
+}
+
+function getSoftNavigationLcp(configuration, entry) {
+  var candidate = entry && entry.largestContentfulPaint
+  var renderTime = candidate && (candidate.renderTime || candidate.loadTime)
+  if (renderTime) {
+    return {
+      value: Math.max(renderTime - entry.startTime, 0),
+      targetSelector:
+        candidate.element &&
+        getSelectorFromElement(
+          candidate.element,
+          configuration.actionNameAttribute
+        )
+    }
+  }
 }
 
 /**
