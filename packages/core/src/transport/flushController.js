@@ -121,11 +121,16 @@ export function createFlushController({
      * @param messageBytesCount: the message bytes count that was added to the pool. Should
      * correspond to the sum of bytes counts passed to `notifyBeforeAddMessage` and
      * `notifyAfterAddMessage`.
+     * @param keepDurationLimitTimeout: keeps the current deadline when the removed message is
+     * synchronously replaced by another one.
      */
-    notifyAfterRemoveMessage: function (messageBytesCount) {
+    notifyAfterRemoveMessage: function (
+      messageBytesCount,
+      keepDurationLimitTimeout
+    ) {
       currentBytesCount -= messageBytesCount
       currentMessagesCount -= 1
-      if (currentMessagesCount === 0) {
+      if (currentMessagesCount === 0 && !keepDurationLimitTimeout) {
         cancelDurationLimitTimeout()
       }
     }

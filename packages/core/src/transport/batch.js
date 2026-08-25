@@ -236,13 +236,16 @@ export function createBatch(options) {
     return key !== undefined && upsertBuffer[key] !== undefined
   }
 
-  function remove(key) {
+  function remove(key, keepDurationLimitTimeout) {
     delete upsertBuffer[key]
     var messageBytesCount = upsertMessageBytesCountByKey[key]
     delete upsertMessageBytesCountByKey[key]
     upsertRawBytesCount -= upsertRawBytesCountByKey[key] || 0
     delete upsertRawBytesCountByKey[key]
-    flushController.notifyAfterRemoveMessage(messageBytesCount)
+    flushController.notifyAfterRemoveMessage(
+      messageBytesCount,
+      keepDurationLimitTimeout
+    )
   }
   function process(message) {
     var processedMessage = ''
@@ -269,7 +272,10 @@ export function createBatch(options) {
     }
 
     if (hasMessageFor(key)) {
-      remove(key)
+      // Keep the original flush deadline while replacing an upsert. Otherwise,
+      // a frequently updated View can postpone its flush indefinitely when it
+      // is the only message in the batch.
+      remove(key, true)
     }
 
     push(serializedMessage, estimatedMessageBytesCount, key)

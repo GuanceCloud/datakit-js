@@ -109,4 +109,19 @@ describe('flushController', () => {
     expect(flushSpy).not.toHaveBeenCalled()
     expect(flushController.getMessagesCount()).toBe(0)
   })
+
+  it('should keep the original duration deadline when a message is replaced', () => {
+    flushController.notifyBeforeAddMessage(3)
+
+    jasmine.clock().tick(60)
+    flushController.notifyAfterRemoveMessage(3, true)
+    flushController.notifyBeforeAddMessage(4)
+    jasmine.clock().tick(40)
+
+    expect(flushSpy).toHaveBeenCalledOnceWith({
+      reason: 'duration_limit',
+      messagesCount: 1,
+      bytesCount: 4
+    })
+  })
 })

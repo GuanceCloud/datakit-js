@@ -4,8 +4,60 @@ import { createIdentityEncoder } from '../helper/encoder'
 import { computeBytesCount } from '../helper/byteUtils'
 import { jsonStringify } from '../helper/serialisation/jsonStringify'
 import { createBatch, processedMessageByDataMap } from './batch'
+import { createFlushController } from './flushController'
 
 describe('batch', () => {
+  it('should flush a repeatedly updated View at the original duration deadline', () => {
+    jasmine.clock().install()
+    try {
+      const pageExitObservable = new Observable()
+      const sessionExpireObservable = new Observable()
+      const send = jasmine.createSpy('send')
+      const batch = createBatch({
+        encoder: createIdentityEncoder(),
+        request: {
+          send,
+          sendOnExit: jasmine.createSpy('sendOnExit')
+        },
+        bytesLimit: 10000,
+        messageBytesLimit: 10000,
+        sendContentTypeByJson: false,
+        flushController: createFlushController({
+          messagesLimit: 50,
+          bytesLimit: 10000,
+          durationLimit: 100,
+          pageExitObservable,
+          sessionExpireObservable
+        })
+      })
+
+      batch.upsert(
+        {
+          type: 'view',
+          date: 1,
+          view: { id: 'view-1', name: 'initial-view', time_spent: 1 }
+        },
+        'view-1'
+      )
+      jasmine.clock().tick(60)
+      batch.upsert(
+        {
+          type: 'view',
+          date: 2,
+          view: { id: 'view-1', name: 'updated-view', time_spent: 2 }
+        },
+        'view-1'
+      )
+      jasmine.clock().tick(40)
+
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send.calls.mostRecent().args[0].data).toContain('updated-view')
+      expect(send.calls.mostRecent().args[0].data).not.toContain('initial-view')
+    } finally {
+      jasmine.clock().uninstall()
+    }
+  })
+
   it('should map telemetry messages into row data', () => {
     const processed = processedMessageByDataMap({
       type: 'telemetry',
@@ -340,7 +392,8 @@ describe('batch', () => {
     )
 
     expect(notifyAfterRemoveMessage).toHaveBeenCalledOnceWith(
-      firstEstimatedBytes
+      firstEstimatedBytes,
+      true
     )
   })
 
