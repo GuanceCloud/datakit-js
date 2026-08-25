@@ -46,7 +46,13 @@ export function trackViews(
     !eventBridgeAvailable ||
     (document.visibilityState !== 'hidden' && document.hasFocus())
   var activeViews = new Set()
-  function startNewView(loadingType, startClocks, viewOptions) {
+  function startNewView(
+    loadingType,
+    startClocks,
+    viewOptions,
+    canMatchSoftNavigation,
+    fallbackNavigationType
+  ) {
     var newlyCreatedView = newView(
       lifeCycle,
       domMutationObservable,
@@ -54,7 +60,9 @@ export function trackViews(
       location,
       loadingType,
       startClocks,
-      viewOptions
+      viewOptions,
+      canMatchSoftNavigation,
+      fallbackNavigationType
     )
     activeViews.add(newlyCreatedView)
     newlyCreatedView.stopObservable.subscribe(function () {
@@ -87,8 +95,9 @@ export function trackViews(
             entry.duration,
             getSoftNavigationLcp(
               configuration,
-              entry.getLargestInteractionContentfulPaint &&
-                entry.getLargestInteractionContentfulPaint()
+              entry.getLargestInteractionContentfulPaint
+                ? entry.getLargestInteractionContentfulPaint()
+                : entry.largestInteractionContentfulPaint
             )
           )
         }
@@ -106,12 +115,10 @@ export function trackViews(
   )
   var stopWebViewLifecycleTracking = noop
   startViewLifeCycle()
-  var locationChangeSubscription
-  if (areViewsTrackedAutomatically) {
-    locationChangeSubscription = renewViewOnLocationChange(
-      locationChangeObservable
-    )
-  }
+  var pendingNavigation
+  var locationChangeSubscription = renewViewOnLocationChange(
+    locationChangeObservable
+  )
   function startViewLifeCycle() {
     function renewCurrentView() {
       currentView = startNewView(ViewLoadingType.ROUTE_CHANGE, undefined, {
@@ -153,8 +160,18 @@ export function trackViews(
       var oldLocation = params.oldLocation
       var newLocation = params.newLocation
       if (areDifferentLocation(oldLocation, newLocation)) {
+        if (!areViewsTrackedAutomatically) {
+          pendingNavigation = [newLocation.href, params.navigationType]
+          return
+        }
         currentView.end()
-        currentView = startNewView(ViewLoadingType.ROUTE_CHANGE)
+        currentView = startNewView(
+          ViewLoadingType.ROUTE_CHANGE,
+          undefined,
+          undefined,
+          true,
+          params.navigationType
+        )
         return
       }
     })
@@ -168,11 +185,21 @@ export function trackViews(
       currentView.addTiming(name, time)
     },
     startView: function (options, startClocks) {
+      var fallbackNavigationType
+      if (
+        pendingNavigation &&
+        pendingNavigation[0] === location.href
+      ) {
+        fallbackNavigationType = pendingNavigation[1]
+      }
+      pendingNavigation = undefined
       currentView.end({ endClocks: startClocks })
       currentView = startNewView(
         ViewLoadingType.ROUTE_CHANGE,
         startClocks,
-        options
+        options,
+        true,
+        fallbackNavigationType
       )
     },
     setViewContext: (context) => {
@@ -206,7 +233,9 @@ function newView(
   initialLocation,
   loadingType,
   startClocks,
-  viewOptions
+  viewOptions,
+  canMatchSoftNavigation,
+  fallbackNavigationType
 ) {
   // Setup initial values
   if (startClocks === undefined) {
@@ -282,7 +311,7 @@ function newView(
         }
   var stopInitialViewMetricsTracking = _trackInitialViewTimings.stop
   var initialViewMetrics = _trackInitialViewTimings.initialViewMetrics
-  var navigationType
+  var navigationType = fallbackNavigationType
   var _trackViewEventCounts = trackViewEventCounts(
     lifeCycle,
     id,
@@ -414,9 +443,10 @@ function newView(
       scheduleViewUpdate()
     }
   }
-  result.$rLoadingType = loadingType
   result.$rLocation = location
-  result.$rStartClocks = startClocks
+  if (canMatchSoftNavigation) {
+    result.$rSoftNavigationStart = startClocks.relative
+  }
   return result
 }
 
@@ -426,9 +456,8 @@ function findSoftNavigationView(activeViews, softNavigation) {
   var matchingView
   var closestStart = Infinity
   activeViews.forEach(function (view) {
-    var startDelay = view.$rStartClocks.relative - softNavigation.startTime
+    var startDelay = view.$rSoftNavigationStart - softNavigation.startTime
     if (
-      view.$rLoadingType === ViewLoadingType.ROUTE_CHANGE &&
       startDelay >= -1 &&
       startDelay < closestStart &&
       view.$rLocation.href === softNavigation.name

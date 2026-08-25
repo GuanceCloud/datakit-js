@@ -5,6 +5,9 @@ describe('trackSoftNavigationMetrics', () => {
 
   class FakePerformanceObserver {
     constructor(callback) {
+      if (FakePerformanceObserver.failingConstruction) {
+        throw new Error('constructor failed')
+      }
       this.callback = callback
       this.observe = jasmine.createSpy('observe').and.callFake((options) => {
         if (options.type === FakePerformanceObserver.failingEntryType) {
@@ -21,6 +24,7 @@ describe('trackSoftNavigationMetrics', () => {
     OriginalPerformanceObserver = window.PerformanceObserver
     FakePerformanceObserver.instances = []
     FakePerformanceObserver.failingEntryType = undefined
+    FakePerformanceObserver.failingConstruction = false
     FakePerformanceObserver.supportedEntryTypes = [
       'soft-navigation',
       'interaction-contentful-paint'
@@ -74,21 +78,53 @@ describe('trackSoftNavigationMetrics', () => {
   })
 
   it('does not install observers when the API is unavailable', () => {
-    FakePerformanceObserver.supportedEntryTypes = []
+    window.PerformanceObserver = undefined
+    globalThis.PerformanceObserver = undefined
     const tracking = trackSoftNavigationMetrics(jasmine.createSpy())
 
     expect(FakePerformanceObserver.instances.length).toBe(0)
     tracking()
   })
 
-  it('disconnects and falls back when observer registration fails', () => {
+  it('keeps soft navigation tracking when ICP registration fails', () => {
     FakePerformanceObserver.failingEntryType = 'interaction-contentful-paint'
     const callback = jasmine.createSpy('callback')
     const tracking = trackSoftNavigationMetrics(callback)
     const observer = FakePerformanceObserver.instances[0]
+    const entry = { entryType: 'soft-navigation' }
+
+    observer.callback({ getEntries: () => [entry] })
+
+    expect(observer.disconnect).not.toHaveBeenCalled()
+    expect(callback.calls.argsFor(0)[0]).toBe(entry)
+    tracking()
+    expect(observer.disconnect).toHaveBeenCalled()
+  })
+
+  it('falls back when soft navigation registration fails', () => {
+    FakePerformanceObserver.failingEntryType = 'soft-navigation'
+    const tracking = trackSoftNavigationMetrics(jasmine.createSpy())
+    const observer = FakePerformanceObserver.instances[0]
 
     expect(observer.disconnect).toHaveBeenCalled()
-    expect(callback).not.toHaveBeenCalled()
+    tracking()
+  })
+
+  it('falls back when observer construction fails', () => {
+    FakePerformanceObserver.failingConstruction = true
+
+    const tracking = trackSoftNavigationMetrics(jasmine.createSpy())
+
+    expect(FakePerformanceObserver.instances.length).toBe(0)
+    tracking()
+  })
+
+  it('attempts registration when supported entry types are frozen', () => {
+    FakePerformanceObserver.supportedEntryTypes = []
+
+    const tracking = trackSoftNavigationMetrics(jasmine.createSpy())
+
+    expect(FakePerformanceObserver.instances.length).toBe(1)
     tracking()
   })
 })

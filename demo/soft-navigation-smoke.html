@@ -173,12 +173,21 @@
           nativeObserver.supportedEntryTypes
         ) {
           function FilteredPerformanceObserver(callback) {
-            return new nativeObserver(callback)
+            this.observer = new nativeObserver(callback)
           }
           FilteredPerformanceObserver.supportedEntryTypes =
             nativeObserver.supportedEntryTypes.filter(function (entryType) {
               return entryType !== 'soft-navigation'
             })
+          FilteredPerformanceObserver.prototype.observe = function (options) {
+            if (options && options.type === 'soft-navigation') {
+              throw new TypeError('soft-navigation disabled by demo')
+            }
+            return this.observer.observe(options)
+          }
+          FilteredPerformanceObserver.prototype.disconnect = function () {
+            return this.observer.disconnect()
+          }
           window.PerformanceObserver = FilteredPerformanceObserver
         }
       })()
@@ -226,7 +235,10 @@
         var setup = window.__softNavigationDemoSetup
         var NativePerformanceObserver = setup.nativeObserver
         var forceFallback = setup.forceFallback
-        var CN3_SITE = 'https://cn3-rum-openway.guance.com'
+        var localIntake = new URLSearchParams(location.search).has('local')
+        var INTAKE_SITE = localIntake
+          ? location.origin
+          : 'https://cn3-rum-openway.guance.com'
         var CLIENT_TOKEN = 'b806cd20126446c4848605cb254f92ed'
         var APPLICATION_ID = 'test_dcl'
         var SERVICE = 'browser-sdk-soft-navigation-demo'
@@ -262,7 +274,7 @@
           env: ENV,
           version: VERSION,
           runId: runId,
-          site: CN3_SITE,
+          site: INTAKE_SITE,
           transportEvidence: setup.transportEvidence,
           clickTrusted: false,
           completed: false,
@@ -331,7 +343,7 @@
             result.routeViews.length > 0 &&
             result.routeViews.every(function (view) {
               return (
-                view.navigationType === undefined &&
+                view.navigationType === 'push' &&
                 view.firstContentfulPaintMs === undefined &&
                 view.largestContentfulPaintMs === undefined
               )
@@ -345,7 +357,7 @@
 
           result.completed = true
           result.passed =
-            result.clickTrusted &&
+            (usesFallback || result.clickTrusted) &&
             result.originalRouteViewPreserved &&
             (usesFallback
               ? fallbackPreserved
@@ -357,7 +369,7 @@
         try {
           window.DATAFLUX_RUM.init({
             applicationId: APPLICATION_ID,
-            site: CN3_SITE,
+            site: INTAKE_SITE,
             clientToken: CLIENT_TOKEN,
             sessionSampleRate: 100,
             sessionReplaySampleRate: 0,

@@ -13,6 +13,25 @@ describe('trackViews', () => {
   let originalBridge
   let originalHasFocus
 
+  function installFakePerformanceObserver() {
+    class FakePerformanceObserver {
+      constructor(callback) {
+        this.callback = callback
+        this.observe = jasmine.createSpy('observe')
+        this.disconnect = jasmine.createSpy('disconnect')
+        FakePerformanceObserver.instances.push(this)
+      }
+    }
+    FakePerformanceObserver.instances = []
+    FakePerformanceObserver.supportedEntryTypes = [
+      'soft-navigation',
+      'interaction-contentful-paint'
+    ]
+    window.PerformanceObserver = FakePerformanceObserver
+    globalThis.PerformanceObserver = FakePerformanceObserver
+    return FakePerformanceObserver
+  }
+
   beforeEach(() => {
     jasmine.clock().install()
     jasmine.clock().mockDate(new Date('2026-04-01T00:00:00.000Z'))
@@ -233,6 +252,54 @@ describe('trackViews', () => {
         pathname: '/old'
       })
     )
+
+    tracking.stop()
+  })
+
+  it('should preserve the route navigation type for manually tracked views', () => {
+    const lifeCycle = new LifeCycle()
+    const locationChangeObservable = new Observable()
+    const updatedEvents = []
+    const location = {
+      pathname: '/products',
+      hash: '',
+      href: 'https://example.com/products'
+    }
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      location,
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      locationChangeObservable,
+      false
+    )
+    location.pathname = '/checkout'
+    location.href = 'https://example.com/checkout'
+    locationChangeObservable.notify({
+      oldLocation: {
+        pathname: '/products',
+        hash: '',
+        href: 'https://example.com/products'
+      },
+      newLocation: {
+        pathname: '/checkout',
+        hash: '',
+        href: 'https://example.com/checkout'
+      },
+      navigationType: 'traverse'
+    })
+    tracking.startView({ name: 'Checkout' })
+    jasmine.clock().tick(THROTTLE_VIEW_UPDATE_PERIOD)
+
+    expect(
+      updatedEvents
+        .filter((event) => event.loadingType === 'route_change')
+        .pop().navigationType
+    ).toBe('traverse')
 
     tracking.stop()
   })
@@ -576,21 +643,7 @@ describe('trackViews', () => {
   })
 
   it('should add native soft navigation metrics to the matching route view', () => {
-    class FakePerformanceObserver {
-      constructor(callback) {
-        this.callback = callback
-        this.observe = jasmine.createSpy('observe')
-        this.disconnect = jasmine.createSpy('disconnect')
-        FakePerformanceObserver.instances.push(this)
-      }
-    }
-    FakePerformanceObserver.instances = []
-    FakePerformanceObserver.supportedEntryTypes = [
-      'soft-navigation',
-      'interaction-contentful-paint'
-    ]
-    window.PerformanceObserver = FakePerformanceObserver
-    globalThis.PerformanceObserver = FakePerformanceObserver
+    const FakePerformanceObserver = installFakePerformanceObserver()
 
     const lifeCycle = new LifeCycle()
     const locationChangeObservable = new Observable()
@@ -616,7 +669,8 @@ describe('trackViews', () => {
     location.href = 'https://example.com/checkout'
     locationChangeObservable.notify({
       oldLocation: { pathname: '/products', hash: '' },
-      newLocation: { pathname: '/checkout', hash: '' }
+      newLocation: { pathname: '/checkout', hash: '' },
+      navigationType: 'replace'
     })
 
     const softNavigationObserver = FakePerformanceObserver.instances.find(
@@ -642,7 +696,7 @@ describe('trackViews', () => {
       updatedEvents
         .filter((event) => event.loadingType === 'route_change')
         .pop().navigationType
-    ).toBeUndefined()
+    ).toBe('replace')
 
     softNavigationObserver.callback({
       getEntries: () => [
@@ -692,8 +746,88 @@ describe('trackViews', () => {
       })
     )
 
+    location.pathname = '/legacy'
+    location.href = 'https://example.com/legacy'
+    locationChangeObservable.notify({
+      oldLocation: { pathname: '/checkout', hash: '' },
+      newLocation: { pathname: '/legacy', hash: '' },
+      navigationType: 'traverse'
+    })
+    softNavigationObserver.callback({
+      getEntries: () => [
+        {
+          entryType: 'soft-navigation',
+          name: 'https://example.com/legacy',
+          startTime: 0,
+          duration: 15,
+          interactionId: 9,
+          navigationType: 'replace',
+          largestInteractionContentfulPaint: {
+            startTime: 0,
+            largestContentfulPaint: { renderTime: 35 }
+          }
+        }
+      ]
+    })
+    jasmine.clock().tick(THROTTLE_VIEW_UPDATE_PERIOD)
+
+    const legacyRouteChangeUpdate = updatedEvents
+      .filter((event) => event.location.href === 'https://example.com/legacy')
+      .pop()
+    expect(legacyRouteChangeUpdate.navigationType).toBe('replace')
+    expect(
+      legacyRouteChangeUpdate.initialViewMetrics.largestContentfulPaint.value
+    ).toBe(35)
+
     tracking.stop()
     expect(softNavigationObserver.disconnect).toHaveBeenCalled()
+  })
+
+  it('should not attach soft navigation metrics to session-renewed views', () => {
+    const FakePerformanceObserver = installFakePerformanceObserver()
+    const lifeCycle = new LifeCycle()
+    const updatedEvents = []
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      {
+        pathname: '/products',
+        hash: '',
+        href: 'https://example.com/products'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      new Observable(),
+      false
+    )
+    lifeCycle.notify(LifeCycleEventType.SESSION_RENEWED)
+
+    FakePerformanceObserver.instances[0].callback({
+      getEntries: () => [
+        {
+          entryType: 'soft-navigation',
+          name: 'https://example.com/products',
+          startTime: 0,
+          duration: 20,
+          interactionId: 7,
+          navigationType: 'push'
+        }
+      ]
+    })
+    jasmine.clock().tick(THROTTLE_VIEW_UPDATE_PERIOD)
+
+    const renewedViewUpdate = updatedEvents
+      .filter((event) => event.loadingType === 'route_change')
+      .pop()
+    expect(renewedViewUpdate.navigationType).toBeUndefined()
+    expect(
+      renewedViewUpdate.initialViewMetrics.firstContentfulPaint
+    ).toBeUndefined()
+
+    tracking.stop()
   })
 
   it('should replace the whole view context and publish it on the next update', () => {

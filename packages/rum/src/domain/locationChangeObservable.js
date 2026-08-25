@@ -11,14 +11,15 @@ export function createLocationChangeObservable(location) {
   return new Observable(function (observable) {
     var _trackHistory = trackHistory(onLocationChange)
     var _trackHash = trackHash(onLocationChange)
-    function onLocationChange() {
+    function onLocationChange(navigationType) {
       if (currentLocation.href === location.href) {
         return
       }
       var newLocation = shallowClone(location)
       observable.notify({
         newLocation: newLocation,
-        oldLocation: currentLocation
+        oldLocation: currentLocation,
+        navigationType: navigationType
       })
       currentLocation = newLocation
     }
@@ -36,7 +37,9 @@ function trackHistory(onHistoryChange) {
     'pushState',
     function (params) {
       var onPostCall = params.onPostCall
-      onPostCall(onHistoryChange)
+      onPostCall(function () {
+        onHistoryChange('push')
+      })
     }
   )
   var replaceState = instrumentMethod(
@@ -44,10 +47,14 @@ function trackHistory(onHistoryChange) {
     'replaceState',
     function (params) {
       var onPostCall = params.onPostCall
-      onPostCall(onHistoryChange)
+      onPostCall(function () {
+        onHistoryChange('replace')
+      })
     }
   )
-  var popState = addEventListener(window, DOM_EVENT.POP_STATE, onHistoryChange)
+  var popState = addEventListener(window, DOM_EVENT.POP_STATE, function () {
+    onHistoryChange('traverse')
+  })
 
   return {
     stop: function () {
@@ -59,7 +66,18 @@ function trackHistory(onHistoryChange) {
 }
 
 function trackHash(onHashChange) {
-  return addEventListener(window, DOM_EVENT.HASH_CHANGE, onHashChange)
+  if (window.navigation && window.navigation.addEventListener) {
+    return addEventListener(
+      window.navigation,
+      'currententrychange',
+      function (event) {
+        onHashChange(event.navigationType)
+      }
+    )
+  }
+  return addEventListener(window, DOM_EVENT.HASH_CHANGE, function () {
+    onHashChange('push')
+  })
 }
 function getHistoryInstrumentationTarget(methodName) {
   // Ideally we should always instument the method on the prototype, however some frameworks (e.g [Next.js](https://github.com/vercel/next.js/blob/d3f5532065f3e3bb84fb54bd2dfd1a16d0f03a21/packages/next/src/client/components/app-router.tsx#L429))
