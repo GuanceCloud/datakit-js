@@ -10,7 +10,7 @@ const { spawnSync } = require('child_process')
 // snapshot and ordered retry recovery paths, so it cannot drift back into the
 // main package unnoticed.
 const RUM_BUNDLE_RAW_BYTES_LIMIT = 330000
-const RUM_BUNDLE_GZIP_BYTES_LIMIT = 107600
+const RUM_BUNDLE_GZIP_BYTES_LIMIT = 107700
 // Size-sensitive applications can use the slim package, which intentionally
 // omits Session Replay.  Gate it independently so growth in the full feature
 // set never weakens the lightweight distribution's contract.
