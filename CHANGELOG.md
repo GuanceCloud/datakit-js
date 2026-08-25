@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.3.9
+
+- fix(rum): prevent view batch flush starvation
+- fix(rum): harden soft navigation compatibility
+- Merge branch 'codex/soft-navigation-api' into dev
+- test(demo): report soft navigation views to cn3
+- feat(rum): measure soft navigation timings
+- fix: update lock.json
+
 ## v3.3.8
 
 - feat(rum): expose WebSocket end view path
