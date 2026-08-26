@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.3.10
+
+- docs(rum): document shadow dom actions
+- fix(rum): support shadow dom action metadata
+- chore(build): increase rum bundle gzip budget
+
 ## v3.3.9
 
 - fix(rum): prevent view batch flush starvation
