@@ -27,8 +27,8 @@
         "@cloudcare/browser-rum-react": "3.3.10"
     },
     "peerDependencies": {
-        "@cloudcare/browser-rum": ">=3.3.11",
-        "@cloudcare/browser-rum-slim": ">=3.3.11",
+        "@cloudcare/browser-rum": ">=3.3.12",
+        "@cloudcare/browser-rum-slim": ">=3.3.12",
         "next": ">=13",
         "react": ">=18"
     },

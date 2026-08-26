@@ -26,8 +26,8 @@
         "@cloudcare/browser-core": "3.3.10"
     },
     "peerDependencies": {
-        "@cloudcare/browser-rum": ">=3.3.11",
-        "@cloudcare/browser-rum-slim": ">=3.3.11",
+        "@cloudcare/browser-rum": ">=3.3.12",
+        "@cloudcare/browser-rum-slim": ">=3.3.12",
         "nuxt": "3 || 4",
         "vue": "3",
         "vue-router": "4"
