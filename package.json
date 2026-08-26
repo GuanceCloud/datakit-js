@@ -72,7 +72,7 @@
         "test:unit:grep": "node ./scripts/test-unit.js --grep",
         "test:exports:frameworks": "node ./scripts/test-framework-package-exports.js",
         "test:types:frameworks": "tsc --project test/types/framework-plugins.tsconfig.json",
-        "test:release-scripts": "node scripts/release/check-webgl-publish-contract.test.js && node scripts/publish-oss-base.test.js",
+        "test:release-scripts": "node scripts/release/check-webgl-publish-contract.test.js && node scripts/release/get-version-force-publish.test.js && node scripts/publish-oss-base.test.js",
         "test:unit:watch": "npm run test:unit --no-single-run"
     },
     "keywords": [

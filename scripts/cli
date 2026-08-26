@@ -23,7 +23,18 @@ cmd_help () {
 
 cmd_release () {
   [[ `git branch --show-current`!="master" ]] || fail 'please do not release from `master` branch'
-  lerna version --exact
+  local changed_packages
+  changed_packages=$(lerna changed --json --loglevel silent)
+
+  local force_publish_packages
+  force_publish_packages=$(printf '%s' "$changed_packages" | node ./scripts/release/get-version-force-publish.js)
+
+  local version_args=(--exact)
+  if [[ -n "$force_publish_packages" ]]; then
+    version_args+=(--force-publish "$force_publish_packages")
+  fi
+
+  lerna version "${version_args[@]}"
 }
 
 cmd_version () {
