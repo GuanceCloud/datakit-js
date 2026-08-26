@@ -589,8 +589,7 @@ export function record(options) {
     pendingPublicationTokenByNode.set(node, publicationToken)
     if (
       publicationToken &&
-      typeof HTMLCanvasElement !== 'undefined' &&
-      node instanceof HTMLCanvasElement
+      node.tagName === 'CANVAS'
     ) {
       if (!publicationToken.$rCanvasNodes) {
         publicationToken.$rCanvasNodes = new Set()

@@ -17,6 +17,47 @@ import {
 } from './serializationUtils'
 
 describe('replay/record/observers', () => {
+  it('should capture input changes from an iframe realm inside a shadow root', () => {
+    const iframe = document.createElement('iframe')
+    document.body.appendChild(iframe)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const foreignWindow = iframe.contentWindow
+    const input = foreignWindow.document.createElement('input')
+    input.value = 'wujie-value'
+    shadowRoot.appendChild(input)
+    setSerializedNodeId(input, 98)
+    const inputCb = jasmine.createSpy('inputCb')
+    const stop = initInputObserver(
+      inputCb,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      shadowRoot,
+      function () {
+        return false
+      }
+    )
+
+    try {
+      expect(input instanceof HTMLInputElement).toBeFalse()
+      input.dispatchEvent(
+        new foreignWindow.Event('change', {
+          bubbles: true,
+          composed: false
+        })
+      )
+
+      expect(inputCb).toHaveBeenCalledOnceWith({
+        id: 98,
+        text: 'wujie-value'
+      })
+    } finally {
+      stop()
+      host.remove()
+      iframe.remove()
+    }
+  })
+
   it('should roll back previously initialized observers when a later observer fails', () => {
     const input = document.createElement('input')
     document.body.appendChild(input)

@@ -327,7 +327,7 @@ export function createCanvasObserver(options) {
       if (!isSupportedReplayCanvasMode(configuration.replayCanvasMode)) {
         return Promise.resolve(createSnapshotFailureResult('invalid_mode'))
       }
-      if (!(canvas instanceof HTMLCanvasElement)) {
+      if (!canvas || canvas.tagName !== 'CANVAS') {
         return Promise.resolve(createSnapshotFailureResult('not_canvas'))
       }
       if (!hasSerializedNode(canvas)) {

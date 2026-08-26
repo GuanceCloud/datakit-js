@@ -3939,6 +3939,94 @@ describe('replay/record/record', () => {
     }
   })
 
+  it('should record Wujie-like iframe realm nodes inside an open shadow root', () => {
+    const iframe = document.createElement('iframe')
+    document.body.appendChild(iframe)
+    const foreignWindow = iframe.contentWindow
+    const host = document.createElement('div')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const input = foreignWindow.document.createElement('input')
+    input.value = 'initial-wujie-value'
+    const canvas = foreignWindow.document.createElement('canvas')
+    canvas.width = 40
+    canvas.height = 20
+    const lateShadowHost = foreignWindow.document.createElement('section')
+    const lateShadowRoot = lateShadowHost.attachShadow({ mode: 'open' })
+    const lateChild = foreignWindow.document.createElement('span')
+    lateChild.textContent = 'initial-wujie-shadow-content'
+    lateShadowRoot.appendChild(lateChild)
+    shadowRoot.appendChild(input)
+    shadowRoot.appendChild(canvas)
+    shadowRoot.appendChild(lateShadowHost)
+    container.appendChild(host)
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: false
+      },
+      lifeCycle: createLifeCycle()
+    })
+
+    try {
+      expect(input instanceof HTMLInputElement).toBeFalse()
+      expect(canvas instanceof HTMLCanvasElement).toBeFalse()
+      expect(
+        JSON.stringify(
+          emittedRecords.find(
+            (event) => event.type === RecordType.FullSnapshot
+          ).data.node
+        )
+      ).toContain('initial-wujie-value')
+      expect(
+        JSON.stringify(
+          emittedRecords.find(
+            (event) => event.type === RecordType.FullSnapshot
+          ).data.node
+        )
+      ).toContain('initial-wujie-shadow-content')
+
+      emittedRecords.length = 0
+      input.value = 'updated-wujie-value'
+      input.dispatchEvent(
+        new foreignWindow.Event('input', {
+          bubbles: true,
+          composed: true
+        })
+      )
+
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Input &&
+            event.data.id === recorder.getSerializedNodeIdForDebug(input) &&
+            event.data.text === 'updated-wujie-value'
+        )
+      ).toBeTrue()
+
+      emittedRecords.length = 0
+      lateChild.textContent = 'late-wujie-shadow-content'
+      recorder.flushMutations()
+
+      expect(
+        emittedRecords.some(
+          (event) =>
+            event.type === RecordType.IncrementalSnapshot &&
+            event.data.source === IncrementalSource.Mutation &&
+            JSON.stringify(event.data.adds).includes(
+              'late-wujie-shadow-content'
+            )
+        )
+      ).toBeTrue()
+    } finally {
+      recorder.stop()
+      host.remove()
+      iframe.remove()
+    }
+  })
+
   it('should publish a dynamically attached open shadow root before its internal mutations', () => {
     const host = document.createElement('div')
     container.appendChild(host)

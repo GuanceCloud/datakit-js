@@ -1654,20 +1654,20 @@
         >
           <div class="demo-section__head">
             <div>
-              <div class="demo-section__title">Shadow DOM Action Inspector</div>
+              <div class="demo-section__title">Wujie Action & Replay Inspector</div>
               <div class="demo-section__desc">
                 模拟 Wujie 的 iframe + 开放 Shadow DOM。按钮由 iframe realm
-                创建后挂载到 ShadowRoot，用于检查跨 realm Action 名称和带
-                <code>::shadow</code> 边界的 selector，并上报到 cn3。
+                创建后挂载到 ShadowRoot，用于检查跨 realm Action、表单输入、
+                嵌套 open ShadowRoot 和 Canvas Replay，并上报到 cn3。
               </div>
               <div class="demo-flow">
                 <div class="demo-flow__step">1. create in iframe realm</div>
                 <div class="demo-flow__step">2. mount in ShadowRoot</div>
-                <div class="demo-flow__step">3. build shadow selector</div>
-                <div class="demo-flow__step">4. inspect cn3 intake</div>
+                <div class="demo-flow__step">3. mutate input/shadow/canvas</div>
+                <div class="demo-flow__step">4. inspect cn3 replay intake</div>
               </div>
             </div>
-            <div class="demo-section__pill">RUM Action</div>
+            <div class="demo-section__pill">RUM Action + Replay</div>
           </div>
           <div class="demo-section__body">
             <div class="demo-side">
@@ -1686,6 +1686,16 @@
                   <div id="shadow-action-target-realm">none</div>
                   <div>selector</div>
                   <div id="shadow-action-selector">none</div>
+                  <div>replay state</div>
+                  <div id="shadow-replay-status">waiting for realm nodes</div>
+                  <div>input node</div>
+                  <div id="shadow-replay-input-id">none</div>
+                  <div>canvas node</div>
+                  <div id="shadow-replay-canvas-id">none</div>
+                  <div>late shadow node</div>
+                  <div id="shadow-replay-late-shadow-id">none</div>
+                  <div>replay intake</div>
+                  <div id="shadow-replay-request">waiting</div>
                 </div>
               </div>
               <div class="demo-card">
@@ -1697,6 +1707,9 @@
                 <div class="demo-toolbar">
                   <button id="shadow-action-cross-realm-trigger" type="button">
                     run iframe realm pointer sequence
+                  </button>
+                  <button id="shadow-replay-cross-realm-trigger" type="button">
+                    run Wujie replay sequence
                   </button>
                 </div>
               </div>
@@ -1860,6 +1873,15 @@
           targetRealm: '',
           validation: '',
           awaitingAction: false,
+          replayStatus: 'waiting for realm nodes',
+          replayRequest: 'waiting',
+          replayStarted: false,
+          replayNodes: undefined,
+          replayNodeIds: {
+            input: undefined,
+            canvas: undefined,
+            lateShadow: undefined
+          },
           requests: (window.__shadowActionDemoRequests || []).slice(),
           event: null
         })
@@ -1875,6 +1897,21 @@
             'shadow-action-target-realm'
           )
           var selectorElement = document.getElementById('shadow-action-selector')
+          var replayStatusElement = document.getElementById(
+            'shadow-replay-status'
+          )
+          var replayInputIdElement = document.getElementById(
+            'shadow-replay-input-id'
+          )
+          var replayCanvasIdElement = document.getElementById(
+            'shadow-replay-canvas-id'
+          )
+          var replayLateShadowIdElement = document.getElementById(
+            'shadow-replay-late-shadow-id'
+          )
+          var replayRequestElement = document.getElementById(
+            'shadow-replay-request'
+          )
           var outputElement = document.getElementById('shadow-action-output')
           if (
             !runIdElement ||
@@ -1882,7 +1919,12 @@
             !expectedNameElement ||
             !nameElement ||
             !targetRealmElement ||
-            !selectorElement
+            !selectorElement ||
+            !replayStatusElement ||
+            !replayInputIdElement ||
+            !replayCanvasIdElement ||
+            !replayLateShadowIdElement ||
+            !replayRequestElement
           ) {
             return
           }
@@ -1892,11 +1934,30 @@
           nameElement.textContent = state.actionName || 'none'
           targetRealmElement.textContent = state.targetRealm || 'none'
           selectorElement.textContent = state.selector || 'none'
-          if (state.event && outputElement) {
+          replayStatusElement.textContent = state.replayStatus
+          replayInputIdElement.textContent =
+            state.replayNodeIds.input === undefined
+              ? 'none'
+              : String(state.replayNodeIds.input)
+          replayCanvasIdElement.textContent =
+            state.replayNodeIds.canvas === undefined
+              ? 'none'
+              : String(state.replayNodeIds.canvas)
+          replayLateShadowIdElement.textContent =
+            state.replayNodeIds.lateShadow === undefined
+              ? 'none'
+              : String(state.replayNodeIds.lateShadow)
+          replayRequestElement.textContent = state.replayRequest
+          if (outputElement) {
             outputElement.textContent = JSON.stringify(
-              Object.assign({}, state.event, {
+              {
+                runId: state.runId,
+                action: state.event,
+                replayStatus: state.replayStatus,
+                replayNodeIds: state.replayNodeIds,
+                replayRequest: state.replayRequest,
                 requests: state.requests
-              }),
+              },
               null,
               2
             )
@@ -1914,6 +1975,11 @@
           ) {
             state.status =
               'cn3 event intake request observed; ' + (state.validation || 'unchecked')
+          }
+          if (state.replayStarted && request.kind === 'replay') {
+            state.replayRequest =
+              'observed ' + request.transport + ' ' + request.encoding
+            state.replayStatus = 'replay segment sent to cn3'
           }
           render()
         }
@@ -2017,8 +2083,8 @@
             super()
             var root = this.attachShadow({ mode: 'open' })
             root.innerHTML =
-              '<style>:host{display:block}.panel{display:grid;gap:14px;padding:18px;border:1px solid #c7d4e2;border-radius:16px;background:linear-gradient(180deg,#f7fbff,#fff)}.title{font-weight:700}.realm{font-size:12px;color:#58677a}.actions{display:flex;flex-wrap:wrap;gap:10px}button{min-height:40px;padding:0 14px;border:1px solid #6f8dac;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
-              '<div class="panel"><div class="title">Wujie-like iframe + open ShadowRoot</div><div class="realm">Buttons below are created by iframe.contentDocument, then adopted into this ShadowRoot.</div><div class="actions"><nested-shadow-action-demo data-testid="nested-shadow-host"></nested-shadow-action-demo></div></div>'
+              '<style>:host{display:block}.panel{display:grid;gap:14px;padding:18px;border:1px solid #c7d4e2;border-radius:16px;background:linear-gradient(180deg,#f7fbff,#fff)}.title{font-weight:700}.realm{font-size:12px;color:#58677a}.actions,.replay{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.replay{padding-top:14px;border-top:1px solid #dbe4ee}.replay input[type="text"]{min-height:38px;min-width:260px;padding:0 10px;border:1px solid #8aa0b8;border-radius:8px}.replay canvas{width:220px;height:90px;border:1px solid #8aa0b8;border-radius:8px;background:#fff}.late-shadow-host{min-width:220px;min-height:40px;padding:8px;border:1px dashed #8aa0b8;border-radius:8px}button{min-height:40px;padding:0 14px;border:1px solid #6f8dac;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
+              '<div class="panel"><div class="title">Wujie-like iframe + open ShadowRoot</div><div class="realm">All controls below are created by iframe.contentDocument, then adopted into this ShadowRoot.</div><div class="actions"><nested-shadow-action-demo data-testid="nested-shadow-host"></nested-shadow-action-demo></div><div class="replay" data-testid="wujie-replay-surface"></div></div>'
           }
 
           connectedCallback() {
@@ -2037,6 +2103,7 @@
                   return
                 }
                 var actions = root.querySelector('.actions')
+                var replay = root.querySelector('.replay')
                 var nestedDemo = root.querySelector('nested-shadow-action-demo')
                 var labels = [
                   '新增',
@@ -2062,6 +2129,67 @@
                   button.appendChild(text)
                   actions.insertBefore(button, nestedDemo)
                 })
+
+                var input = realmDocument.createElement('input')
+                input.type = 'text'
+                input.placeholder = 'Wujie replay input'
+                input.setAttribute('data-testid', 'wujie-replay-input')
+                var checkboxLabel = realmDocument.createElement('label')
+                var checkbox = realmDocument.createElement('input')
+                checkbox.type = 'checkbox'
+                checkbox.setAttribute('data-testid', 'wujie-replay-checkbox')
+                checkboxLabel.appendChild(checkbox)
+                checkboxLabel.appendChild(
+                  realmDocument.createTextNode(' approved')
+                )
+                var liveText = realmDocument.createElement('strong')
+                liveText.setAttribute('data-testid', 'wujie-replay-live-text')
+                liveText.textContent = 'waiting for replay sequence'
+                var canvas = realmDocument.createElement('canvas')
+                canvas.width = 440
+                canvas.height = 180
+                canvas.setAttribute('data-testid', 'wujie-replay-canvas')
+                var lateShadowHost = realmDocument.createElement('section')
+                lateShadowHost.className = 'late-shadow-host'
+                lateShadowHost.setAttribute(
+                  'data-testid',
+                  'wujie-replay-late-shadow-host'
+                )
+                var lateShadowRoot = lateShadowHost.attachShadow({ mode: 'open' })
+                var lateShadowContent = realmDocument.createElement('div')
+                lateShadowContent.setAttribute(
+                  'data-testid',
+                  'wujie-replay-late-shadow-content'
+                )
+                lateShadowContent.style.cssText =
+                  'padding:8px;border-radius:6px;background:#e9f7ef;color:#15663b'
+                lateShadowContent.textContent = 'nested open ShadowRoot ready'
+                lateShadowRoot.appendChild(lateShadowContent)
+                replay.appendChild(input)
+                replay.appendChild(checkboxLabel)
+                replay.appendChild(liveText)
+                replay.appendChild(canvas)
+                replay.appendChild(lateShadowHost)
+
+                var context = canvas.getContext('2d')
+                context.fillStyle = '#e8f2ff'
+                context.fillRect(0, 0, canvas.width, canvas.height)
+                context.fillStyle = '#2457d6'
+                context.font = '28px sans-serif'
+                context.fillText('Wujie replay baseline', 24, 96)
+                state.replayNodes = {
+                  input: input,
+                  checkbox: checkbox,
+                  liveText: liveText,
+                  canvas: canvas,
+                  context: context,
+                  lateShadowHost: lateShadowHost,
+                  lateShadowContent: lateShadowContent,
+                  realmWindow: realmFrame.contentWindow
+                }
+                state.replayStatus =
+                  'realm nodes ready; wait for recorder ids, then run'
+                render()
               },
               { once: true }
             )
@@ -2078,6 +2206,132 @@
         if (!window.customElements.get('shadow-action-demo')) {
           window.customElements.define('shadow-action-demo', ShadowActionDemo)
         }
+
+        function refreshReplayNodeIds() {
+          var rum = window.DATAFLUX_RUM
+          var nodes = state.replayNodes
+          if (
+            !rum ||
+            !nodes ||
+            typeof rum.getSerializedNodeIdForDebug !== 'function'
+          ) {
+            return false
+          }
+          state.replayNodeIds.input = rum.getSerializedNodeIdForDebug(
+            nodes.input
+          )
+          state.replayNodeIds.canvas = rum.getSerializedNodeIdForDebug(
+            nodes.canvas
+          )
+          state.replayNodeIds.lateShadow = rum.getSerializedNodeIdForDebug(
+            nodes.lateShadowContent
+          )
+          render()
+          return (
+            state.replayNodeIds.input !== undefined &&
+            state.replayNodeIds.canvas !== undefined
+          )
+        }
+
+        function waitForReplayNodes(callback, attempt) {
+          attempt = attempt || 0
+          if (refreshReplayNodeIds()) {
+            callback()
+            return
+          }
+          if (attempt >= 100) {
+            state.replayStatus = 'recorder node id timeout'
+            render()
+            return
+          }
+          window.setTimeout(function () {
+            waitForReplayNodes(callback, attempt + 1)
+          }, 50)
+        }
+
+        function runWujieReplaySequence() {
+          var rum = window.DATAFLUX_RUM
+          var nodes = state.replayNodes
+          if (!rum || !nodes) {
+            state.replayStatus = 'RUM or realm nodes are not ready'
+            render()
+            return
+          }
+          if (typeof rum.startSessionReplayRecording === 'function') {
+            rum.startSessionReplayRecording({ force: true })
+          }
+          state.replayStarted = true
+          state.replayRequest = 'waiting for /rum/replay'
+          state.replayStatus = 'waiting for recorder node ids'
+          render()
+
+          waitForReplayNodes(function () {
+            var replayValue = 'Wujie replay ' + state.runId
+            nodes.input.value = replayValue
+            nodes.input.dispatchEvent(
+              new nodes.realmWindow.Event('input', {
+                bubbles: true,
+                composed: true
+              })
+            )
+            nodes.input.dispatchEvent(
+              new nodes.realmWindow.Event('change', {
+                bubbles: true,
+                composed: false
+              })
+            )
+            nodes.checkbox.checked = true
+            nodes.checkbox.dispatchEvent(
+              new nodes.realmWindow.Event('change', {
+                bubbles: true,
+                composed: false
+              })
+            )
+            nodes.liveText.textContent = replayValue
+
+            nodes.lateShadowContent.textContent =
+              replayValue + ' late ShadowRoot'
+
+            nodes.context.fillStyle = '#102a56'
+            nodes.context.fillRect(
+              0,
+              0,
+              nodes.canvas.width,
+              nodes.canvas.height
+            )
+            nodes.context.fillStyle = '#6ee7b7'
+            nodes.context.font = '26px sans-serif'
+            nodes.context.fillText(replayValue, 20, 100)
+
+            if (typeof rum.flushReplayMutationsForDebug === 'function') {
+              rum.flushReplayMutationsForDebug()
+            }
+            refreshReplayNodeIds()
+            var canvasSnapshot =
+              typeof rum.snapshotCanvas === 'function'
+                ? rum.snapshotCanvas(nodes.canvas, { force: true })
+                : Promise.resolve({ ok: false, reason: 'api_missing' })
+            if (typeof rum.addAction === 'function') {
+              rum.addAction('Wujie Session Replay Acceptance', {
+                wujie_replay_run_id: state.runId,
+                wujie_input_node_id: state.replayNodeIds.input,
+                wujie_canvas_node_id: state.replayNodeIds.canvas,
+                wujie_late_shadow_node_id:
+                  state.replayNodeIds.lateShadow
+              })
+            }
+            Promise.resolve(canvasSnapshot).then(function (result) {
+              state.replayStatus =
+                'input + late shadow captured; canvas=' +
+                JSON.stringify(result)
+              render()
+            })
+          })
+        }
+
+        document
+          .getElementById('shadow-replay-cross-realm-trigger')
+          .addEventListener('click', runWujieReplaySequence)
         document
           .getElementById('shadow-action-cross-realm-trigger')
           .addEventListener('click', function () {

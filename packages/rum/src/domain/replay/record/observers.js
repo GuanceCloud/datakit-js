@@ -15,7 +15,7 @@ import {
   getScrollY
 } from '@cloudcare/browser-core'
 import { initViewportObservable } from '../../initViewportObservable'
-import { NodePrivacyLevel } from '../../../constants'
+import { FORM_PRIVATE_TAG_NAMES, NodePrivacyLevel } from '../../../constants'
 
 import {
   RecordType,
@@ -473,11 +473,7 @@ export function initInputObserver(
     isShadowRoot ? [DOM_EVENT.CHANGE] : [DOM_EVENT.INPUT, DOM_EVENT.CHANGE],
     function (event) {
       var target = getEventTarget(event)
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      ) {
+      if (FORM_PRIVATE_TAG_NAMES[target.tagName]) {
         onElementChange(target)
       }
     },
