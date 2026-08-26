@@ -41,6 +41,20 @@ Guance RUM 可以自动识别用户点击行为，帮助你了解关键交互的
 <button data-guance-action-name="Submit Order">Submit</button>
 ```
 
+### Shadow DOM 中的 Action 命名
+
+对于开放 Shadow DOM 内的点击，SDK 会使用实际点击元素生成 selector。Action 名称只从显式命名属性或按钮、链接、ARIA 等具有明确语义的交互元素中提取，不会将任意文本节点、表格行或卡片容器的聚合文本作为名称。
+
+如果自定义可点击容器没有原生交互语义，请在点击元素或其祖先上添加 `data-guance-action-name`，或通过 `actionNameAttribute` 配置自定义命名属性：
+
+```html
+<div data-guance-action-name="Open Payment" role="button">
+  <!-- payment details -->
+</div>
+```
+
+该限制只应用于跨越 Shadow DOM 边界的自动 Action 命名，普通 DOM 保持原有命名策略。
+
 ## 自定义行为
 
 如果自动采集不够，可以调用 `addAction()` 创建自定义 action。详细见 [自定义 Action](./custom-sdk/add-action.md)。

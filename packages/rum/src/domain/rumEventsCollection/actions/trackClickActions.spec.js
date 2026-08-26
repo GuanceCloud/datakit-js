@@ -82,6 +82,166 @@ describe('trackClickActions', () => {
     }
   })
 
+  it('should use a shadow DOM target created in another window realm', () => {
+    jasmine.clock().install()
+    const lifeCycle = new LifeCycle()
+    const domMutationObservable = new Observable()
+    const actions = []
+    const iframe = document.createElement('iframe')
+    const shell = document.createElement('div')
+    const breadcrumb = document.createElement('div')
+    breadcrumb.innerText = '首页 对公付款'
+    const host = document.createElement('div')
+    host.id = 'cross-realm-shadow-host'
+    document.body.appendChild(iframe)
+    shell.appendChild(breadcrumb)
+    shell.appendChild(host)
+    document.body.appendChild(shell)
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const foreignWindow = iframe.contentWindow
+    const button = foreignWindow.document.createElement('button')
+    button.innerText = '跨 Realm 按钮'
+    shadowRoot.appendChild(button)
+
+    expect(button instanceof Element).toBeFalse()
+
+    const collection = trackClickActions(lifeCycle, domMutationObservable, {
+      excludedActivityUrls: []
+    })
+    lifeCycle.subscribe(LifeCycleEventType.AUTO_ACTION_COMPLETED, (action) => {
+      actions.push(action)
+    })
+
+    function dispatchPointerEvent(type) {
+      const event = new foreignWindow.Event(type, {
+        bubbles: true,
+        composed: true
+      })
+      Object.assign(event, {
+        isPrimary: true,
+        clientX: 0,
+        clientY: 0
+      })
+      button.dispatchEvent(event)
+    }
+
+    try {
+      dispatchPointerEvent('pointerdown')
+      dispatchPointerEvent('pointerup')
+      jasmine.clock().tick(1100)
+
+      expect(actions.length).toBe(1)
+      expect(actions[0].name).toBe('跨 Realm 按钮')
+      expect(actions[0].target.selector).toBe(
+        '#cross-realm-shadow-host::shadow BUTTON'
+      )
+    } finally {
+      collection.stop()
+      shell.remove()
+      iframe.remove()
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should not use arbitrary text fallback for shadow DOM action names', () => {
+    jasmine.clock().install()
+    const lifeCycle = new LifeCycle()
+    const domMutationObservable = new Observable()
+    const actions = []
+    const host = document.createElement('div')
+    host.id = 'shadow-card-host'
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const card = document.createElement('div')
+    const target = document.createElement('span')
+    target.innerText = '思'
+    const amount = document.createElement('span')
+    amount.innerText = '￥4,910.73'
+    card.appendChild(target)
+    card.appendChild(amount)
+    shadowRoot.appendChild(card)
+    document.body.appendChild(host)
+
+    const collection = trackClickActions(lifeCycle, domMutationObservable, {
+      excludedActivityUrls: []
+    })
+    lifeCycle.subscribe(LifeCycleEventType.AUTO_ACTION_COMPLETED, (action) => {
+      actions.push(action)
+    })
+
+    function dispatchPointerEvent(type) {
+      const event = new Event(type, {
+        bubbles: true,
+        composed: true
+      })
+      Object.assign(event, {
+        isPrimary: true,
+        clientX: 0,
+        clientY: 0
+      })
+      target.dispatchEvent(event)
+    }
+
+    try {
+      dispatchPointerEvent('pointerdown')
+      dispatchPointerEvent('pointerup')
+      jasmine.clock().tick(1100)
+
+      expect(actions.length).toBe(1)
+      expect(actions[0].name).toBe('')
+      expect(actions[0].target.selector).toBe(
+        '#shadow-card-host::shadow DIV>SPAN:nth-of-type(1)'
+      )
+    } finally {
+      collection.stop()
+      host.remove()
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should keep textual fallback for normal DOM action names', () => {
+    jasmine.clock().install()
+    const lifeCycle = new LifeCycle()
+    const domMutationObservable = new Observable()
+    const actions = []
+    const target = document.createElement('span')
+    target.id = 'normal-action-target'
+    target.innerText = '思'
+    document.body.appendChild(target)
+
+    const collection = trackClickActions(lifeCycle, domMutationObservable, {
+      excludedActivityUrls: []
+    })
+    lifeCycle.subscribe(LifeCycleEventType.AUTO_ACTION_COMPLETED, (action) => {
+      actions.push(action)
+    })
+
+    function dispatchPointerEvent(type) {
+      const event = new Event(type, {
+        bubbles: true
+      })
+      Object.assign(event, {
+        isPrimary: true,
+        clientX: 0,
+        clientY: 0
+      })
+      target.dispatchEvent(event)
+    }
+
+    try {
+      dispatchPointerEvent('pointerdown')
+      dispatchPointerEvent('pointerup')
+      jasmine.clock().tick(1100)
+
+      expect(actions.length).toBe(1)
+      expect(actions[0].name).toBe('思')
+      expect(actions[0].target.selector).toBe('#normal-action-target')
+    } finally {
+      collection.stop()
+      target.remove()
+      jasmine.clock().uninstall()
+    }
+  })
+
   it('should discard individual clicks and validate the rage click when rage is detected', () => {
     const target = document.createElement('div')
     const clicks = [100, 300, 700].map((timeStamp) =>

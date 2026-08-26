@@ -118,7 +118,10 @@ describe('getActionNameFromElement', () => {
 
   it('should trim and normalize whitespace in discovered names', () => {
     const wrapper = document.createElement('div')
-    wrapper.setAttribute(DEFAULT_PROGRAMMATIC_ACTION_NAME_ATTRIBUTE, '  Save   Changes  ')
+    wrapper.setAttribute(
+      DEFAULT_PROGRAMMATIC_ACTION_NAME_ATTRIBUTE,
+      '  Save   Changes  '
+    )
 
     const button = document.createElement('button')
     button.innerText = '  Save \n  Changes  '
@@ -166,6 +169,123 @@ describe('getActionNameFromElement', () => {
       shadowRoot.appendChild(button)
 
       expect(getActionNameFromElement(button)).toBe('Save Data')
+    })
+
+    it('should only use semantic names for shadow DOM actions', () => {
+      const host = document.createElement('div')
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      const row = document.createElement('div')
+      const type = document.createElement('span')
+      type.innerText = '对公付款'
+      const amount = document.createElement('span')
+      amount.innerText = '￥4,910.73'
+      const documentNumber = document.createElement('span')
+      documentNumber.innerText = 'DGFK2608240101'
+      row.appendChild(type)
+      row.appendChild(amount)
+      row.appendChild(documentNumber)
+      shadowRoot.appendChild(row)
+      document.body.appendChild(host)
+
+      expect(getActionNameFromElement(amount, undefined, true)).toBe('')
+
+      host.remove()
+    })
+
+    it('should keep single-character native button text in shadow DOM', () => {
+      const host = document.createElement('div')
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      const button = document.createElement('button')
+      button.innerText = '思'
+      shadowRoot.appendChild(button)
+      document.body.appendChild(host)
+
+      expect(getActionNameFromElement(button, undefined, true)).toBe('思')
+
+      host.remove()
+    })
+
+    it('should preserve aria labels on complex shadow DOM controls', () => {
+      const host = document.createElement('div')
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      const button = document.createElement('button')
+      button.setAttribute('aria-label', '关闭付款单')
+      const decorations = ['icon', 'label', 'spinner']
+      decorations.forEach((className) => {
+        const decoration = document.createElement('span')
+        decoration.className = className
+        button.appendChild(decoration)
+      })
+      shadowRoot.appendChild(button)
+      document.body.appendChild(host)
+
+      expect(getActionNameFromElement(button, undefined, true)).toBe(
+        '关闭付款单'
+      )
+
+      host.remove()
+    })
+
+    it('should keep semantic link text for shadow DOM actions', () => {
+      const host = document.createElement('div')
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      const link = document.createElement('a')
+      link.href = '#payment'
+      const label = document.createElement('span')
+      label.innerText = '查看付款详情'
+      link.appendChild(label)
+      shadowRoot.appendChild(link)
+      document.body.appendChild(host)
+
+      expect(getActionNameFromElement(label, undefined, true)).toBe(
+        '查看付款详情'
+      )
+
+      host.remove()
+    })
+
+    it('should preserve programmatic names on non-semantic shadow DOM containers', () => {
+      const host = document.createElement('div')
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      const card = document.createElement('div')
+      card.setAttribute(
+        DEFAULT_PROGRAMMATIC_ACTION_NAME_ATTRIBUTE,
+        '打开付款单'
+      )
+      const amount = document.createElement('span')
+      amount.innerText = '￥4,910.73'
+      card.appendChild(amount)
+      shadowRoot.appendChild(card)
+
+      expect(getActionNameFromElement(amount, undefined, true)).toBe(
+        '打开付款单'
+      )
+    })
+
+    it('should keep the existing textual fallback for normal DOM actions', () => {
+      const target = document.createElement('span')
+      target.innerText = '思'
+
+      expect(getActionNameFromElement(target)).toBe('思')
+    })
+
+    it('should keep the existing link naming order for normal DOM actions', () => {
+      const link = document.createElement('a')
+      link.href = '#payment'
+      const label = document.createElement('span')
+      label.innerText = '查看付款'
+      const badge = document.createElement('span')
+      badge.innerText = '附加信息'
+      link.appendChild(label)
+      link.appendChild(badge)
+      document.body.appendChild(link)
+
+      expect(getActionNameFromElement(label)).toBe('查看付款')
+      expect(getActionNameFromElement(label, undefined, true)).toBe(
+        '查看付款附加信息'
+      )
+
+      link.remove()
     })
   })
 })

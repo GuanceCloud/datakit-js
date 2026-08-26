@@ -25,6 +25,7 @@
 
 ## Unreleased
 
+- fix(rum): resolve cross-realm Shadow DOM targets and prevent arbitrary text from becoming automatic Action names
 - fix(rum): collect click Action names and selectors across open Shadow DOM boundaries
 - feat(rum): enrich SPA route Views with Chrome Soft Navigation FCP/LCP and preserve route navigation type as a compatible fallback
 - feat(rum): record the WebSocket segment end View path for readable viewer filtering

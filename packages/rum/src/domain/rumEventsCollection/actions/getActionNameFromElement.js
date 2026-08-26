@@ -11,13 +11,31 @@ import {
 export var DEFAULT_PROGRAMMATIC_ACTION_NAME_ATTRIBUTE =
   'data-guance-action-name'
 
-export function getActionNameFromElement(element, userProgrammaticAttribute) {
-  // Proceed to get the action name in two steps:
-  // * first, get the name programmatically, explicitly defined by the user.
-  // * then, use strategies that are known to return good results. Those strategies will be used on
-  //   the element and a few parents, but it's likely that they won't succeed at all.
-  // * if no name is found this way, use strategies returning less accurate names as a fallback.
-  //   Those are much likely to succeed.
+export function getActionNameFromElement(
+  element,
+  userProgrammaticAttribute,
+  shouldIgnoreTextualFallback
+) {
+  return (
+    getExplicitActionName(element, userProgrammaticAttribute) ||
+    getActionNameFromElementForStrategies(
+      element,
+      userProgrammaticAttribute,
+      shouldIgnoreTextualFallback
+        ? shadowDomPriorityStrategies
+        : priorityStrategies
+    ) ||
+    (!shouldIgnoreTextualFallback &&
+      getActionNameFromElementForStrategies(
+        element,
+        userProgrammaticAttribute,
+        fallbackStrategies
+      )) ||
+    ''
+  )
+}
+
+function getExplicitActionName(element, userProgrammaticAttribute) {
   return (
     getActionNameFromElementProgrammatically(
       element,
@@ -27,18 +45,7 @@ export function getActionNameFromElement(element, userProgrammaticAttribute) {
       getActionNameFromElementProgrammatically(
         element,
         userProgrammaticAttribute
-      )) ||
-    getActionNameFromElementForStrategies(
-      element,
-      userProgrammaticAttribute,
-      priorityStrategies
-    ) ||
-    getActionNameFromElementForStrategies(
-      element,
-      userProgrammaticAttribute,
-      fallbackStrategies
-    ) ||
-    ''
+      ))
   )
 }
 
@@ -142,6 +149,14 @@ var priorityStrategies = [
     }
   }
 ]
+
+var shadowDomPriorityStrategies = priorityStrategies.concat([
+  function (element, userProgrammaticAttribute) {
+    if (element.nodeName === 'A' && element.hasAttribute('href')) {
+      return getTextualContent(element, userProgrammaticAttribute)
+    }
+  }
+])
 
 var fallbackStrategies = [
   function (element, userProgrammaticAttribute) {

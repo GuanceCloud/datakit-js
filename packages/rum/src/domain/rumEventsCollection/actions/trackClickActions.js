@@ -16,7 +16,8 @@ import {
   isNullUndefinedDefaultValue,
   isArray,
   includes,
-  isNodeShadowHost
+  isNodeShadowHost,
+  isElementNode
 } from '@cloudcare/browser-core'
 import { trackEventCounts } from '../../trackEventCounts'
 import {
@@ -231,7 +232,11 @@ function computeClickActionBase(event, actionNameAttribute) {
       x: Math.round(event.clientX - rect.left),
       y: Math.round(event.clientY - rect.top)
     },
-    name: getActionNameFromElement(target, actionNameAttribute)
+    name: getActionNameFromElement(
+      target,
+      actionNameAttribute,
+      target !== event.target
+    )
   }
 }
 
@@ -242,7 +247,9 @@ function getEventTarget(event) {
     typeof event.composedPath === 'function'
   ) {
     var composedPath = event.composedPath()
-    if (composedPath.length > 0 && composedPath[0] instanceof Element) {
+    // Wujie renders iframe-created elements in a shadow root. Use a node type check because those
+    // elements do not pass an instanceof Element check against the parent window constructor.
+    if (composedPath.length > 0 && isElementNode(composedPath[0])) {
       return composedPath[0]
     }
   }

@@ -83,6 +83,20 @@ For example:
 
 When both attributes exist on an element, `data-guance-action-name` takes precedence.
 
+### Naming Actions in Shadow DOM
+
+For clicks inside an open Shadow DOM, the SDK uses the actual clicked element to generate the selector. Action names are extracted only from explicit naming attributes or interactive elements with clear semantics, such as buttons, links, and ARIA-labelled controls. Arbitrary text nodes and aggregated text from table rows or card containers are not used as Action names.
+
+If a custom clickable container has no native interactive semantics, add `data-guance-action-name` to the clicked element or one of its ancestors, or configure a custom naming attribute with `actionNameAttribute`:
+
+```html
+<div data-guance-action-name="Open Payment" role="button">
+  <!-- payment details -->
+</div>
+```
+
+This restriction applies only to automatic Action naming across a Shadow DOM boundary. Regular DOM elements keep the existing naming strategy.
+
 ## Custom Actions
 
 To extend user action data, use the `addAction` API to create custom actions. [Refer to details](./custom-sdk/add-action.md)

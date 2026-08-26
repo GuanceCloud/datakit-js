@@ -1648,17 +1648,21 @@
             </div>
           </div>
         </div>
-        <div class="demo-section demo-section--dom shadow-action-demo">
+        <div
+          id="shadow-action-inspector"
+          class="demo-section demo-section--dom shadow-action-demo"
+        >
           <div class="demo-section__head">
             <div>
               <div class="demo-section__title">Shadow DOM Action Inspector</div>
               <div class="demo-section__desc">
-                模拟 Wujie 的开放 Shadow DOM。点击内部按钮后，检查自动 Action
-                名称和带 <code>::shadow</code> 边界的 selector，并上报到 cn3。
+                模拟 Wujie 的 iframe + 开放 Shadow DOM。按钮由 iframe realm
+                创建后挂载到 ShadowRoot，用于检查跨 realm Action 名称和带
+                <code>::shadow</code> 边界的 selector，并上报到 cn3。
               </div>
               <div class="demo-flow">
-                <div class="demo-flow__step">1. click shadow button</div>
-                <div class="demo-flow__step">2. resolve composedPath</div>
+                <div class="demo-flow__step">1. create in iframe realm</div>
+                <div class="demo-flow__step">2. mount in ShadowRoot</div>
                 <div class="demo-flow__step">3. build shadow selector</div>
                 <div class="demo-flow__step">4. inspect cn3 intake</div>
               </div>
@@ -1674,8 +1678,12 @@
                   <div id="shadow-action-run-id">waiting</div>
                   <div>state</div>
                   <div id="shadow-action-status">waiting for click</div>
+                  <div>expected name</div>
+                  <div id="shadow-action-expected-name">none</div>
                   <div>action name</div>
                   <div id="shadow-action-name">none</div>
+                  <div>target realm</div>
+                  <div id="shadow-action-target-realm">none</div>
                   <div>selector</div>
                   <div id="shadow-action-selector">none</div>
                 </div>
@@ -1683,11 +1691,22 @@
               <div class="demo-card">
                 <div class="demo-card__title">Expected Query</div>
                 <div class="demo-helper-log">
-                  A::action:(service='browser' AND action_name='Shadow DOM 应付凭证')
+                  Click any Wujie toolbar button. The output should show expectedName
+                  === actionName and a selector containing ::shadow.
+                </div>
+                <div class="demo-toolbar">
+                  <button id="shadow-action-cross-realm-trigger" type="button">
+                    run iframe realm pointer sequence
+                  </button>
                 </div>
               </div>
             </div>
             <div class="demo-main">
+              <iframe
+                id="shadow-action-realm-frame"
+                title="Wujie realm sandbox"
+                hidden
+              ></iframe>
               <shadow-action-demo
                 id="shadow-action-host"
                 class="shadow-action-demo__host"
@@ -1837,6 +1856,10 @@
           selector: '',
           pointerTarget: '',
           pointerPath: [],
+          expectedName: '',
+          targetRealm: '',
+          validation: '',
+          awaitingAction: false,
           requests: (window.__shadowActionDemoRequests || []).slice(),
           event: null
         })
@@ -1844,15 +1867,30 @@
         function render() {
           var runIdElement = document.getElementById('shadow-action-run-id')
           var statusElement = document.getElementById('shadow-action-status')
+          var expectedNameElement = document.getElementById(
+            'shadow-action-expected-name'
+          )
           var nameElement = document.getElementById('shadow-action-name')
+          var targetRealmElement = document.getElementById(
+            'shadow-action-target-realm'
+          )
           var selectorElement = document.getElementById('shadow-action-selector')
           var outputElement = document.getElementById('shadow-action-output')
-          if (!runIdElement || !statusElement || !nameElement || !selectorElement) {
+          if (
+            !runIdElement ||
+            !statusElement ||
+            !expectedNameElement ||
+            !nameElement ||
+            !targetRealmElement ||
+            !selectorElement
+          ) {
             return
           }
           runIdElement.textContent = state.runId
           statusElement.textContent = state.status
+          expectedNameElement.textContent = state.expectedName || 'none'
           nameElement.textContent = state.actionName || 'none'
+          targetRealmElement.textContent = state.targetRealm || 'none'
           selectorElement.textContent = state.selector || 'none'
           if (state.event && outputElement) {
             outputElement.textContent = JSON.stringify(
@@ -1874,42 +1912,60 @@
             request.kind === 'event' &&
             request.encoding === 'deflate'
           ) {
-            state.status = 'cn3 event intake request observed'
+            state.status =
+              'cn3 event intake request observed; ' + (state.validation || 'unchecked')
           }
           render()
         }
 
         state.markClicked = function (expectedName) {
+          state.expectedName = expectedName
+          state.actionName = ''
+          state.selector = ''
+          state.validation = ''
+          state.event = null
+          state.awaitingAction = true
           state.status = 'clicked ' + expectedName + '; waiting for beforeSend'
           render()
         }
 
         state.recordAction = function (event) {
+          if (!state.awaitingAction) {
+            return
+          }
           var actionName =
             event.action && event.action.target && event.action.target.name
-          if (
-            actionName !== 'Shadow DOM 应付凭证' &&
-            actionName !== 'Shadow DOM 提交更新合同付款计划'
-          ) {
-            return false
-          }
+          var expectedName = state.expectedName
           var selector =
             event._gc &&
             event._gc.action &&
             event._gc.action.target &&
             event._gc.action.target.selector
+          if (
+            actionName !== expectedName ||
+            !selector ||
+            selector.indexOf('::shadow') === -1
+          ) {
+            return
+          }
           event.context = Object.assign({}, event.context, {
             shadow_dom_demo_run_id: state.runId
           })
-          state.status = 'captured by beforeSend; sending to cn3'
+          state.validation = 'passed'
+          state.awaitingAction = false
+          state.status =
+            'captured by beforeSend; ' + state.validation + '; sending to cn3'
           state.actionName = actionName
           state.selector = selector || ''
           state.event = {
             runId: state.runId,
+            expectedName: expectedName,
             actionName: actionName,
             selector: selector,
             pointerTarget: state.pointerTarget,
             pointerPath: state.pointerPath,
+            targetRealm: state.targetRealm,
+            validation: state.validation,
             view: event.view,
             service: event.service
           }
@@ -1920,13 +1976,25 @@
         window.addEventListener(
           'pointerdown',
           function (event) {
+            var path =
+              typeof event.composedPath === 'function' ? event.composedPath() : []
+            var actualTarget = path[0]
+            var isCrossRealm =
+              actualTarget && actualTarget instanceof window.Element === false
+            var realmButton =
+              actualTarget &&
+              typeof actualTarget.closest === 'function' &&
+              actualTarget.closest('[data-testid^="wujie-realm-action-"]')
             state.pointerTarget = event.target && event.target.tagName
-            state.pointerPath =
-              typeof event.composedPath === 'function'
-                ? event.composedPath().slice(0, 8).map(function (node) {
-                    return node.tagName || node.nodeName
-                  })
-                : []
+            state.pointerPath = path.slice(0, 8).map(function (node) {
+              return node.tagName || node.nodeName
+            })
+            state.targetRealm = isCrossRealm
+              ? 'iframe realm; instanceof Element = false at event time'
+              : 'main window realm at event time'
+            if (realmButton) {
+              state.markClicked(realmButton.innerText)
+            }
           },
           true
         )
@@ -1938,7 +2006,7 @@
             root.innerHTML =
               '<style>:host{display:inline-block}button{min-height:40px;padding:0 14px;border:1px solid #8aa0b8;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
               '<button type="button" data-testid="shadow-contract-plan"><span>Shadow DOM 提交更新合同付款计划</span></button>'
-            root.querySelector('button').addEventListener('click', function () {
+            root.querySelector('button').addEventListener('pointerdown', function () {
               state.markClicked('Shadow DOM 提交更新合同付款计划')
             })
           }
@@ -1949,11 +2017,55 @@
             super()
             var root = this.attachShadow({ mode: 'open' })
             root.innerHTML =
-              '<style>:host{display:block}.panel{display:grid;gap:14px;padding:18px;border:1px solid #c7d4e2;border-radius:16px;background:linear-gradient(180deg,#f7fbff,#fff)}.title{font-weight:700}.actions{display:flex;flex-wrap:wrap;gap:10px}button{min-height:40px;padding:0 14px;border:1px solid #6f8dac;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
-              '<div class="panel"><div class="title">Wujie-like open ShadowRoot</div><div class="actions"><button type="button" data-testid="shadow-payable-voucher"><span>Shadow DOM 应付凭证</span></button><nested-shadow-action-demo data-testid="nested-shadow-host"></nested-shadow-action-demo></div></div>'
-            root.querySelector('button').addEventListener('click', function () {
-              state.markClicked('Shadow DOM 应付凭证')
-            })
+              '<style>:host{display:block}.panel{display:grid;gap:14px;padding:18px;border:1px solid #c7d4e2;border-radius:16px;background:linear-gradient(180deg,#f7fbff,#fff)}.title{font-weight:700}.realm{font-size:12px;color:#58677a}.actions{display:flex;flex-wrap:wrap;gap:10px}button{min-height:40px;padding:0 14px;border:1px solid #6f8dac;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
+              '<div class="panel"><div class="title">Wujie-like iframe + open ShadowRoot</div><div class="realm">Buttons below are created by iframe.contentDocument, then adopted into this ShadowRoot.</div><div class="actions"><nested-shadow-action-demo data-testid="nested-shadow-host"></nested-shadow-action-demo></div></div>'
+          }
+
+          connectedCallback() {
+            if (this._realmSourceStarted) {
+              return
+            }
+            this._realmSourceStarted = true
+            var demo = this
+            var realmFrame = document.getElementById('shadow-action-realm-frame')
+            realmFrame.addEventListener(
+              'load',
+              function () {
+                var realmDocument = realmFrame.contentDocument
+                var root = demo.shadowRoot
+                if (!root) {
+                  return
+                }
+                var actions = root.querySelector('.actions')
+                var nestedDemo = root.querySelector('nested-shadow-action-demo')
+                var labels = [
+                  '新增',
+                  '支付建议',
+                  '应付凭证',
+                  '是否可推送',
+                  '单据授权',
+                  '运费凭证',
+                  '提交更新合同付款计划',
+                  '测试用',
+                  '导出'
+                ]
+
+                labels.forEach(function (label, index) {
+                  var button = realmDocument.createElement('button')
+                  var text = realmDocument.createElement('span')
+                  button.type = 'button'
+                  button.setAttribute(
+                    'data-testid',
+                    'wujie-realm-action-' + index
+                  )
+                  text.textContent = label
+                  button.appendChild(text)
+                  actions.insertBefore(button, nestedDemo)
+                })
+              },
+              { once: true }
+            )
+            realmFrame.srcdoc = '<!doctype html><html><body></body></html>'
           }
         }
 
@@ -1966,6 +2078,28 @@
         if (!window.customElements.get('shadow-action-demo')) {
           window.customElements.define('shadow-action-demo', ShadowActionDemo)
         }
+        document
+          .getElementById('shadow-action-cross-realm-trigger')
+          .addEventListener('click', function () {
+            var realmFrame = document.getElementById('shadow-action-realm-frame')
+            var target = document
+              .getElementById('shadow-action-host')
+              .shadowRoot.querySelector('[data-testid="wujie-realm-action-0"]')
+            if (!target || !realmFrame.contentWindow) {
+              return
+            }
+            state.markClicked(target.innerText)
+            var eventOptions = { bubbles: true, composed: true }
+            ;['pointerdown', 'pointerup'].forEach(function (type) {
+              var event = new realmFrame.contentWindow.Event(type, eventOptions)
+              Object.assign(event, {
+                isPrimary: true,
+                clientX: 0,
+                clientY: 0
+              })
+              target.dispatchEvent(event)
+            })
+          })
         render()
       })()
     </script>
