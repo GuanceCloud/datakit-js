@@ -15,7 +15,8 @@ import {
   ActionType,
   isNullUndefinedDefaultValue,
   isArray,
-  includes
+  includes,
+  isNodeShadowHost
 } from '@cloudcare/browser-core'
 import { trackEventCounts } from '../../trackEventCounts'
 import {
@@ -213,8 +214,9 @@ function startClickAction(
 }
 
 function computeClickActionBase(event, actionNameAttribute) {
-  var rect = event.target.getBoundingClientRect()
-  var selector = getSelectorFromElement(event.target, actionNameAttribute)
+  var target = getEventTarget(event)
+  var rect = target.getBoundingClientRect()
+  var selector = getSelectorFromElement(target, actionNameAttribute)
   if (selector) {
     updateInteractionSelector(event.timeStamp, selector)
   }
@@ -229,8 +231,22 @@ function computeClickActionBase(event, actionNameAttribute) {
       x: Math.round(event.clientX - rect.left),
       y: Math.round(event.clientY - rect.top)
     },
-    name: getActionNameFromElement(event.target, actionNameAttribute)
+    name: getActionNameFromElement(target, actionNameAttribute)
   }
+}
+
+function getEventTarget(event) {
+  if (
+    event.composed === true &&
+    isNodeShadowHost(event.target) &&
+    typeof event.composedPath === 'function'
+  ) {
+    var composedPath = event.composedPath()
+    if (composedPath.length > 0 && composedPath[0] instanceof Element) {
+      return composedPath[0]
+    }
+  }
+  return event.target
 }
 
 var ClickStatus = {

@@ -1,5 +1,11 @@
-import { cssEscape } from '@cloudcare/browser-core'
+import { cssEscape, isNodeShadowRoot } from '@cloudcare/browser-core'
 import { DEFAULT_PROGRAMMATIC_ACTION_NAME_ATTRIBUTE } from './getActionNameFromElement'
+
+/**
+ * Internal marker used to represent a shadow root boundary. This is not a valid CSS selector and
+ * needs to be split before querying each successive shadow root.
+ */
+export var SHADOW_DOM_MARKER = '::shadow '
 /**
  * Stable attributes are attributes that are commonly used to identify parts of a UI (ex:
  * component). Those attribute values should not be generated randomly (hardcoded most of the time)
@@ -43,13 +49,58 @@ export function getSelectorFromElement(targetElement, actionNameAttribute) {
     // parents, and we cannot determine if it's unique in the document.
     return
   }
-  let targetElementSelector
-  let currentElement = targetElement
+
+  var subtrees = getAllSubtreeTargets(targetElement)
+  var selectorParts = []
+  for (var index = 0; index < subtrees.length; index += 1) {
+    var subtree = subtrees[index]
+    var selector = getSelectorFromElementWithinSubtree(
+      subtree.target,
+      subtree.rootNode,
+      actionNameAttribute
+    )
+    if (!selector) {
+      return
+    }
+    selectorParts.push(selector)
+  }
+  return selectorParts.join(SHADOW_DOM_MARKER)
+}
+
+/**
+ * Return each root and target pair from the document down to the target element.
+ */
+function getAllSubtreeTargets(element) {
+  var result = []
+  var currentTarget = element
+  while (currentTarget) {
+    var rootNode =
+      typeof currentTarget.getRootNode === 'function'
+        ? currentTarget.getRootNode()
+        : currentTarget.ownerDocument
+    result.push({ rootNode: rootNode, target: currentTarget })
+    if (isNodeShadowRoot(rootNode)) {
+      currentTarget = rootNode.host
+    } else {
+      break
+    }
+  }
+  return result.reverse()
+}
+
+function getSelectorFromElementWithinSubtree(
+  targetElement,
+  rootNode,
+  actionNameAttribute
+) {
+  var targetElementSelector
+  var currentElement = targetElement
   while (currentElement && currentElement.nodeName !== 'HTML') {
     const globallyUniqueSelector = findSelector(
       currentElement,
+      rootNode,
       GLOBALLY_UNIQUE_SELECTOR_GETTERS,
-      isSelectorUniqueGlobally,
+      isSelectorUniqueWithinRoot,
       actionNameAttribute,
       targetElementSelector
     )
@@ -58,6 +109,7 @@ export function getSelectorFromElement(targetElement, actionNameAttribute) {
     }
     const uniqueSelectorAmongChildren = findSelector(
       currentElement,
+      rootNode,
       UNIQUE_AMONG_CHILDREN_SELECTOR_GETTERS,
       isSelectorUniqueAmongSiblings,
       actionNameAttribute,
@@ -72,32 +124,6 @@ export function getSelectorFromElement(targetElement, actionNameAttribute) {
 
     currentElement = currentElement.parentElement
   }
-  //   while (element && element.nodeName !== 'HTML') {
-  //     var globallyUniqueSelector = findSelector(
-  //       element,
-  //       GLOBALLY_UNIQUE_SELECTOR_GETTERS,
-  //       isSelectorUniqueGlobally,
-  //       actionNameAttribute,
-  //       targetElementSelector
-  //     )
-  //     if (globallyUniqueSelector) {
-  //       return globallyUniqueSelector
-  //     }
-
-  //     var uniqueSelectorAmongChildren = findSelector(
-  //       element,
-  //       UNIQUE_AMONG_CHILDREN_SELECTOR_GETTERS,
-  //       isSelectorUniqueAmongSiblings,
-  //       actionNameAttribute,
-  //       targetElementSelector
-  //     )
-  //     targetElementSelector =
-  //       uniqueSelectorAmongChildren ||
-  //       combineSelector(getPositionSelector(element), targetElementSelector)
-
-  //     element = element.parentElement
-  //   }
-
   return targetElementSelector
 }
 function isGeneratedValue(value) {
@@ -166,7 +192,8 @@ function getStableAttributeSelector(element, actionNameAttribute) {
 }
 
 function getPositionSelector(element) {
-  var sibling = element.parentElement && element.parentElement.firstElementChild
+  var parentNode = element.parentNode
+  var sibling = parentNode && parentNode.firstElementChild
   var elementIndex = 1
 
   while (sibling && sibling !== element) {
@@ -184,6 +211,7 @@ function getPositionSelector(element) {
 
 function findSelector(
   element,
+  rootNode,
   selectorGetters,
   predicate,
   actionNameAttribute,
@@ -195,15 +223,20 @@ function findSelector(
     if (!elementSelector) {
       continue
     }
-    if (predicate(element, elementSelector, childSelector)) {
+    if (predicate(element, rootNode, elementSelector, childSelector)) {
       return combineSelector(elementSelector, childSelector)
     }
   }
 }
 
-function isSelectorUniqueGlobally(element, elementSelector, childSelector) {
+function isSelectorUniqueWithinRoot(
+  element,
+  rootNode,
+  elementSelector,
+  childSelector
+) {
   return (
-    element.ownerDocument.querySelectorAll(
+    rootNode.querySelectorAll(
       combineSelector(elementSelector, childSelector)
     ).length === 1
   )
@@ -220,6 +253,7 @@ function isSelectorUniqueGlobally(element, elementSelector, childSelector) {
  */
 function isSelectorUniqueAmongSiblings(
   currentElement,
+  rootNode,
   currentElementSelector,
   childSelector
 ) {
@@ -238,10 +272,17 @@ function isSelectorUniqueAmongSiblings(
       sibling.querySelector(scopedSelector) !== null
   }
 
-  const parent = currentElement.parentElement
-  let sibling = parent.firstElementChild
+  let sibling = currentElement.previousElementSibling
   while (sibling) {
-    if (sibling !== currentElement && isSiblingMatching(sibling)) {
+    if (isSiblingMatching(sibling)) {
+      return false
+    }
+    sibling = sibling.previousElementSibling
+  }
+
+  sibling = currentElement.nextElementSibling
+  while (sibling) {
+    if (isSiblingMatching(sibling)) {
       return false
     }
     sibling = sibling.nextElementSibling

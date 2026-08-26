@@ -1,4 +1,12 @@
-import { safeTruncate, isIE, find, map, filter } from '@cloudcare/browser-core'
+import {
+  safeTruncate,
+  isIE,
+  find,
+  map,
+  filter,
+  getParentElement,
+  isNodeShadowRoot
+} from '@cloudcare/browser-core'
 
 export var DEFAULT_PROGRAMMATIC_ACTION_NAME_ATTRIBUTE =
   'data-guance-action-name'
@@ -41,21 +49,13 @@ function getActionNameFromElementProgrammatically(
   var elementWithAttribute
   // We don't use getActionNameFromElementForStrategies here, because we want to consider all parents,
   // without limit. It is up to the user to declare a relevant naming strategy.
-  // If available, use element.closest() to match get the attribute from the element or any of its
-  // parent.  Else fallback to a more traditional implementation.
-  if (supportsElementClosest()) {
-    elementWithAttribute = targetElement.closest(
-      '[' + programmaticAttribute + ']'
-    )
-  } else {
-    var element = targetElement
-    while (element) {
-      if (element.hasAttribute(programmaticAttribute)) {
-        elementWithAttribute = element
-        break
-      }
-      element = element.parentElement
+  var element = targetElement
+  while (element) {
+    if (element.hasAttribute(programmaticAttribute)) {
+      elementWithAttribute = element
+      break
     }
+    element = getParentElement(element)
   }
 
   if (!elementWithAttribute) {
@@ -183,7 +183,7 @@ function getActionNameFromElementForStrategies(
     if (element.nodeName === 'FORM') {
       break
     }
-    element = element.parentElement
+    element = getParentElement(element)
     recursionCounter += 1
   }
 }
@@ -197,6 +197,18 @@ function truncate(s) {
 }
 
 function getElementById(refElement, id) {
+  if (typeof refElement.getRootNode === 'function') {
+    var rootNode = refElement.getRootNode()
+    if (
+      isNodeShadowRoot(rootNode) &&
+      typeof rootNode.getElementById === 'function'
+    ) {
+      var shadowElement = rootNode.getElementById(id)
+      if (shadowElement) {
+        return shadowElement
+      }
+    }
+  }
   // Use the element ownerDocument here, because tests are executed in an iframe, so
   // document.getElementById won't work.
   return refElement.ownerDocument
@@ -278,18 +290,4 @@ function supportsLabelProperty() {
     supportsLabelPropertyResult = 'labels' in HTMLInputElement.prototype
   }
   return supportsLabelPropertyResult
-}
-
-/**
- * Returns true if the browser supports the element.closest method.  This should be the case
- * everywhere except on Internet Explorer.
- * Note: The result is computed lazily, because we don't want any DOM access when the SDK is
- * evaluated.
- */
-var supportsElementClosestResult
-function supportsElementClosest() {
-  if (supportsElementClosestResult === undefined) {
-    supportsElementClosestResult = 'closest' in HTMLElement.prototype
-  }
-  return supportsElementClosestResult
 }

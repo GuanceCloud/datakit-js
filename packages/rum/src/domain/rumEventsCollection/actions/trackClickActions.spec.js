@@ -1,5 +1,10 @@
-import { FrustrationType } from '@cloudcare/browser-core'
-import { finalizeClicks } from './trackClickActions'
+import {
+  FrustrationType,
+  LifeCycle,
+  LifeCycleEventType,
+  Observable
+} from '@cloudcare/browser-core'
+import { finalizeClicks, trackClickActions } from './trackClickActions'
 
 function createClick(overrides) {
   const frustrations = []
@@ -29,6 +34,54 @@ function createClick(overrides) {
 }
 
 describe('trackClickActions', () => {
+  it('should use the actual shadow DOM target to compute the action name', () => {
+    jasmine.clock().install()
+    const lifeCycle = new LifeCycle()
+    const domMutationObservable = new Observable()
+    const actions = []
+    const host = document.createElement('div')
+    host.id = 'shadow-host'
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const button = document.createElement('button')
+    button.innerText = '应付凭证'
+    shadowRoot.appendChild(button)
+    document.body.appendChild(host)
+
+    const collection = trackClickActions(lifeCycle, domMutationObservable, {
+      excludedActivityUrls: []
+    })
+    lifeCycle.subscribe(LifeCycleEventType.AUTO_ACTION_COMPLETED, (action) => {
+      actions.push(action)
+    })
+
+    function dispatchPointerEvent(type) {
+      const event = new Event(type, {
+        bubbles: true,
+        composed: true
+      })
+      Object.assign(event, {
+        isPrimary: true,
+        clientX: 0,
+        clientY: 0
+      })
+      button.dispatchEvent(event)
+    }
+
+    try {
+      dispatchPointerEvent('pointerdown')
+      dispatchPointerEvent('pointerup')
+      jasmine.clock().tick(1100)
+
+      expect(actions.length).toBe(1)
+      expect(actions[0].name).toBe('应付凭证')
+      expect(actions[0].target.selector).toBe('#shadow-host::shadow BUTTON')
+    } finally {
+      collection.stop()
+      host.remove()
+      jasmine.clock().uninstall()
+    }
+  })
+
   it('should discard individual clicks and validate the rage click when rage is detected', () => {
     const target = document.createElement('div')
     const clicks = [100, 300, 700].map((timeStamp) =>

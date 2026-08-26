@@ -126,4 +126,46 @@ describe('getActionNameFromElement', () => {
 
     expect(getActionNameFromElement(button)).toBe('Save Changes')
   })
+
+  describe('shadow DOM support', () => {
+    it('should extract text from an element inside a shadow root', () => {
+      const host = document.createElement('div')
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      const button = document.createElement('button')
+      button.innerText = 'Shadow Button'
+      shadowRoot.appendChild(button)
+      document.body.appendChild(host)
+
+      expect(getActionNameFromElement(button)).toBe('Shadow Button')
+
+      host.remove()
+    })
+
+    it('should find a programmatic action name across a shadow boundary', () => {
+      const host = document.createElement('div')
+      host.setAttribute(
+        DEFAULT_PROGRAMMATIC_ACTION_NAME_ATTRIBUTE,
+        'Host Action'
+      )
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      const target = document.createElement('span')
+      shadowRoot.appendChild(target)
+
+      expect(getActionNameFromElement(target)).toBe('Host Action')
+    })
+
+    it('should resolve aria-labelledby inside the same shadow root', () => {
+      const host = document.createElement('div')
+      const shadowRoot = host.attachShadow({ mode: 'open' })
+      const label = document.createElement('span')
+      label.id = 'shadow-label'
+      label.innerText = 'Save Data'
+      const button = document.createElement('button')
+      button.setAttribute('aria-labelledby', 'shadow-label')
+      shadowRoot.appendChild(label)
+      shadowRoot.appendChild(button)
+
+      expect(getActionNameFromElement(button)).toBe('Save Data')
+    })
+  })
 })

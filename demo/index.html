@@ -401,6 +401,15 @@
         padding: 12px;
         overflow: auto;
       }
+      .shadow-action-demo__host {
+        display: block;
+      }
+      .shadow-action-demo__status {
+        margin: 0;
+      }
+      .shadow-action-demo__output {
+        min-height: 132px;
+      }
       .demo-lab {
         margin-top: 24px;
         border: 1px solid var(--demo-border);
@@ -744,7 +753,68 @@
       //   window.DATAFLUX_LOGS && window.DATAFLUX_LOGS._setDebug(true)
     </script> -->
     <!-- <script src="./dataflux-rum.js"></script> -->
+    <script>
+      ;(function () {
+        var pendingRequests = (window.__shadowActionDemoRequests = [])
 
+        function recordRequest(url, transport) {
+          var requestUrl = String(url || '')
+          if (
+            requestUrl.indexOf('cn3-rum-openway.guance.com') === -1 ||
+            requestUrl.indexOf('/v1/write/rum') === -1
+          ) {
+            return
+          }
+          var parsedUrl = new URL(requestUrl, window.location.origin)
+          var request = {
+            kind:
+              parsedUrl.pathname.indexOf('/rum/replay') === -1
+                ? 'event'
+                : 'replay',
+            transport: transport,
+            path: parsedUrl.pathname,
+            encoding: parsedUrl.searchParams.get('encoding') || 'none',
+            timestamp: new Date().toISOString()
+          }
+          pendingRequests.push(request)
+          if (typeof window.__shadowActionDemoRecordRequest === 'function') {
+            window.__shadowActionDemoRecordRequest(request)
+          }
+        }
+
+        if (window.fetch) {
+          var originalFetch = window.fetch
+          window.fetch = function (input, init) {
+            recordRequest(
+              typeof input === 'string' ? input : input && input.url,
+              'fetch'
+            )
+            return originalFetch.apply(this, arguments)
+          }
+        }
+
+        var originalOpen = window.XMLHttpRequest.prototype.open
+        var originalSend = window.XMLHttpRequest.prototype.send
+        window.XMLHttpRequest.prototype.open = function (method, url) {
+          this.__shadowActionDemoUrl = url
+          return originalOpen.apply(this, arguments)
+        }
+        window.XMLHttpRequest.prototype.send = function () {
+          recordRequest(this.__shadowActionDemoUrl, 'xhr')
+          return originalSend.apply(this, arguments)
+        }
+
+        if (window.navigator.sendBeacon) {
+          var originalSendBeacon = window.navigator.sendBeacon.bind(
+            window.navigator
+          )
+          window.navigator.sendBeacon = function (url, data) {
+            recordRequest(url, 'sendBeacon')
+            return originalSendBeacon(url, data)
+          }
+        }
+      })()
+    </script>
     <script>
       ;(function (h, o, u, n, d) {
         h = h[d] = h[d] || {
@@ -800,6 +870,13 @@
               : undefined,
 
           beforeSend: function (event, context) {
+            if (
+              event.type === 'action' &&
+              window.__shadowActionDemo &&
+              typeof window.__shadowActionDemo.recordAction === 'function'
+            ) {
+              window.__shadowActionDemo.recordAction(event)
+            }
             if (event.type === 'resource' && event.resource.type === 'xhr') {
               // 这里可以往数据之中添加 responseHeaders 字段上报
               console.log('====event', context)
@@ -1571,6 +1648,54 @@
             </div>
           </div>
         </div>
+        <div class="demo-section demo-section--dom shadow-action-demo">
+          <div class="demo-section__head">
+            <div>
+              <div class="demo-section__title">Shadow DOM Action Inspector</div>
+              <div class="demo-section__desc">
+                模拟 Wujie 的开放 Shadow DOM。点击内部按钮后，检查自动 Action
+                名称和带 <code>::shadow</code> 边界的 selector，并上报到 cn3。
+              </div>
+              <div class="demo-flow">
+                <div class="demo-flow__step">1. click shadow button</div>
+                <div class="demo-flow__step">2. resolve composedPath</div>
+                <div class="demo-flow__step">3. build shadow selector</div>
+                <div class="demo-flow__step">4. inspect cn3 intake</div>
+              </div>
+            </div>
+            <div class="demo-section__pill">RUM Action</div>
+          </div>
+          <div class="demo-section__body">
+            <div class="demo-side">
+              <div class="demo-card">
+                <div class="demo-card__title">Acceptance Status</div>
+                <div class="shadow-action-demo__status demo-status-grid">
+                  <div>run id</div>
+                  <div id="shadow-action-run-id">waiting</div>
+                  <div>state</div>
+                  <div id="shadow-action-status">waiting for click</div>
+                  <div>action name</div>
+                  <div id="shadow-action-name">none</div>
+                  <div>selector</div>
+                  <div id="shadow-action-selector">none</div>
+                </div>
+              </div>
+              <div class="demo-card">
+                <div class="demo-card__title">Expected Query</div>
+                <div class="demo-helper-log">
+                  A::action:(service='browser' AND action_name='Shadow DOM 应付凭证')
+                </div>
+              </div>
+            </div>
+            <div class="demo-main">
+              <shadow-action-demo
+                id="shadow-action-host"
+                class="shadow-action-demo__host"
+              ></shadow-action-demo>
+              <pre id="shadow-action-output" class="shadow-action-demo__output demo-output">No Shadow DOM Action captured yet.</pre>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <div class="demo-lab">
@@ -1700,6 +1825,150 @@
         </div>
       </div>
     </div>
+    <script>
+      ;(function () {
+        var runId =
+          new URLSearchParams(window.location.search).get('shadowRun') ||
+          'shadow-' + Date.now()
+        var state = (window.__shadowActionDemo = {
+          runId: runId,
+          status: 'waiting for click',
+          actionName: '',
+          selector: '',
+          pointerTarget: '',
+          pointerPath: [],
+          requests: (window.__shadowActionDemoRequests || []).slice(),
+          event: null
+        })
+
+        function render() {
+          var runIdElement = document.getElementById('shadow-action-run-id')
+          var statusElement = document.getElementById('shadow-action-status')
+          var nameElement = document.getElementById('shadow-action-name')
+          var selectorElement = document.getElementById('shadow-action-selector')
+          var outputElement = document.getElementById('shadow-action-output')
+          if (!runIdElement || !statusElement || !nameElement || !selectorElement) {
+            return
+          }
+          runIdElement.textContent = state.runId
+          statusElement.textContent = state.status
+          nameElement.textContent = state.actionName || 'none'
+          selectorElement.textContent = state.selector || 'none'
+          if (state.event && outputElement) {
+            outputElement.textContent = JSON.stringify(
+              Object.assign({}, state.event, {
+                requests: state.requests
+              }),
+              null,
+              2
+            )
+          }
+        }
+
+        window.__shadowActionDemoRecordRequest = function (request) {
+          if (state.requests.indexOf(request) === -1) {
+            state.requests.push(request)
+          }
+          if (
+            state.event &&
+            request.kind === 'event' &&
+            request.encoding === 'deflate'
+          ) {
+            state.status = 'cn3 event intake request observed'
+          }
+          render()
+        }
+
+        state.markClicked = function (expectedName) {
+          state.status = 'clicked ' + expectedName + '; waiting for beforeSend'
+          render()
+        }
+
+        state.recordAction = function (event) {
+          var actionName =
+            event.action && event.action.target && event.action.target.name
+          if (
+            actionName !== 'Shadow DOM 应付凭证' &&
+            actionName !== 'Shadow DOM 提交更新合同付款计划'
+          ) {
+            return false
+          }
+          var selector =
+            event._gc &&
+            event._gc.action &&
+            event._gc.action.target &&
+            event._gc.action.target.selector
+          event.context = Object.assign({}, event.context, {
+            shadow_dom_demo_run_id: state.runId
+          })
+          state.status = 'captured by beforeSend; sending to cn3'
+          state.actionName = actionName
+          state.selector = selector || ''
+          state.event = {
+            runId: state.runId,
+            actionName: actionName,
+            selector: selector,
+            pointerTarget: state.pointerTarget,
+            pointerPath: state.pointerPath,
+            view: event.view,
+            service: event.service
+          }
+          render()
+          return true
+        }
+
+        window.addEventListener(
+          'pointerdown',
+          function (event) {
+            state.pointerTarget = event.target && event.target.tagName
+            state.pointerPath =
+              typeof event.composedPath === 'function'
+                ? event.composedPath().slice(0, 8).map(function (node) {
+                    return node.tagName || node.nodeName
+                  })
+                : []
+          },
+          true
+        )
+
+        class NestedShadowActionDemo extends HTMLElement {
+          constructor() {
+            super()
+            var root = this.attachShadow({ mode: 'open' })
+            root.innerHTML =
+              '<style>:host{display:inline-block}button{min-height:40px;padding:0 14px;border:1px solid #8aa0b8;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
+              '<button type="button" data-testid="shadow-contract-plan"><span>Shadow DOM 提交更新合同付款计划</span></button>'
+            root.querySelector('button').addEventListener('click', function () {
+              state.markClicked('Shadow DOM 提交更新合同付款计划')
+            })
+          }
+        }
+
+        class ShadowActionDemo extends HTMLElement {
+          constructor() {
+            super()
+            var root = this.attachShadow({ mode: 'open' })
+            root.innerHTML =
+              '<style>:host{display:block}.panel{display:grid;gap:14px;padding:18px;border:1px solid #c7d4e2;border-radius:16px;background:linear-gradient(180deg,#f7fbff,#fff)}.title{font-weight:700}.actions{display:flex;flex-wrap:wrap;gap:10px}button{min-height:40px;padding:0 14px;border:1px solid #6f8dac;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
+              '<div class="panel"><div class="title">Wujie-like open ShadowRoot</div><div class="actions"><button type="button" data-testid="shadow-payable-voucher"><span>Shadow DOM 应付凭证</span></button><nested-shadow-action-demo data-testid="nested-shadow-host"></nested-shadow-action-demo></div></div>'
+            root.querySelector('button').addEventListener('click', function () {
+              state.markClicked('Shadow DOM 应付凭证')
+            })
+          }
+        }
+
+        if (!window.customElements.get('nested-shadow-action-demo')) {
+          window.customElements.define(
+            'nested-shadow-action-demo',
+            NestedShadowActionDemo
+          )
+        }
+        if (!window.customElements.get('shadow-action-demo')) {
+          window.customElements.define('shadow-action-demo', ShadowActionDemo)
+        }
+        render()
+      })()
+    </script>
     <script>
       // long task
       function random(n, m) {

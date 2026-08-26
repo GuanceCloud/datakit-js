@@ -1,5 +1,6 @@
 import {
   forEachChildNodes,
+  getParentElement,
   getParentNode,
   hasChildNodes,
   isCommentNode,
@@ -31,6 +32,7 @@ describe('htmlDomUtils', () => {
     expect(hasChildNodes(host)).toBeTrue()
     expect(getParentNode(shadowRoot)).toBe(host)
     expect(getParentNode(child)).toBe(shadowRoot)
+    expect(getParentElement(child)).toBe(host)
   })
 
   it('should iterate child nodes and include the shadow root', () => {

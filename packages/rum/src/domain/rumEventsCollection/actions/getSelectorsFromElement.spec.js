@@ -1,4 +1,5 @@
 import {
+  SHADOW_DOM_MARKER,
   STABLE_ATTRIBUTES,
   getSelectorFromElement,
   supportScopeSelector
@@ -175,5 +176,72 @@ describe('getSelectorsFromElement', () => {
     expect(getSelectorFromElement(button)).toBe('BODY>DIV>BUTTON.stable-class')
 
     root.remove()
+  })
+
+  it('should generate a selector across a shadow root boundary', () => {
+    const host = document.createElement('div')
+    host.id = 'shadow-host'
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const button = document.createElement('button')
+    button.className = 'shadow-button'
+    shadowRoot.appendChild(button)
+    document.body.appendChild(host)
+
+    expect(getSelectorFromElement(button)).toBe(
+      '#shadow-host' + SHADOW_DOM_MARKER + 'BUTTON.shadow-button'
+    )
+
+    host.remove()
+  })
+
+  it('should generate selectors across nested shadow roots', () => {
+    const outerHost = document.createElement('div')
+    outerHost.setAttribute('data-testid', 'outer-host')
+    const outerRoot = outerHost.attachShadow({ mode: 'open' })
+    const innerHost = document.createElement('section')
+    innerHost.setAttribute('data-testid', 'inner-host')
+    outerRoot.appendChild(innerHost)
+    const innerRoot = innerHost.attachShadow({ mode: 'open' })
+    const button = document.createElement('button')
+    button.setAttribute('data-testid', 'deep-button')
+    innerRoot.appendChild(button)
+    document.body.appendChild(outerHost)
+
+    expect(getSelectorFromElement(button)).toBe(
+      'DIV[data-testid="outer-host"]' +
+        SHADOW_DOM_MARKER +
+        'SECTION[data-testid="inner-host"]' +
+        SHADOW_DOM_MARKER +
+        'BUTTON[data-testid="deep-button"]'
+    )
+
+    outerHost.remove()
+  })
+
+  it('should distinguish identical elements in sibling shadow hosts', () => {
+    const container = document.createElement('div')
+    container.id = 'shadow-container'
+    const firstHost = document.createElement('action-host')
+    const secondHost = document.createElement('action-host')
+    container.appendChild(firstHost)
+    container.appendChild(secondHost)
+    const firstButton = document.createElement('button')
+    const secondButton = document.createElement('button')
+    firstHost.attachShadow({ mode: 'open' }).appendChild(firstButton)
+    secondHost.attachShadow({ mode: 'open' }).appendChild(secondButton)
+    document.body.appendChild(container)
+
+    expect(getSelectorFromElement(firstButton)).toBe(
+      '#shadow-container>ACTION-HOST:nth-of-type(1)' +
+        SHADOW_DOM_MARKER +
+        'BUTTON'
+    )
+    expect(getSelectorFromElement(secondButton)).toBe(
+      '#shadow-container>ACTION-HOST:nth-of-type(2)' +
+        SHADOW_DOM_MARKER +
+        'BUTTON'
+    )
+
+    container.remove()
   })
 })

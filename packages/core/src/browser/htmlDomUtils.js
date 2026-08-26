@@ -46,3 +46,17 @@ export function forEachChildNodes(node, callback) {
 export function getParentNode(node) {
   return isNodeShadowRoot(node) ? node.host : node.parentNode
 }
+
+/**
+ * Return the parent element, crossing an open shadow root boundary when needed.
+ */
+export function getParentElement(element) {
+  if (element.parentElement) {
+    return element.parentElement
+  }
+  var parentNode = element.parentNode
+  if (parentNode && isNodeShadowRoot(parentNode)) {
+    return parentNode.host
+  }
+  return null
+}
