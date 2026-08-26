@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.3.12
+
+- merge: fix Wujie session replay
+- fix(rum): harden Wujie replay fallbacks
+- fix(rum): record Wujie replay nodes across realms
+- fix: update lock
+
 ## v3.3.11
 
 - fix(rum): record Wujie iframe-realm form and canvas updates inside open Shadow DOM
