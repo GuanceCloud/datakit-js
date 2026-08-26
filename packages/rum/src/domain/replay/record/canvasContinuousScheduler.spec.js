@@ -1349,7 +1349,7 @@ describe('replay/record/canvasContinuousScheduler', () => {
     expect(snapshotCanvas).not.toHaveBeenCalled()
   })
 
-  it("should return an inert controller when command capture sampling is enabled", () => {
+  it("should start for foreign-realm fallbacks when command capture sampling is enabled", () => {
     var requestAnimationFrameImpl = jasmine.createSpy('requestAnimationFrame')
 
     var loop = startContinuousCanvasSnapshotLoop({
@@ -1364,7 +1364,7 @@ describe('replay/record/canvasContinuousScheduler', () => {
       cancelAnimationFrameImpl: jasmine.createSpy('cancelAnimationFrame')
     })
 
-    expect(requestAnimationFrameImpl).not.toHaveBeenCalled()
+    expect(requestAnimationFrameImpl).toHaveBeenCalledTimes(1)
     expect(loop).toEqual(
       jasmine.objectContaining({
         stop: jasmine.any(Function),

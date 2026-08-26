@@ -1510,7 +1510,6 @@ describe('replay/record/record', () => {
     container.appendChild(checkbox)
     container.appendChild(scroller)
     const emittedRecords = []
-    let observerOptions
     let serializerTaskCount = 0
     let staleScrollPositionRetained
     let recorder
@@ -1522,8 +1521,7 @@ describe('replay/record/record', () => {
           defaultPrivacyLevel: NodePrivacyLevel.ALLOW
         },
         lifeCycle: createLifeCycle(),
-        initObservers: function (options) {
-          observerOptions = options
+        initObservers: function () {
           return {
             stop: function () {},
             flush: function () {},
@@ -1572,7 +1570,6 @@ describe('replay/record/record', () => {
       })
 
       checkbox.checked = true
-      expect(observerOptions.isNodeIgnored(checkbox)).toBeTrue()
       jasmine.clock().tick(1)
 
       expect(serializerTaskCount).toBe(3)
@@ -3939,7 +3936,7 @@ describe('replay/record/record', () => {
     }
   })
 
-  it('should record Wujie-like iframe realm nodes inside an open shadow root', () => {
+  it('should record Wujie-like iframe realm nodes inside an open shadow root', async () => {
     const iframe = document.createElement('iframe')
     document.body.appendChild(iframe)
     const foreignWindow = iframe.contentWindow
@@ -3959,6 +3956,11 @@ describe('replay/record/record', () => {
     shadowRoot.appendChild(canvas)
     shadowRoot.appendChild(lateShadowHost)
     container.appendChild(host)
+    const foreignInputPrototype = Object.getPrototypeOf(input)
+    const originalValueSetter = Object.getOwnPropertyDescriptor(
+      foreignInputPrototype,
+      'value'
+    ).set
     const emittedRecords = []
     const recorder = record({
       emit: (event) => emittedRecords.push(event),
@@ -3989,12 +3991,7 @@ describe('replay/record/record', () => {
 
       emittedRecords.length = 0
       input.value = 'updated-wujie-value'
-      input.dispatchEvent(
-        new foreignWindow.Event('input', {
-          bubbles: true,
-          composed: true
-        })
-      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
 
       expect(
         emittedRecords.some(
@@ -4020,6 +4017,11 @@ describe('replay/record/record', () => {
             )
         )
       ).toBeTrue()
+
+      recorder.stop()
+      expect(
+        Object.getOwnPropertyDescriptor(foreignInputPrototype, 'value').set
+      ).toBe(originalValueSetter)
     } finally {
       recorder.stop()
       host.remove()
@@ -10716,7 +10718,15 @@ describe('replay/record/record', () => {
       })
     )
     expect(scanExistingCanvases).toHaveBeenCalledTimes(1)
-    expect(startContinuousCanvasSnapshotLoop).not.toHaveBeenCalled()
+    expect(startContinuousCanvasSnapshotLoop).toHaveBeenCalledWith(
+      jasmine.objectContaining({
+        getCanvases: jasmine.any(Function),
+        snapshotCanvas: jasmine.any(Function)
+      })
+    )
+    expect(
+      startContinuousCanvasSnapshotLoop.calls.mostRecent().args[0].getCanvases()
+    ).toEqual([])
 
     onCommandMutationDebug({
       timestamp: 4321,
@@ -10768,6 +10778,77 @@ describe('replay/record/record', () => {
 
     recorder.stop()
     expect(stopCanvasCommandCapture).toHaveBeenCalledTimes(1)
+  })
+
+  it("should continuously snapshot iframe realm canvases when command capture is 'all'", async () => {
+    const iframe = document.createElement('iframe')
+    document.body.appendChild(iframe)
+    const host = document.createElement('div')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    const foreignCanvas = iframe.contentWindow.document.createElement('canvas')
+    const mainCanvas = document.createElement('canvas')
+    shadowRoot.appendChild(foreignCanvas)
+    shadowRoot.appendChild(mainCanvas)
+    container.appendChild(host)
+    const snapshot = jasmine
+      .createSpy('snapshot')
+      .and.returnValue(Promise.resolve({ ok: true }))
+    let loopOptions
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 'all'
+      },
+      lifeCycle: createLifeCycle(),
+      createCanvasObserver: function () {
+        return {
+          snapshot: snapshot,
+          stop: jasmine.createSpy('stopCanvasObserver'),
+          reset: jasmine.createSpy('resetCanvasObserver')
+        }
+      },
+      startContinuousCanvasSnapshotLoop: function (options) {
+        loopOptions = options
+        return {
+          stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
+          reset: jasmine.createSpy('resetContinuousCanvasSnapshots')
+        }
+      },
+      startCanvasCommandCapture: function () {
+        return {
+          stop: jasmine.createSpy('stopCanvasCommandCapture'),
+          reset: jasmine.createSpy('resetCanvasCommandCapture'),
+          scanExistingCanvases: jasmine.createSpy('scanExistingCanvases')
+        }
+      },
+      startCanvasWebGLSnapshotObserver: function () {
+        return {
+          stop: jasmine.createSpy('stopCanvasWebGLSnapshotObserver'),
+          reset: jasmine.createSpy('resetCanvasWebGLSnapshotObserver')
+        }
+      }
+    })
+
+    try {
+      expect(foreignCanvas instanceof HTMLCanvasElement).toBeFalse()
+      expect(loopOptions.getCanvases()).toEqual([foreignCanvas])
+      expect(await loopOptions.snapshotCanvas(foreignCanvas)).toEqual({
+        ok: true
+      })
+      expect(snapshot).toHaveBeenCalledWith(
+        foreignCanvas,
+        jasmine.objectContaining({
+          trigger: 'auto',
+          scheduler: 'continuous_snapshot'
+        })
+      )
+    } finally {
+      recorder.stop()
+      iframe.remove()
+    }
   })
 
   it('should flush canvas commands without stopping command capture', () => {

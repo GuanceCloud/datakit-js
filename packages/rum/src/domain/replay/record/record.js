@@ -17,7 +17,7 @@ import {
   SERIALIZATION_MAX_NODE_COUNT,
   SERIALIZATION_MAX_APPROX_BYTES,
 } from './serialize'
-import { initObservers } from './observers'
+import { initInputObserver, initObservers } from './observers'
 
 import { getVisualViewport } from './viewports'
 import { assembleIncrementalSnapshot } from './utils'
@@ -519,6 +519,7 @@ export function record(options) {
   var refreshAndFlushPendingRootForNode = function () {}
   var currentFullSnapshotPublicationToken = createPublicationToken()
   var previousPublishedReplayTree
+  var inputObserver
 
   function getPublishedReplayTree() {
     return {
@@ -570,6 +571,7 @@ export function record(options) {
   ) {
     publishedNodeParentByNode.set(node, parentNode)
     publicationTokenByNode.set(node, publicationToken)
+    observeInputNode(node)
   }
 
   function stageMutationNodePublication(
@@ -587,6 +589,7 @@ export function record(options) {
     }
     pendingNodeParentByNode.set(node, parentNode)
     pendingPublicationTokenByNode.set(node, publicationToken)
+    observeInputNode(node)
     if (
       publicationToken &&
       node.tagName === 'CANVAS'
@@ -595,6 +598,12 @@ export function record(options) {
         publicationToken.$rCanvasNodes = new Set()
       }
       publicationToken.$rCanvasNodes.add(node)
+    }
+  }
+
+  function observeInputNode(node) {
+    if (inputObserver && inputObserver.observeInputNode) {
+      inputObserver.observeInputNode(node)
     }
   }
 
@@ -1364,6 +1373,21 @@ export function record(options) {
     emit(assembleIncrementalSnapshot(IncrementalSource.Input, s))
   }
 
+  try {
+    inputObserver = initInputObserver(
+      inputCb,
+      configuration,
+      undefined,
+      isNodeIgnoredForObserver
+    )
+  } catch (error) {
+    return abortRecorderInitialization(
+      'recorder_initialization_error',
+      error
+    )
+  }
+  registerInitializationCleanup(inputObserver)
+
   var mutationResourceBudget = createMutationResourceBudget()
   var shadowRootsController
   try {
@@ -1607,31 +1631,30 @@ export function record(options) {
     : startContinuousCanvasSnapshotLoop
   var canvasSnapshotLoop
   try {
-    canvasSnapshotLoop = shouldUseCanvasCommandCapture
-      ? {
-          stop: function () {},
-          reset: function () {}
-        }
-      : startCanvasSnapshotLoop({
-          configuration: configuration,
-          getCanvases: function (maxScanCount) {
-            return getActiveSerializedCanvases(maxScanCount).filter(
-              function (canvas) {
-                return !isDrawDrivenWebGLCanvas(canvas)
-              }
+    canvasSnapshotLoop = startCanvasSnapshotLoop({
+      configuration: configuration,
+      getCanvases: function (maxScanCount) {
+        return getActiveSerializedCanvases(maxScanCount).filter(
+          function (canvas) {
+            return (
+              !isDrawDrivenWebGLCanvas(canvas) &&
+              (!shouldUseCanvasCommandCapture ||
+                !(canvas instanceof HTMLCanvasElement))
             )
-          },
-          getSerializedNodeId: function (canvas) {
-            return getActiveSerializedNodeId(canvas)
-          },
-          onDebug: handleAutoCanvasSnapshotDebug,
-          snapshotCanvas: function (canvas) {
-            return snapshotCanvasIfActive(canvas, {
-              trigger: 'auto',
-              scheduler: 'continuous_snapshot'
-            })
           }
+        )
+      },
+      getSerializedNodeId: function (canvas) {
+        return getActiveSerializedNodeId(canvas)
+      },
+      onDebug: handleAutoCanvasSnapshotDebug,
+      snapshotCanvas: function (canvas) {
+        return snapshotCanvasIfActive(canvas, {
+          trigger: 'auto',
+          scheduler: 'continuous_snapshot'
         })
+      }
+    })
   } catch (error) {
     return abortRecorderInitialization(
       'recorder_initialization_error',
@@ -2157,6 +2180,7 @@ export function record(options) {
       mutationActivityCb: trackDomMutationActivity,
       mutationNodeSerializationCb: stageMutationNodePublication,
       mutationResourceBudget: mutationResourceBudget,
+      inputObserver: inputObserver,
       isNodeIgnored: isNodeIgnoredForObserver,
       isNodeIgnoredForStatelessObserver:
         isNodeIgnoredForStatelessObserver,
@@ -3518,6 +3542,7 @@ export function record(options) {
         stopCanvasSnapshots(canvasSnapshotLoop)
       },
       stopObservers,
+      inputObserver,
       stopSerializedCanvasTracking
     ].forEach(function (cleanupTask) {
       try {

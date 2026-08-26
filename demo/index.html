@@ -757,7 +757,14 @@
       ;(function () {
         var pendingRequests = (window.__shadowActionDemoRequests = [])
 
-        function recordRequest(url, transport) {
+        function recordRequest(
+          url,
+          transport,
+          status,
+          success,
+          accepted,
+          startedAt
+        ) {
           var requestUrl = String(url || '')
           if (
             requestUrl.indexOf('cn3-rum-openway.guance.com') === -1 ||
@@ -774,6 +781,11 @@
             transport: transport,
             path: parsedUrl.pathname,
             encoding: parsedUrl.searchParams.get('encoding') || 'none',
+            status: status,
+            success: success === true,
+            accepted: accepted,
+            startedAt: startedAt || Date.now(),
+            completedAt: Date.now(),
             timestamp: new Date().toISOString()
           }
           pendingRequests.push(request)
@@ -785,11 +797,25 @@
         if (window.fetch) {
           var originalFetch = window.fetch
           window.fetch = function (input, init) {
-            recordRequest(
-              typeof input === 'string' ? input : input && input.url,
-              'fetch'
+            var url = typeof input === 'string' ? input : input && input.url
+            var startedAt = Date.now()
+            var request = originalFetch.apply(this, arguments)
+            request.then(
+              function (response) {
+                recordRequest(
+                  url,
+                  'fetch',
+                  response.status,
+                  response.ok,
+                  undefined,
+                  startedAt
+                )
+              },
+              function () {
+                recordRequest(url, 'fetch', 0, false, undefined, startedAt)
+              }
             )
-            return originalFetch.apply(this, arguments)
+            return request
           }
         }
 
@@ -800,7 +826,22 @@
           return originalOpen.apply(this, arguments)
         }
         window.XMLHttpRequest.prototype.send = function () {
-          recordRequest(this.__shadowActionDemoUrl, 'xhr')
+          var request = this
+          var startedAt = Date.now()
+          this.addEventListener(
+            'loadend',
+            function () {
+              recordRequest(
+                request.__shadowActionDemoUrl,
+                'xhr',
+                request.status,
+                request.status >= 200 && request.status < 300,
+                undefined,
+                startedAt
+              )
+            },
+            { once: true }
+          )
           return originalSend.apply(this, arguments)
         }
 
@@ -809,8 +850,17 @@
             window.navigator
           )
           window.navigator.sendBeacon = function (url, data) {
-            recordRequest(url, 'sendBeacon')
-            return originalSendBeacon(url, data)
+            var startedAt = Date.now()
+            var accepted = originalSendBeacon(url, data)
+            recordRequest(
+              url,
+              'sendBeacon',
+              undefined,
+              false,
+              accepted,
+              startedAt
+            )
+            return accepted
           }
         }
       })()
@@ -1876,6 +1926,17 @@
           replayStatus: 'waiting for realm nodes',
           replayRequest: 'waiting',
           replayStarted: false,
+          replayRequestStartIndex: 0,
+          replayBaselineSequence: 0,
+          replayAcceptanceTimer: undefined,
+          replayAcceptanceAttempts: 0,
+          replayCoverageEnd: 0,
+          canvasSnapshotResult: undefined,
+          replayCoverage: {
+            input: false,
+            mutation: false,
+            canvasMutation: false
+          },
           replayNodes: undefined,
           replayNodeIds: {
             input: undefined,
@@ -1955,6 +2016,9 @@
                 action: state.event,
                 replayStatus: state.replayStatus,
                 replayNodeIds: state.replayNodeIds,
+                replayCoverage: state.replayCoverage,
+                replayCoverageEnd: state.replayCoverageEnd,
+                canvasSnapshotResult: state.canvasSnapshotResult,
                 replayRequest: state.replayRequest,
                 requests: state.requests
               },
@@ -1964,6 +2028,126 @@
           }
         }
 
+        function getReplaySegmentFlushHistory() {
+          var rum = window.DATAFLUX_RUM
+          if (
+            !rum ||
+            typeof rum.getReplaySegmentFlushHistoryForDebug !== 'function'
+          ) {
+            return []
+          }
+          return rum.getReplaySegmentFlushHistoryForDebug() || []
+        }
+
+        function getLastReplaySegmentSequence() {
+          return getReplaySegmentFlushHistory().reduce(function (
+            latest,
+            segment
+          ) {
+            return Math.max(latest, segment.sequence || 0)
+          }, 0)
+        }
+
+        function refreshReplayAcceptance() {
+          var coverage = {
+            input: false,
+            mutation: false,
+            canvasMutation: false
+          }
+          var coverageEnd = 0
+          getReplaySegmentFlushHistory().forEach(function (segment) {
+            if ((segment.sequence || 0) <= state.replayBaselineSequence) {
+              return
+            }
+            var counts = segment.recordCountsByType || {}
+            if (
+              counts.input > 0 ||
+              counts.mutation > 0 ||
+              counts.canvas_mutation > 0
+            ) {
+              coverageEnd = Math.max(coverageEnd, segment.end || 0)
+            }
+            coverage.input = coverage.input || counts.input > 0
+            coverage.mutation = coverage.mutation || counts.mutation > 0
+            coverage.canvasMutation =
+              coverage.canvasMutation || counts.canvas_mutation > 0
+          })
+          state.replayCoverage = coverage
+          state.replayCoverageEnd = coverageEnd
+
+          var replayRequests = state.requests
+            .slice(state.replayRequestStartIndex)
+            .filter(function (request) {
+              return request.kind === 'replay'
+            })
+          var successfulRequest = replayRequests.find(function (request) {
+            return (
+              request.success === true && request.startedAt >= coverageEnd
+            )
+          })
+          var lastRequest = replayRequests[replayRequests.length - 1]
+          if (lastRequest) {
+            state.replayRequest =
+              lastRequest.transport +
+              ' ' +
+              lastRequest.encoding +
+              (lastRequest.status === undefined
+                ? lastRequest.accepted
+                  ? ' accepted by browser; server response unavailable'
+                  : ' rejected by browser'
+                : ' HTTP ' + lastRequest.status)
+          }
+
+          var passed =
+            successfulRequest &&
+            coverage.input &&
+            coverage.mutation &&
+            coverage.canvasMutation
+          if (passed) {
+            window.clearInterval(state.replayAcceptanceTimer)
+            state.replayAcceptanceTimer = undefined
+            state.replayRequest =
+              successfulRequest.transport +
+              ' ' +
+              successfulRequest.encoding +
+              ' HTTP ' +
+              successfulRequest.status
+            state.replayStatus =
+              'passed: cn3 2xx and post-run input + shadow mutation + canvas mutation'
+          } else if (lastRequest && lastRequest.success === false) {
+            state.replayStatus =
+              lastRequest.transport === 'sendBeacon' && lastRequest.accepted
+                ? 'browser queued replay beacon; waiting for verifiable 2xx upload'
+                : 'replay upload failed; HTTP ' + lastRequest.status
+          } else {
+            state.replayStatus =
+              'waiting for cn3 2xx and post-run input + shadow mutation + canvas mutation'
+          }
+          render()
+          return passed
+        }
+
+        function startReplayAcceptancePolling() {
+          window.clearInterval(state.replayAcceptanceTimer)
+          state.replayAcceptanceAttempts = 0
+          if (refreshReplayAcceptance()) {
+            return
+          }
+          state.replayAcceptanceTimer = window.setInterval(function () {
+            state.replayAcceptanceAttempts += 1
+            if (refreshReplayAcceptance()) {
+              return
+            }
+            if (state.replayAcceptanceAttempts >= 120) {
+              window.clearInterval(state.replayAcceptanceTimer)
+              state.replayAcceptanceTimer = undefined
+              state.replayStatus =
+                'timeout: missing cn3 2xx or post-run replay record coverage'
+              render()
+            }
+          }, 250)
+        }
+
         window.__shadowActionDemoRecordRequest = function (request) {
           if (state.requests.indexOf(request) === -1) {
             state.requests.push(request)
@@ -1971,15 +2155,18 @@
           if (
             state.event &&
             request.kind === 'event' &&
-            request.encoding === 'deflate'
+            request.encoding === 'deflate' &&
+            request.success === true
           ) {
             state.status =
-              'cn3 event intake request observed; ' + (state.validation || 'unchecked')
+              'cn3 event intake HTTP ' +
+              request.status +
+              '; ' +
+              (state.validation || 'unchecked')
           }
           if (state.replayStarted && request.kind === 'replay') {
-            state.replayRequest =
-              'observed ' + request.transport + ' ' + request.encoding
-            state.replayStatus = 'replay segment sent to cn3'
+            refreshReplayAcceptance()
+            return
           }
           render()
         }
@@ -2229,7 +2416,8 @@
           render()
           return (
             state.replayNodeIds.input !== undefined &&
-            state.replayNodeIds.canvas !== undefined
+            state.replayNodeIds.canvas !== undefined &&
+            state.replayNodeIds.lateShadow !== undefined
           )
         }
 
@@ -2257,36 +2445,29 @@
             render()
             return
           }
-          if (typeof rum.startSessionReplayRecording === 'function') {
-            rum.startSessionReplayRecording({ force: true })
+          window.clearInterval(state.replayAcceptanceTimer)
+          state.replayRequestStartIndex = state.requests.length
+          state.replayBaselineSequence = getLastReplaySegmentSequence()
+          state.replayCoverage = {
+            input: false,
+            mutation: false,
+            canvasMutation: false
           }
+          state.replayCoverageEnd = 0
+          state.canvasSnapshotResult = undefined
           state.replayStarted = true
           state.replayRequest = 'waiting for /rum/replay'
           state.replayStatus = 'waiting for recorder node ids'
+          if (typeof rum.startSessionReplayRecording === 'function') {
+            rum.startSessionReplayRecording({ force: true })
+          }
           render()
 
           waitForReplayNodes(function () {
-            var replayValue = 'Wujie replay ' + state.runId
+            var replayValue =
+              'Wujie replay ' + state.runId + ' ' + Date.now()
             nodes.input.value = replayValue
-            nodes.input.dispatchEvent(
-              new nodes.realmWindow.Event('input', {
-                bubbles: true,
-                composed: true
-              })
-            )
-            nodes.input.dispatchEvent(
-              new nodes.realmWindow.Event('change', {
-                bubbles: true,
-                composed: false
-              })
-            )
-            nodes.checkbox.checked = true
-            nodes.checkbox.dispatchEvent(
-              new nodes.realmWindow.Event('change', {
-                bubbles: true,
-                composed: false
-              })
-            )
+            nodes.checkbox.checked = !nodes.checkbox.checked
             nodes.liveText.textContent = replayValue
 
             nodes.lateShadowContent.textContent =
@@ -2321,10 +2502,8 @@
               })
             }
             Promise.resolve(canvasSnapshot).then(function (result) {
-              state.replayStatus =
-                'input + late shadow captured; canvas=' +
-                JSON.stringify(result)
-              render()
+              state.canvasSnapshotResult = result
+              startReplayAcceptancePolling()
             })
           })
         }

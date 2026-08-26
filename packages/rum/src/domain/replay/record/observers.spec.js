@@ -17,6 +17,84 @@ import {
 } from './serializationUtils'
 
 describe('replay/record/observers', () => {
+  it('should capture property setters from observed iframe realm form controls', async () => {
+    const iframe = document.createElement('iframe')
+    document.body.appendChild(iframe)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const foreignDocument = iframe.contentWindow.document
+    const input = foreignDocument.createElement('input')
+    const checkbox = foreignDocument.createElement('input')
+    checkbox.type = 'checkbox'
+    const textarea = foreignDocument.createElement('textarea')
+    const select = foreignDocument.createElement('select')
+    select.appendChild(foreignDocument.createElement('option'))
+    const selectedOption = foreignDocument.createElement('option')
+    selectedOption.value = 'selected-wujie-value'
+    select.appendChild(selectedOption)
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    shadowRoot.appendChild(input)
+    shadowRoot.appendChild(checkbox)
+    shadowRoot.appendChild(textarea)
+    shadowRoot.appendChild(select)
+    setSerializedNodeId(input, 97)
+    setSerializedNodeId(checkbox, 98)
+    setSerializedNodeId(textarea, 99)
+    setSerializedNodeId(select, 100)
+    const inputCb = jasmine.createSpy('inputCb')
+    const stop = initInputObserver(
+      inputCb,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW },
+      undefined,
+      function () {
+        return false
+      }
+    )
+
+    try {
+      stop.observeInputNode(input)
+      stop.observeInputNode(checkbox)
+      stop.observeInputNode(textarea)
+      stop.observeInputNode(select)
+      input.value = 'setter-wujie-value'
+      checkbox.checked = true
+      textarea.value = 'textarea-wujie-value'
+      select.selectedIndex = 1
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(inputCb.calls.allArgs()).toEqual([
+        [{ id: 97, text: 'setter-wujie-value' }],
+        [{ id: 98, isChecked: true }],
+        [{ id: 99, text: 'textarea-wujie-value' }],
+        [{ id: 100, text: 'selected-wujie-value' }]
+      ])
+    } finally {
+      stop()
+      host.remove()
+      iframe.remove()
+    }
+  })
+
+  it('should ignore non-input private form tags', () => {
+    const output = document.createElement('output')
+    document.body.appendChild(output)
+    setSerializedNodeId(output, 96)
+    const inputCb = jasmine.createSpy('inputCb')
+    const stop = initInputObserver(
+      inputCb,
+      { defaultPrivacyLevel: NodePrivacyLevel.ALLOW }
+    )
+
+    try {
+      output.value = 'not-an-input-update'
+      output.dispatchEvent(new Event('input', { bubbles: true }))
+      expect(inputCb).not.toHaveBeenCalled()
+    } finally {
+      stop()
+      output.remove()
+    }
+  })
+
   it('should capture input changes from an iframe realm inside a shadow root', () => {
     const iframe = document.createElement('iframe')
     document.body.appendChild(iframe)
