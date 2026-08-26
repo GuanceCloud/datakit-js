@@ -299,6 +299,24 @@ describe('replay/record/serializationUtils', () => {
     stopTracking()
   })
 
+  it('should register a canvas created by an iframe realm', () => {
+    const stopTracking = startSerializedCanvasTracking()
+    const iframe = document.createElement('iframe')
+    document.body.appendChild(iframe)
+    const canvas = iframe.contentWindow.document.createElement('canvas')
+    document.body.appendChild(canvas)
+
+    try {
+      expect(canvas instanceof HTMLCanvasElement).toBeFalse()
+      setSerializedNodeId(canvas, 43)
+      expect(getSerializedCanvasNodesSnapshot(64)).toContain(canvas)
+    } finally {
+      canvas.remove()
+      iframe.remove()
+      stopTracking()
+    }
+  })
+
   it('should re-register a canvas after pruning it from the auto replay sampling set', () => {
     const stopTracking = startSerializedCanvasTracking()
     const canvas = document.createElement('canvas')

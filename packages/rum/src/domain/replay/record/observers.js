@@ -44,6 +44,12 @@ var MOUSE_MOVE_OBSERVER_THRESHOLD = 50
 var SCROLL_OBSERVER_THRESHOLD = 100
 var VISUAL_VIEWPORT_OBSERVER_THRESHOLD = 200
 var MAX_TRACKED_RADIO_GROUPS = 256
+var MAX_INPUT_SETTER_PROTOTYPES = 36
+var INPUT_TAG_NAMES = {
+  INPUT: true,
+  TEXTAREA: true,
+  SELECT: true
+}
 
 var recordIds = new WeakMap()
 let nextId = 1
@@ -110,14 +116,16 @@ export function initObservers(o) {
     cleanupTasks.push(
       initViewportResizeObserver(o.viewportResizeCb, o.configuration)
     )
-    cleanupTasks.push(
-      initInputObserver(
-        o.inputCb,
-        o.configuration,
-        undefined,
-        isNodeIgnoredForStateObserver
+    if (!o.inputObserver) {
+      cleanupTasks.push(
+        initInputObserver(
+          o.inputCb,
+          o.configuration,
+          undefined,
+          isNodeIgnoredForStateObserver
+        )
       )
-    )
+    }
     cleanupTasks.push(
       initMediaInteractionObserver(
         o.mediaInteractionCb,
@@ -464,6 +472,9 @@ export function initInputObserver(
   var lastInputStateMap = new WeakMap()
   var radioGroupStateByRoot = new WeakMap()
   var isShadowRoot = target !== document
+  var setterInstrumentationStoppers = []
+  var instrumentedInputPrototypes = new WeakSet()
+  var instrumentedInputPrototypeCount = 0
 
   var _addEventListeners = addEventListeners(
     target,
@@ -473,11 +484,7 @@ export function initInputObserver(
     isShadowRoot ? [DOM_EVENT.CHANGE] : [DOM_EVENT.INPUT, DOM_EVENT.CHANGE],
     function (event) {
       var target = getEventTarget(event)
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      ) {
+      if (isInputElement(target)) {
         onElementChange(target)
       }
     },
@@ -487,31 +494,52 @@ export function initInputObserver(
     }
   )
   var stopEventListeners = _addEventListeners.stop
-  var stopPropertySetterInstrumentation
   if (!isShadowRoot) {
-    const instrumentationStoppers = [
-      instrumentSetter(HTMLInputElement.prototype, 'value', onElementChange),
-      instrumentSetter(HTMLInputElement.prototype, 'checked', onElementChange),
-      instrumentSetter(HTMLSelectElement.prototype, 'value', onElementChange),
-      instrumentSetter(HTMLTextAreaElement.prototype, 'value', onElementChange),
-      instrumentSetter(
-        HTMLSelectElement.prototype,
-        'selectedIndex',
-        onElementChange
-      )
-    ]
-    stopPropertySetterInstrumentation = function () {
-      instrumentationStoppers.forEach(function (stopper) {
-        return stopper.stop()
-      })
-    }
-  } else {
-    stopPropertySetterInstrumentation = noop
+    observeInputNode(document.createElement('input'))
+    observeInputNode(document.createElement('textarea'))
+    observeInputNode(document.createElement('select'))
   }
 
-  return function () {
-    stopPropertySetterInstrumentation()
+  var stop = function () {
+    setterInstrumentationStoppers.forEach(function (stopper) {
+      stopper()
+    })
     stopEventListeners()
+  }
+  stop.observeInputNode = isShadowRoot ? noop : observeInputNode
+  return stop
+
+  function observeInputNode(node) {
+    if (!isInputElement(node)) {
+      return
+    }
+    var prototype
+    try {
+      prototype = Object.getPrototypeOf(node)
+    } catch (_) {
+      return
+    }
+    if (
+      !prototype ||
+      instrumentedInputPrototypes.has(prototype) ||
+      instrumentedInputPrototypeCount >= MAX_INPUT_SETTER_PROTOTYPES
+    ) {
+      return
+    }
+    instrumentedInputPrototypes.add(prototype)
+    instrumentedInputPrototypeCount += 1
+    var properties =
+      node.tagName === 'TEXTAREA'
+        ? ['value']
+        : [
+            'value',
+            node.tagName === 'INPUT' ? 'checked' : 'selectedIndex'
+          ]
+    properties.forEach(function (property) {
+      setterInstrumentationStoppers.push(
+        instrumentSetter(prototype, property, onElementChange).stop
+      )
+    })
   }
 
   function onElementChange(target) {
@@ -681,6 +709,10 @@ export function initInputObserver(
     }
     return true
   }
+}
+
+function isInputElement(target) {
+  return !!target && INPUT_TAG_NAMES[target.tagName]
 }
 
 export function initStyleSheetObserver(

@@ -68,8 +68,8 @@ export function getSerializedNodeId(node) {
 export function setSerializedNodeId(node, serializeNodeId) {
   serializedNodeIds.set(node, serializeNodeId)
   if (
-    serializedCanvasTrackingCount > 0 &&
-    node instanceof HTMLCanvasElement
+    serializedCanvasTrackingCount &&
+    node.tagName === 'CANVAS'
   ) {
     registerSerializedCanvasNode(node)
   }

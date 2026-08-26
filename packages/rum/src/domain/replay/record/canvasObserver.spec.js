@@ -70,6 +70,48 @@ describe('replay/record/canvasObserver', () => {
     })
   })
 
+  it('should snapshot a canvas created by an iframe realm', async () => {
+    const iframe = document.createElement('iframe')
+    document.body.appendChild(iframe)
+    const foreignCanvas = iframe.contentWindow.document.createElement('canvas')
+    foreignCanvas.width = 20
+    foreignCanvas.height = 10
+    document.body.appendChild(foreignCanvas)
+    setSerializedNodeId(foreignCanvas, 43)
+    const observer = createCanvasObserver({
+      configuration: {
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'manual',
+        replayCanvasMimeType: 'image/webp',
+        replayCanvasMaxEncodedBytes: 1000
+      },
+      emit,
+      encodeBridge: {
+        encode: () =>
+          Promise.resolve({
+            dataUrl: 'data:image/webp;base64,QUJD',
+            width: 20,
+            height: 10
+          }),
+        stop: jasmine.createSpy('stop')
+      }
+    })
+
+    try {
+      expect(foreignCanvas instanceof HTMLCanvasElement).toBeFalse()
+      expect(await observer.snapshot(foreignCanvas)).toEqual({ ok: true })
+      expect(emit).toHaveBeenCalledWith(
+        jasmine.objectContaining({
+          data: jasmine.objectContaining({ id: 43 })
+        })
+      )
+    } finally {
+      observer.stop()
+      foreignCanvas.remove()
+      iframe.remove()
+    }
+  })
+
   it('should not emit when publication membership changes during encoding', async () => {
     let releaseEncode
     let isNodeActive = true

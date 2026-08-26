@@ -2,6 +2,7 @@
 
 ## v3.3.11
 
+- fix(rum): record Wujie iframe-realm form and canvas updates inside open Shadow DOM
 - fix(rum): harden shadow dom action naming
 - fix: update lock
 

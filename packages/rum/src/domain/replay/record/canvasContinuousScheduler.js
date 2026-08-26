@@ -25,8 +25,7 @@ var MAX_CONTINUOUS_CANVAS_SCAN_PER_RUN = 64
 function isContinuousCanvasRecordingEnabled(configuration) {
   return (
     configuration.replayCanvasEnabled &&
-    configuration.replayCanvasMode === 'auto' &&
-    configuration.replayCanvasSampling !== 'all'
+    configuration.replayCanvasMode === 'auto'
   )
 }
 

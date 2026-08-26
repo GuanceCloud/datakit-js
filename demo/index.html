@@ -757,7 +757,14 @@
       ;(function () {
         var pendingRequests = (window.__shadowActionDemoRequests = [])
 
-        function recordRequest(url, transport) {
+        function recordRequest(
+          url,
+          transport,
+          status,
+          success,
+          accepted,
+          startedAt
+        ) {
           var requestUrl = String(url || '')
           if (
             requestUrl.indexOf('cn3-rum-openway.guance.com') === -1 ||
@@ -774,6 +781,11 @@
             transport: transport,
             path: parsedUrl.pathname,
             encoding: parsedUrl.searchParams.get('encoding') || 'none',
+            status: status,
+            success: success === true,
+            accepted: accepted,
+            startedAt: startedAt || Date.now(),
+            completedAt: Date.now(),
             timestamp: new Date().toISOString()
           }
           pendingRequests.push(request)
@@ -785,11 +797,25 @@
         if (window.fetch) {
           var originalFetch = window.fetch
           window.fetch = function (input, init) {
-            recordRequest(
-              typeof input === 'string' ? input : input && input.url,
-              'fetch'
+            var url = typeof input === 'string' ? input : input && input.url
+            var startedAt = Date.now()
+            var request = originalFetch.apply(this, arguments)
+            request.then(
+              function (response) {
+                recordRequest(
+                  url,
+                  'fetch',
+                  response.status,
+                  response.ok,
+                  undefined,
+                  startedAt
+                )
+              },
+              function () {
+                recordRequest(url, 'fetch', 0, false, undefined, startedAt)
+              }
             )
-            return originalFetch.apply(this, arguments)
+            return request
           }
         }
 
@@ -800,7 +826,22 @@
           return originalOpen.apply(this, arguments)
         }
         window.XMLHttpRequest.prototype.send = function () {
-          recordRequest(this.__shadowActionDemoUrl, 'xhr')
+          var request = this
+          var startedAt = Date.now()
+          this.addEventListener(
+            'loadend',
+            function () {
+              recordRequest(
+                request.__shadowActionDemoUrl,
+                'xhr',
+                request.status,
+                request.status >= 200 && request.status < 300,
+                undefined,
+                startedAt
+              )
+            },
+            { once: true }
+          )
           return originalSend.apply(this, arguments)
         }
 
@@ -809,8 +850,17 @@
             window.navigator
           )
           window.navigator.sendBeacon = function (url, data) {
-            recordRequest(url, 'sendBeacon')
-            return originalSendBeacon(url, data)
+            var startedAt = Date.now()
+            var accepted = originalSendBeacon(url, data)
+            recordRequest(
+              url,
+              'sendBeacon',
+              undefined,
+              false,
+              accepted,
+              startedAt
+            )
+            return accepted
           }
         }
       })()
@@ -1654,20 +1704,20 @@
         >
           <div class="demo-section__head">
             <div>
-              <div class="demo-section__title">Shadow DOM Action Inspector</div>
+              <div class="demo-section__title">Wujie Action & Replay Inspector</div>
               <div class="demo-section__desc">
                 模拟 Wujie 的 iframe + 开放 Shadow DOM。按钮由 iframe realm
-                创建后挂载到 ShadowRoot，用于检查跨 realm Action 名称和带
-                <code>::shadow</code> 边界的 selector，并上报到 cn3。
+                创建后挂载到 ShadowRoot，用于检查跨 realm Action、表单输入、
+                嵌套 open ShadowRoot 和 Canvas Replay，并上报到 cn3。
               </div>
               <div class="demo-flow">
                 <div class="demo-flow__step">1. create in iframe realm</div>
                 <div class="demo-flow__step">2. mount in ShadowRoot</div>
-                <div class="demo-flow__step">3. build shadow selector</div>
-                <div class="demo-flow__step">4. inspect cn3 intake</div>
+                <div class="demo-flow__step">3. mutate input/shadow/canvas</div>
+                <div class="demo-flow__step">4. inspect cn3 replay intake</div>
               </div>
             </div>
-            <div class="demo-section__pill">RUM Action</div>
+            <div class="demo-section__pill">RUM Action + Replay</div>
           </div>
           <div class="demo-section__body">
             <div class="demo-side">
@@ -1686,6 +1736,16 @@
                   <div id="shadow-action-target-realm">none</div>
                   <div>selector</div>
                   <div id="shadow-action-selector">none</div>
+                  <div>replay state</div>
+                  <div id="shadow-replay-status">waiting for realm nodes</div>
+                  <div>input node</div>
+                  <div id="shadow-replay-input-id">none</div>
+                  <div>canvas node</div>
+                  <div id="shadow-replay-canvas-id">none</div>
+                  <div>late shadow node</div>
+                  <div id="shadow-replay-late-shadow-id">none</div>
+                  <div>replay intake</div>
+                  <div id="shadow-replay-request">waiting</div>
                 </div>
               </div>
               <div class="demo-card">
@@ -1697,6 +1757,9 @@
                 <div class="demo-toolbar">
                   <button id="shadow-action-cross-realm-trigger" type="button">
                     run iframe realm pointer sequence
+                  </button>
+                  <button id="shadow-replay-cross-realm-trigger" type="button">
+                    run Wujie replay sequence
                   </button>
                 </div>
               </div>
@@ -1860,6 +1923,26 @@
           targetRealm: '',
           validation: '',
           awaitingAction: false,
+          replayStatus: 'waiting for realm nodes',
+          replayRequest: 'waiting',
+          replayStarted: false,
+          replayRequestStartIndex: 0,
+          replayBaselineSequence: 0,
+          replayAcceptanceTimer: undefined,
+          replayAcceptanceAttempts: 0,
+          replayCoverageEnd: 0,
+          canvasSnapshotResult: undefined,
+          replayCoverage: {
+            input: false,
+            mutation: false,
+            canvasMutation: false
+          },
+          replayNodes: undefined,
+          replayNodeIds: {
+            input: undefined,
+            canvas: undefined,
+            lateShadow: undefined
+          },
           requests: (window.__shadowActionDemoRequests || []).slice(),
           event: null
         })
@@ -1875,6 +1958,21 @@
             'shadow-action-target-realm'
           )
           var selectorElement = document.getElementById('shadow-action-selector')
+          var replayStatusElement = document.getElementById(
+            'shadow-replay-status'
+          )
+          var replayInputIdElement = document.getElementById(
+            'shadow-replay-input-id'
+          )
+          var replayCanvasIdElement = document.getElementById(
+            'shadow-replay-canvas-id'
+          )
+          var replayLateShadowIdElement = document.getElementById(
+            'shadow-replay-late-shadow-id'
+          )
+          var replayRequestElement = document.getElementById(
+            'shadow-replay-request'
+          )
           var outputElement = document.getElementById('shadow-action-output')
           if (
             !runIdElement ||
@@ -1882,7 +1980,12 @@
             !expectedNameElement ||
             !nameElement ||
             !targetRealmElement ||
-            !selectorElement
+            !selectorElement ||
+            !replayStatusElement ||
+            !replayInputIdElement ||
+            !replayCanvasIdElement ||
+            !replayLateShadowIdElement ||
+            !replayRequestElement
           ) {
             return
           }
@@ -1892,15 +1995,157 @@
           nameElement.textContent = state.actionName || 'none'
           targetRealmElement.textContent = state.targetRealm || 'none'
           selectorElement.textContent = state.selector || 'none'
-          if (state.event && outputElement) {
+          replayStatusElement.textContent = state.replayStatus
+          replayInputIdElement.textContent =
+            state.replayNodeIds.input === undefined
+              ? 'none'
+              : String(state.replayNodeIds.input)
+          replayCanvasIdElement.textContent =
+            state.replayNodeIds.canvas === undefined
+              ? 'none'
+              : String(state.replayNodeIds.canvas)
+          replayLateShadowIdElement.textContent =
+            state.replayNodeIds.lateShadow === undefined
+              ? 'none'
+              : String(state.replayNodeIds.lateShadow)
+          replayRequestElement.textContent = state.replayRequest
+          if (outputElement) {
             outputElement.textContent = JSON.stringify(
-              Object.assign({}, state.event, {
+              {
+                runId: state.runId,
+                action: state.event,
+                replayStatus: state.replayStatus,
+                replayNodeIds: state.replayNodeIds,
+                replayCoverage: state.replayCoverage,
+                replayCoverageEnd: state.replayCoverageEnd,
+                canvasSnapshotResult: state.canvasSnapshotResult,
+                replayRequest: state.replayRequest,
                 requests: state.requests
-              }),
+              },
               null,
               2
             )
           }
+        }
+
+        function getReplaySegmentFlushHistory() {
+          var rum = window.DATAFLUX_RUM
+          if (
+            !rum ||
+            typeof rum.getReplaySegmentFlushHistoryForDebug !== 'function'
+          ) {
+            return []
+          }
+          return rum.getReplaySegmentFlushHistoryForDebug() || []
+        }
+
+        function getLastReplaySegmentSequence() {
+          return getReplaySegmentFlushHistory().reduce(function (
+            latest,
+            segment
+          ) {
+            return Math.max(latest, segment.sequence || 0)
+          }, 0)
+        }
+
+        function refreshReplayAcceptance() {
+          var coverage = {
+            input: false,
+            mutation: false,
+            canvasMutation: false
+          }
+          var coverageEnd = 0
+          getReplaySegmentFlushHistory().forEach(function (segment) {
+            if ((segment.sequence || 0) <= state.replayBaselineSequence) {
+              return
+            }
+            var counts = segment.recordCountsByType || {}
+            if (
+              counts.input > 0 ||
+              counts.mutation > 0 ||
+              counts.canvas_mutation > 0
+            ) {
+              coverageEnd = Math.max(coverageEnd, segment.end || 0)
+            }
+            coverage.input = coverage.input || counts.input > 0
+            coverage.mutation = coverage.mutation || counts.mutation > 0
+            coverage.canvasMutation =
+              coverage.canvasMutation || counts.canvas_mutation > 0
+          })
+          state.replayCoverage = coverage
+          state.replayCoverageEnd = coverageEnd
+
+          var replayRequests = state.requests
+            .slice(state.replayRequestStartIndex)
+            .filter(function (request) {
+              return request.kind === 'replay'
+            })
+          var successfulRequest = replayRequests.find(function (request) {
+            return (
+              request.success === true && request.startedAt >= coverageEnd
+            )
+          })
+          var lastRequest = replayRequests[replayRequests.length - 1]
+          if (lastRequest) {
+            state.replayRequest =
+              lastRequest.transport +
+              ' ' +
+              lastRequest.encoding +
+              (lastRequest.status === undefined
+                ? lastRequest.accepted
+                  ? ' accepted by browser; server response unavailable'
+                  : ' rejected by browser'
+                : ' HTTP ' + lastRequest.status)
+          }
+
+          var passed =
+            successfulRequest &&
+            coverage.input &&
+            coverage.mutation &&
+            coverage.canvasMutation
+          if (passed) {
+            window.clearInterval(state.replayAcceptanceTimer)
+            state.replayAcceptanceTimer = undefined
+            state.replayRequest =
+              successfulRequest.transport +
+              ' ' +
+              successfulRequest.encoding +
+              ' HTTP ' +
+              successfulRequest.status
+            state.replayStatus =
+              'passed: cn3 2xx and post-run input + shadow mutation + canvas mutation'
+          } else if (lastRequest && lastRequest.success === false) {
+            state.replayStatus =
+              lastRequest.transport === 'sendBeacon' && lastRequest.accepted
+                ? 'browser queued replay beacon; waiting for verifiable 2xx upload'
+                : 'replay upload failed; HTTP ' + lastRequest.status
+          } else {
+            state.replayStatus =
+              'waiting for cn3 2xx and post-run input + shadow mutation + canvas mutation'
+          }
+          render()
+          return passed
+        }
+
+        function startReplayAcceptancePolling() {
+          window.clearInterval(state.replayAcceptanceTimer)
+          state.replayAcceptanceAttempts = 0
+          if (refreshReplayAcceptance()) {
+            return
+          }
+          state.replayAcceptanceTimer = window.setInterval(function () {
+            state.replayAcceptanceAttempts += 1
+            if (refreshReplayAcceptance()) {
+              return
+            }
+            if (state.replayAcceptanceAttempts >= 120) {
+              window.clearInterval(state.replayAcceptanceTimer)
+              state.replayAcceptanceTimer = undefined
+              state.replayStatus =
+                'timeout: missing cn3 2xx or post-run replay record coverage'
+              render()
+            }
+          }, 250)
         }
 
         window.__shadowActionDemoRecordRequest = function (request) {
@@ -1910,10 +2155,18 @@
           if (
             state.event &&
             request.kind === 'event' &&
-            request.encoding === 'deflate'
+            request.encoding === 'deflate' &&
+            request.success === true
           ) {
             state.status =
-              'cn3 event intake request observed; ' + (state.validation || 'unchecked')
+              'cn3 event intake HTTP ' +
+              request.status +
+              '; ' +
+              (state.validation || 'unchecked')
+          }
+          if (state.replayStarted && request.kind === 'replay') {
+            refreshReplayAcceptance()
+            return
           }
           render()
         }
@@ -2017,8 +2270,8 @@
             super()
             var root = this.attachShadow({ mode: 'open' })
             root.innerHTML =
-              '<style>:host{display:block}.panel{display:grid;gap:14px;padding:18px;border:1px solid #c7d4e2;border-radius:16px;background:linear-gradient(180deg,#f7fbff,#fff)}.title{font-weight:700}.realm{font-size:12px;color:#58677a}.actions{display:flex;flex-wrap:wrap;gap:10px}button{min-height:40px;padding:0 14px;border:1px solid #6f8dac;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
-              '<div class="panel"><div class="title">Wujie-like iframe + open ShadowRoot</div><div class="realm">Buttons below are created by iframe.contentDocument, then adopted into this ShadowRoot.</div><div class="actions"><nested-shadow-action-demo data-testid="nested-shadow-host"></nested-shadow-action-demo></div></div>'
+              '<style>:host{display:block}.panel{display:grid;gap:14px;padding:18px;border:1px solid #c7d4e2;border-radius:16px;background:linear-gradient(180deg,#f7fbff,#fff)}.title{font-weight:700}.realm{font-size:12px;color:#58677a}.actions,.replay{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.replay{padding-top:14px;border-top:1px solid #dbe4ee}.replay input[type="text"]{min-height:38px;min-width:260px;padding:0 10px;border:1px solid #8aa0b8;border-radius:8px}.replay canvas{width:220px;height:90px;border:1px solid #8aa0b8;border-radius:8px;background:#fff}.late-shadow-host{min-width:220px;min-height:40px;padding:8px;border:1px dashed #8aa0b8;border-radius:8px}button{min-height:40px;padding:0 14px;border:1px solid #6f8dac;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:650}</style>' +
+              '<div class="panel"><div class="title">Wujie-like iframe + open ShadowRoot</div><div class="realm">All controls below are created by iframe.contentDocument, then adopted into this ShadowRoot.</div><div class="actions"><nested-shadow-action-demo data-testid="nested-shadow-host"></nested-shadow-action-demo></div><div class="replay" data-testid="wujie-replay-surface"></div></div>'
           }
 
           connectedCallback() {
@@ -2037,6 +2290,7 @@
                   return
                 }
                 var actions = root.querySelector('.actions')
+                var replay = root.querySelector('.replay')
                 var nestedDemo = root.querySelector('nested-shadow-action-demo')
                 var labels = [
                   '新增',
@@ -2062,6 +2316,67 @@
                   button.appendChild(text)
                   actions.insertBefore(button, nestedDemo)
                 })
+
+                var input = realmDocument.createElement('input')
+                input.type = 'text'
+                input.placeholder = 'Wujie replay input'
+                input.setAttribute('data-testid', 'wujie-replay-input')
+                var checkboxLabel = realmDocument.createElement('label')
+                var checkbox = realmDocument.createElement('input')
+                checkbox.type = 'checkbox'
+                checkbox.setAttribute('data-testid', 'wujie-replay-checkbox')
+                checkboxLabel.appendChild(checkbox)
+                checkboxLabel.appendChild(
+                  realmDocument.createTextNode(' approved')
+                )
+                var liveText = realmDocument.createElement('strong')
+                liveText.setAttribute('data-testid', 'wujie-replay-live-text')
+                liveText.textContent = 'waiting for replay sequence'
+                var canvas = realmDocument.createElement('canvas')
+                canvas.width = 440
+                canvas.height = 180
+                canvas.setAttribute('data-testid', 'wujie-replay-canvas')
+                var lateShadowHost = realmDocument.createElement('section')
+                lateShadowHost.className = 'late-shadow-host'
+                lateShadowHost.setAttribute(
+                  'data-testid',
+                  'wujie-replay-late-shadow-host'
+                )
+                var lateShadowRoot = lateShadowHost.attachShadow({ mode: 'open' })
+                var lateShadowContent = realmDocument.createElement('div')
+                lateShadowContent.setAttribute(
+                  'data-testid',
+                  'wujie-replay-late-shadow-content'
+                )
+                lateShadowContent.style.cssText =
+                  'padding:8px;border-radius:6px;background:#e9f7ef;color:#15663b'
+                lateShadowContent.textContent = 'nested open ShadowRoot ready'
+                lateShadowRoot.appendChild(lateShadowContent)
+                replay.appendChild(input)
+                replay.appendChild(checkboxLabel)
+                replay.appendChild(liveText)
+                replay.appendChild(canvas)
+                replay.appendChild(lateShadowHost)
+
+                var context = canvas.getContext('2d')
+                context.fillStyle = '#e8f2ff'
+                context.fillRect(0, 0, canvas.width, canvas.height)
+                context.fillStyle = '#2457d6'
+                context.font = '28px sans-serif'
+                context.fillText('Wujie replay baseline', 24, 96)
+                state.replayNodes = {
+                  input: input,
+                  checkbox: checkbox,
+                  liveText: liveText,
+                  canvas: canvas,
+                  context: context,
+                  lateShadowHost: lateShadowHost,
+                  lateShadowContent: lateShadowContent,
+                  realmWindow: realmFrame.contentWindow
+                }
+                state.replayStatus =
+                  'realm nodes ready; wait for recorder ids, then run'
+                render()
               },
               { once: true }
             )
@@ -2078,6 +2393,124 @@
         if (!window.customElements.get('shadow-action-demo')) {
           window.customElements.define('shadow-action-demo', ShadowActionDemo)
         }
+
+        function refreshReplayNodeIds() {
+          var rum = window.DATAFLUX_RUM
+          var nodes = state.replayNodes
+          if (
+            !rum ||
+            !nodes ||
+            typeof rum.getSerializedNodeIdForDebug !== 'function'
+          ) {
+            return false
+          }
+          state.replayNodeIds.input = rum.getSerializedNodeIdForDebug(
+            nodes.input
+          )
+          state.replayNodeIds.canvas = rum.getSerializedNodeIdForDebug(
+            nodes.canvas
+          )
+          state.replayNodeIds.lateShadow = rum.getSerializedNodeIdForDebug(
+            nodes.lateShadowContent
+          )
+          render()
+          return (
+            state.replayNodeIds.input !== undefined &&
+            state.replayNodeIds.canvas !== undefined &&
+            state.replayNodeIds.lateShadow !== undefined
+          )
+        }
+
+        function waitForReplayNodes(callback, attempt) {
+          attempt = attempt || 0
+          if (refreshReplayNodeIds()) {
+            callback()
+            return
+          }
+          if (attempt >= 100) {
+            state.replayStatus = 'recorder node id timeout'
+            render()
+            return
+          }
+          window.setTimeout(function () {
+            waitForReplayNodes(callback, attempt + 1)
+          }, 50)
+        }
+
+        function runWujieReplaySequence() {
+          var rum = window.DATAFLUX_RUM
+          var nodes = state.replayNodes
+          if (!rum || !nodes) {
+            state.replayStatus = 'RUM or realm nodes are not ready'
+            render()
+            return
+          }
+          window.clearInterval(state.replayAcceptanceTimer)
+          state.replayRequestStartIndex = state.requests.length
+          state.replayBaselineSequence = getLastReplaySegmentSequence()
+          state.replayCoverage = {
+            input: false,
+            mutation: false,
+            canvasMutation: false
+          }
+          state.replayCoverageEnd = 0
+          state.canvasSnapshotResult = undefined
+          state.replayStarted = true
+          state.replayRequest = 'waiting for /rum/replay'
+          state.replayStatus = 'waiting for recorder node ids'
+          if (typeof rum.startSessionReplayRecording === 'function') {
+            rum.startSessionReplayRecording({ force: true })
+          }
+          render()
+
+          waitForReplayNodes(function () {
+            var replayValue =
+              'Wujie replay ' + state.runId + ' ' + Date.now()
+            nodes.input.value = replayValue
+            nodes.checkbox.checked = !nodes.checkbox.checked
+            nodes.liveText.textContent = replayValue
+
+            nodes.lateShadowContent.textContent =
+              replayValue + ' late ShadowRoot'
+
+            nodes.context.fillStyle = '#102a56'
+            nodes.context.fillRect(
+              0,
+              0,
+              nodes.canvas.width,
+              nodes.canvas.height
+            )
+            nodes.context.fillStyle = '#6ee7b7'
+            nodes.context.font = '26px sans-serif'
+            nodes.context.fillText(replayValue, 20, 100)
+
+            if (typeof rum.flushReplayMutationsForDebug === 'function') {
+              rum.flushReplayMutationsForDebug()
+            }
+            refreshReplayNodeIds()
+            var canvasSnapshot =
+              typeof rum.snapshotCanvas === 'function'
+                ? rum.snapshotCanvas(nodes.canvas, { force: true })
+                : Promise.resolve({ ok: false, reason: 'api_missing' })
+            if (typeof rum.addAction === 'function') {
+              rum.addAction('Wujie Session Replay Acceptance', {
+                wujie_replay_run_id: state.runId,
+                wujie_input_node_id: state.replayNodeIds.input,
+                wujie_canvas_node_id: state.replayNodeIds.canvas,
+                wujie_late_shadow_node_id:
+                  state.replayNodeIds.lateShadow
+              })
+            }
+            Promise.resolve(canvasSnapshot).then(function (result) {
+              state.canvasSnapshotResult = result
+              startReplayAcceptancePolling()
+            })
+          })
+        }
+
+        document
+          .getElementById('shadow-replay-cross-realm-trigger')
+          .addEventListener('click', runWujieReplaySequence)
         document
           .getElementById('shadow-action-cross-realm-trigger')
           .addEventListener('click', function () {
