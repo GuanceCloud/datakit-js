@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.3.11
+
+- fix(rum): harden shadow dom action naming
+- fix: update lock
+
 ## v3.3.10
 
 - docs(rum): document shadow dom actions
