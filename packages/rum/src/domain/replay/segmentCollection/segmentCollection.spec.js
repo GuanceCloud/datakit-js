@@ -18,6 +18,11 @@ import {
   createDeflateEncoder,
   DeflateEncoderStreamId
 } from '../../deflate/deflateEncoder'
+import {
+  SESSION_REPLAY_TIME_ANCHOR_BACKPRESSURE_RESERVE,
+  SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+  SESSION_REPLAY_TIME_ANCHOR_TAG
+} from '../timeAnchor'
 
 describe('segmentCollection', () => {
   let originalSegmentBytesLimit
@@ -1255,6 +1260,85 @@ describe('segmentCollection', () => {
     expect(send).toHaveBeenCalledTimes(1)
   })
 
+  it('should preserve multiple real deflate groups over 60 KiB after a normal stop', () => {
+    const listeners = {}
+    const worker = {
+      postMessage: jasmine.createSpy('postMessage'),
+      addEventListener: (type, listener) => {
+        listeners[type] = listener
+      },
+      removeEventListener: jasmine.createSpy('removeEventListener')
+    }
+    const encoder = createDeflateEncoder(
+      worker,
+      DeflateEncoderStreamId.REPLAY
+    )
+    const flushPendingActionsSync = spyOn(
+      encoder,
+      'flushPendingActionsSync'
+    ).and.callThrough()
+    const send = jasmine.createSpy('send')
+    const sendOnExit = jasmine.createSpy('sendOnExit')
+    const lifeCycle = new LifeCycle()
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit },
+      encoder,
+      false,
+      {
+        // Mirrors a final anchor that could not be admitted. A normal stop must
+        // not synchronously consume and clear older shared encoder groups.
+        beforePageExitFlush: () => false
+      }
+    )
+
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.FullSnapshot,
+        timestamp: 10,
+        data: { value: 'a'.repeat(40000) }
+      })
+    ).toBeTrue()
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 20,
+        data: { value: 'b'.repeat(40000) }
+      })
+    ).toBeTrue()
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+    const pendingRawBytesBeforeStop = encoder.getPendingRawBytesCount()
+    expect(pendingRawBytesBeforeStop).toBeGreaterThan(SEGMENT_BYTES_LIMIT)
+
+    segmentCollection.stop('manual_stop')
+
+    expect(flushPendingActionsSync).not.toHaveBeenCalled()
+    expect(encoder.getPendingRawBytesCount()).toBe(pendingRawBytesBeforeStop)
+    expect(send).not.toHaveBeenCalled()
+
+    for (let id = 0; id < 4; id += 1) {
+      listeners.message({
+        data: {
+          type: 'wrote',
+          id,
+          streamId: DeflateEncoderStreamId.REPLAY,
+          additionalBytesCount: 1,
+          result: new Uint8Array([id + 1]),
+          trailer: new Uint8Array([9])
+        }
+      })
+    }
+
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(sendOnExit).not.toHaveBeenCalled()
+    expect(encoder.getPendingRawBytesCount()).toBe(0)
+  })
+
   it('should keep async encoder boundaries ordered across recorder generations', () => {
     const listeners = {}
     const worker = {
@@ -2235,6 +2319,146 @@ describe('segmentCollection', () => {
       segmentCollection.$rWasLastAddRecordBackpressured()
     ).toBeFalse()
     expect(encoder.write.calls.count()).toBeGreaterThan(writesBeforeRecovery)
+  })
+
+  it('should admit only the fixed internal time anchor through a bounded encoder reserve', () => {
+    const lifeCycle = new LifeCycle()
+    const onReplayResetNeeded = jasmine.createSpy('onReplayResetNeeded')
+    const encoder = createEncoder()
+    let pendingRawBytesCount = 0
+    encoder.getPendingRawBytesCount = () => pendingRawBytesCount
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      encoder,
+      false,
+      {
+        pendingRawBytesLimit: 1000,
+        onReplayResetNeeded
+      }
+    )
+
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.FullSnapshot,
+        timestamp: 10
+      })
+    ).toBeTrue()
+    pendingRawBytesCount = 950
+    expect(
+      segmentCollection.addRecord({
+        type: SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+        timestamp: 20,
+        data: {
+          tag: SESSION_REPLAY_TIME_ANCHOR_TAG,
+          payload: {}
+        }
+      })
+    ).toBeTrue()
+    expect(
+      segmentCollection.$rWasLastAddRecordBackpressured()
+    ).toBeFalse()
+    jasmine.clock().tick(0)
+    expect(onReplayResetNeeded).not.toHaveBeenCalled()
+
+    pendingRawBytesCount =
+      1000 + SESSION_REPLAY_TIME_ANCHOR_BACKPRESSURE_RESERVE
+    expect(
+      segmentCollection.addRecord({
+        type: SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+        timestamp: 25,
+        data: {
+          tag: SESSION_REPLAY_TIME_ANCHOR_TAG,
+          payload: {}
+        }
+      })
+    ).toBeFalse()
+    expect(
+      segmentCollection.$rWasLastAddRecordBackpressured()
+    ).toBeTrue()
+    jasmine.clock().tick(0)
+    expect(onReplayResetNeeded).not.toHaveBeenCalled()
+
+    // Keep the exemption exact: another non-incremental record still protects
+    // the replay chain through the existing baseline recovery.
+    pendingRawBytesCount = 0
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 30
+      })
+    ).toBeTrue()
+    pendingRawBytesCount = 950
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.Focus,
+        timestamp: 40,
+        data: { has_focus: true }
+      })
+    ).toBeFalse()
+    pendingRawBytesCount = 0
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 50
+      })
+    ).toBeFalse()
+  })
+
+  it('should reject an oversized same-tag Custom record and invalidate the baseline', () => {
+    const lifeCycle = new LifeCycle()
+    const onReplayResetNeeded = jasmine.createSpy('onReplayResetNeeded')
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      },
+      createEncoder(),
+      false,
+      {
+        pendingRawBytesLimit: 1000,
+        onReplayResetNeeded
+      }
+    )
+
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.FullSnapshot,
+        timestamp: 10
+      })
+    ).toBeTrue()
+    expect(
+      segmentCollection.addRecord({
+        type: SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+        timestamp: 20,
+        data: {
+          tag: SESSION_REPLAY_TIME_ANCHOR_TAG,
+          payload: {},
+          padding: 'x'.repeat(5000)
+        }
+      })
+    ).toBeFalse()
+    jasmine.clock().tick(0)
+
+    expect(onReplayResetNeeded).toHaveBeenCalledOnceWith('record_too_large')
+    expect(
+      segmentCollection.addRecord({
+        type: RecordType.IncrementalSnapshot,
+        timestamp: 30
+      })
+    ).toBeFalse()
   })
 
   it('should stringify the same backpressured record only once across retries', () => {

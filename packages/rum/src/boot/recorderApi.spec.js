@@ -170,6 +170,10 @@ describe('recorderApi', () => {
 
     const recorderApi = makeRecorderApi(startRecordingImpl, () => worker)
     const lifeCycle = new LifeCycle()
+    const recordingStates = []
+    recorderApi.recordingStateObservable.subscribe((isRecording) => {
+      recordingStates.push(isRecording)
+    })
 
     recorderApi.start()
     recorderApi.onRumStart(
@@ -194,6 +198,7 @@ describe('recorderApi', () => {
     )
 
     expect(recorderApi.isRecording()).toBeTrue()
+    expect(recordingStates).toEqual([true])
 
     recorderApi.takeSubsequentFullSnapshot()
     expect(takeSubsequentFullSnapshot).toHaveBeenCalled()
@@ -268,6 +273,7 @@ describe('recorderApi', () => {
       reason: PageExitReason.UNLOADING
     })
     expect(stopRecording).toHaveBeenCalledWith(PageExitReason.UNLOADING)
+    expect(recordingStates).toEqual([true, false])
 
     recorderApi.takeSubsequentFullSnapshot()
     expect(takeSubsequentFullSnapshot).toHaveBeenCalledTimes(1)

@@ -6,7 +6,8 @@ import {
   bridgeSupports,
   BridgeCapability,
   PageExitReason,
-  monitorError
+  monitorError,
+  Observable
 } from '@cloudcare/browser-core'
 
 import { makeRecorderApiStub } from './recorderApiStub'
@@ -45,6 +46,16 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
     return makeRecorderApiStub()
   }
 
+  var recordingStateObservable = new Observable()
+  var lastNotifiedRecordingState = false
+  function notifyRecordingState(isRecording) {
+    if (lastNotifiedRecordingState === isRecording) {
+      return
+    }
+    lastNotifiedRecordingState = isRecording
+    recordingStateObservable.notify(isRecording)
+  }
+
   var state = {
     $rStatus: RecorderStatus.Stopped
   }
@@ -62,6 +73,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
       state.$rIsStopped()
     ) {
       state = { $rStatus: RecorderStatus.Stopped }
+      notifyRecordingState(false)
     }
   }
 
@@ -74,8 +86,10 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
   var stopStrategy = function () {
     unloadRecoveryGeneration += 1
     state = { $rStatus: RecorderStatus.Stopped }
+    notifyRecordingState(false)
   }
   return {
+    recordingStateObservable: recordingStateObservable,
     start: function (options) {
       startStrategy(options)
     },
@@ -268,6 +282,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
                   state.$rToken === recordingToken
                 ) {
                   state = { $rStatus: RecorderStatus.Stopped }
+                  notifyRecordingState(false)
                 }
               }
             )
@@ -300,6 +315,7 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
               $rFlushMutations:
                 recordingImpl.flushReplayMutationsForDebug || noop
             }
+            notifyRecordingState(true)
             if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
               state.$rDebug = [
                 recordingImpl.getLastAutoCanvasSnapshotResultForDebug ||
@@ -351,8 +367,14 @@ export function makeRecorderApi(startRecordingImpl, createDeflateWorkerImpl) {
         state = {
           $rStatus: RecorderStatus.Stopped
         }
-        if (stopRecording) {
-          stopRecording(flushReason)
+        try {
+          if (stopRecording) {
+            stopRecording(flushReason)
+          }
+        } finally {
+          // Publish the final View only after the recorder has attempted its
+          // last mutation/canvas/time-anchor boundary.
+          notifyRecordingState(false)
         }
       }
       if (state.$rStatus === RecorderStatus.IntentToStart) {

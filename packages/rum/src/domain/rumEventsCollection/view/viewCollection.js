@@ -35,7 +35,8 @@ export function startViewCollection(
     configuration,
     locationChangeObservable,
     !configuration.trackViewsManually,
-    initialViewOptions
+    initialViewOptions,
+    recorderApi
   )
 }
 function computePerformanceViewDetails(navigationTimings) {

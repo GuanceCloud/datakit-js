@@ -44,6 +44,19 @@ export function startRecording(
   var pendingStopReason
   var stoppedNotificationSent = false
   var flushRecorderBeforePageExit = function () {}
+  var emitReplayTimeAnchor = function () {}
+  var finalReplayTimeAnchorRequested = false
+  var hasSegmentCollection = false
+  function emitFinalReplayTimeAnchor() {
+    if (finalReplayTimeAnchorRequested) {
+      return true
+    }
+    var admissionResult = emitReplayTimeAnchor()
+    if (admissionResult === true) {
+      finalReplayTimeAnchorRequested = true
+    }
+    return admissionResult
+  }
   var replayResetRequestedBeforeRecorder = false
   var requestReplayReset = function () {
     replayResetRequestedBeforeRecorder = true
@@ -70,6 +83,16 @@ export function startRecording(
       pendingStopRequested = true
       pendingStopReason = flushReason
       return
+    }
+    if (!hasSegmentCollection) {
+      try {
+        emitFinalReplayTimeAnchor()
+      } catch (error) {
+        addTelemetryDebug('Session Replay final time anchor failed.', {
+          reason: flushReason,
+          error: String(error)
+        })
+      }
     }
     isRecordingStopped = true
     var firstCleanupError
@@ -129,10 +152,12 @@ export function startRecording(
     var beginMandatoryFullSnapshotRecovery = function () {}
     var discardMandatoryFullSnapshotRecovery = function () {}
     var wasLastEmitBackpressured = function () {}
+    var replayTimeAnchorsEnabled = true
     if (!canUseEventBridge()) {
       const session = sessionManager.findTrackedSession()
       let isRecordErrorSessionReplay =
         session && session.errorSessionReplayAllowed && !session.sessionHasError
+      replayTimeAnchorsEnabled = !isRecordErrorSessionReplay
       var segmentCollection = startSegmentCollection(
         lifeCycle,
         configuration,
@@ -143,7 +168,7 @@ export function startRecording(
         isRecordErrorSessionReplay,
         {
           beforePageExitFlush: function (pageExitEvent) {
-            flushRecorderBeforePageExit(pageExitEvent)
+            return flushRecorderBeforePageExit(pageExitEvent)
           },
           onReplayResetNeeded: function (reason) {
             if (__BUILD_ENV__REPLAY_DEBUG_ENABLED__) {
@@ -176,6 +201,7 @@ export function startRecording(
             : undefined
         }
       )
+      hasSegmentCollection = true
       addRecord = segmentCollection.addRecord
       addBaselineRecords = segmentCollection.$rAddBaselineRecords
       wasLastEmitBackpressured =
@@ -203,7 +229,12 @@ export function startRecording(
             ({ previousState, newState }) => {
               if (!previousState.hasError && newState.hasError) {
                 isRecordErrorSessionReplay = false
+                replayTimeAnchorsEnabled = true
                 unlockSegment()
+                // Error-only recordings do not need periodic anchor-only
+                // segments while their buffer is locked. Establish the live
+                // timeline immediately when the first error unlocks it.
+                emitReplayTimeAnchor()
               }
             }
           )
@@ -248,6 +279,9 @@ export function startRecording(
           beginMandatoryFullSnapshotRecovery,
         $rOnMandatoryFullSnapshotAbandoned:
           discardMandatoryFullSnapshotRecovery,
+        $rShouldEmitTimeAnchor: function () {
+          return replayTimeAnchorsEnabled
+        },
         onFullSnapshotFailure: stopRecording
       })
     } else {
@@ -262,12 +296,17 @@ export function startRecording(
           beginMandatoryFullSnapshotRecovery,
         $rOnMandatoryFullSnapshotAbandoned:
           discardMandatoryFullSnapshotRecovery,
+        $rShouldEmitTimeAnchor: function () {
+          return replayTimeAnchorsEnabled
+        },
         onFullSnapshotFailure: stopRecording
       })
     }
     if (!_record || typeof _record.stop !== 'function') {
       throw new Error('Session Replay recorder failed to initialize.')
     }
+    emitReplayTimeAnchor =
+      _record.$rEmitTimeAnchor || emitReplayTimeAnchor
     var stopRecorder = _record.stop
     if (stopSegmentCollection) {
       // Remove the provisional entry and restore the intended successful-stop
@@ -311,7 +350,7 @@ export function startRecording(
         // mutations are never attached to the stale pre-overflow snapshot.
         _record.flushMutations()
         flushCanvasCommands()
-        return
+        return emitReplayTimeAnchor()
       }
       if (!flushScheduledFullSnapshot()) {
         // The segment is still writable in this hook. Give a paged raw/shadow
@@ -324,6 +363,7 @@ export function startRecording(
       // still writable here, including the second unload pass after synchronous
       // encoder backpressure is released.
       flushCanvasCommands()
+      return emitFinalReplayTimeAnchor()
     }
     requestReplayReset = createReplayResetScheduler(
       takeSubsequentFullSnapshot,

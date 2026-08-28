@@ -4,9 +4,22 @@ import {
   getScrollY,
   assign,
   addTelemetryDebug,
-  getParentNode
+  getParentNode,
+  setInterval,
+  clearInterval
 } from '@cloudcare/browser-core'
 import { getViewportDimension } from '../../initViewportObservable'
+import {
+  SESSION_REPLAY_TIME_ANCHOR_INTERVAL,
+  SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+  SESSION_REPLAY_TIME_ANCHOR_TAG
+} from '../timeAnchor'
+
+export {
+  SESSION_REPLAY_TIME_ANCHOR_INTERVAL,
+  SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+  SESSION_REPLAY_TIME_ANCHOR_TAG
+} from '../timeAnchor'
 
 import { RecordType, IncrementalSource } from '../../../types'
 import { NodePrivacyLevel } from '../../../constants'
@@ -508,6 +521,58 @@ export function record(options) {
   var pendingFullSnapshotBaselineRecords
   var pendingFullSnapshotBaselineMutationVersion
   var fullSnapshotWasPublished = false
+  var lastReplayTimeAnchorTimestamp
+  function emitReplayTimeAnchor() {
+    if (
+      !fullSnapshotWasPublished ||
+      recordStopping ||
+      recordStopped ||
+      (options.$rShouldEmitTimeAnchor &&
+        !options.$rShouldEmitTimeAnchor())
+    ) {
+      return
+    }
+    // A time anchor carries no replay state and is safe to drop. Do not put it
+    // on the shared deferred queue: `true` must mean that the segment layer
+    // actually admitted it, especially for the final stop boundary.
+    if (
+      suppressRecordsUntilFullSnapshot ||
+      mutationPublicationBarrier ||
+      deferredRecords.length ||
+      deferredRecordAdmissionTimeout !== undefined ||
+      pendingMutationPayload ||
+      pendingMutationAdmissionQueue.length ||
+      mutationAdmissionEmitInProgress ||
+      mutationSourceFlushInProgress
+    ) {
+      return false
+    }
+    var timestamp = timeStampNow()
+    if (timestamp === lastReplayTimeAnchorTimestamp) {
+      return true
+    }
+    lastEmitWasLocallyBackpressured = false
+    var accepted = rawEmit({
+      type: SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+      timestamp: timestamp,
+      data: {
+        tag: SESSION_REPLAY_TIME_ANCHOR_TAG,
+        payload: {}
+      }
+    })
+    if (accepted === false) {
+      return false
+    }
+    lastReplayTimeAnchorTimestamp = timestamp
+    return true
+  }
+  var replayTimeAnchorIntervalId = setInterval(
+    emitReplayTimeAnchor,
+    SESSION_REPLAY_TIME_ANCHOR_INTERVAL
+  )
+  registerInitializationCleanup(function () {
+    clearInterval(replayTimeAnchorIntervalId)
+  })
   var domMutationVersion = 0
   var mutationActivityTargets = new Set()
   var mutationActivityFlushScheduled = false
@@ -650,9 +715,14 @@ export function record(options) {
       ) {
         return true
       }
-      if (!pendingPublicationToken.$rCanceled) {
-        return false
-      }
+      // Serializing a newly added ancestor can stage an already-published
+      // descendant before the paired remove is normalized.  This is the
+      // common DOM shape used by Cocos Creator when it inserts a wrapper and
+      // moves its existing GameCanvas into it.  Until the destination add is
+      // queued, the node still belongs to the previously published replay
+      // tree and must remain eligible for the atomic remove + add transition.
+      // A genuinely new node has no previous publication token and therefore
+      // still falls through to false below.
     }
     var publicationToken = publicationTokenByNode.get(node)
     return Boolean(
@@ -3523,6 +3593,9 @@ export function record(options) {
     }
     recordStopped = true
     ;[
+      function () {
+        clearInterval(replayTimeAnchorIntervalId)
+      },
       discardPendingMutationAdmissions,
       cancelMutationSourceFlushContinuation,
       cancelScheduledFullSnapshot,
@@ -3563,6 +3636,7 @@ export function record(options) {
 
   var recorder = {
     stop: stopRecording,
+    $rEmitTimeAnchor: emitReplayTimeAnchor,
     $rFlushCanvasCommands: function () {
       // A previous boundary pass may have preserved the exact Canvas record
       // after transient segment/encoder backpressure. Retry that object before
@@ -3629,6 +3703,7 @@ function createInactiveRecorder() {
   var noop = function () {}
   var recorder = {
     stop: noop,
+    $rEmitTimeAnchor: noop,
     $rFlushCanvasCommands: noop,
     snapshotCanvas: noop,
     getSerializedNodeIdForDebug: noop,

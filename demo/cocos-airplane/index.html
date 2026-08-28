@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+
+  <title>Cocos Creator Airplane | Session Replay</title>
+
+  <!--http://www.html5rocks.com/en/mobile/mobifying/-->
+  <meta name="viewport"
+        content="width=device-width,user-scalable=no,initial-scale=1,minimum-scale=1,maximum-scale=1,minimal-ui=true"/>
+
+  <!--https://developer.apple.com/library/safari/documentation/AppleApplications/Reference/SafariHTMLRef/Articles/MetaTags.html-->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
+
+  <!-- force webkit on 360 -->
+  <meta name="renderer" content="webkit"/>
+  <meta name="force-rendering" content="webkit"/>
+  <!-- force edge on IE -->
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1"/>
+  <meta name="msapplication-tap-highlight" content="no">
+
+  <!-- force full screen on some browser -->
+  <meta name="full-screen" content="yes"/>
+  <meta name="x5-fullscreen" content="true"/>
+  <meta name="360-fullscreen" content="true"/>
+
+  <!-- force screen orientation on some browser -->
+  <meta name="screen-orientation" content="auto"/>
+  <meta name="x5-orientation" content="auto">
+
+  <!--fix fireball/issues/3568 -->
+  <!--<meta name="browsermode" content="application">-->
+  <meta name="x5-page-mode" content="app">
+
+  <!--<link rel="apple-touch-icon" href=".png" />-->
+  <!--<link rel="apple-touch-icon-precomposed" href=".png" />-->
+
+  <link rel="stylesheet" type="text/css" href="style.css"/>
+
+</head>
+<body>
+  <canvas id="GameCanvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+
+  <aside class="replay-panel" aria-label="Session Replay diagnostics">
+    <div class="replay-panel__header">
+      <div>
+        <span id="replay-dot" class="replay-dot"></span>
+        <strong>Cocos Creator Replay</strong>
+      </div>
+      <span id="recording-status">starting</span>
+    </div>
+    <dl class="replay-metrics">
+      <div><dt>Engine</dt><dd>Cocos Creator 3.3.2</dd></div>
+      <div><dt>Scene</dt><dd>3D Airplane Battle</dd></div>
+      <div><dt>Game FPS</dt><dd id="metric-game-fps">waiting</dd></div>
+      <div><dt>Draw calls</dt><dd id="metric-draws">waiting</dd></div>
+      <div><dt>Frame time</dt><dd id="metric-frame-time">waiting</dd></div>
+      <div><dt>Triangles</dt><dd id="metric-triangles">waiting</dd></div>
+      <div><dt>Sampling</dt><dd id="metric-sampling">4 FPS target</dd></div>
+      <div><dt>Clarity</dt><dd id="metric-clarity">balanced</dd></div>
+      <div><dt>Snapshots</dt><dd id="metric-snapshots">0</dd></div>
+      <div><dt>Capture</dt><dd id="metric-capture-size">waiting</dd></div>
+      <div><dt>Mutation</dt><dd id="metric-bytes">waiting</dd></div>
+      <div><dt>Latency</dt><dd id="metric-latency">waiting</dd></div>
+      <div><dt>Session</dt><dd id="metric-session">waiting</dd></div>
+      <div><dt>View</dt><dd id="metric-view">waiting</dd></div>
+      <div><dt>Segment</dt><dd id="metric-segment">waiting</dd></div>
+    </dl>
+    <div class="replay-actions">
+      <button id="replay-toggle" type="button">Replay: on</button>
+      <button id="copy-session" type="button">Copy IDs</button>
+    </div>
+    <p class="replay-help">
+      点击画面开始战斗；按住并拖动控制飞机与连续射击。Replay SDK 和
+      WebGL 插件先于 Cocos 引擎加载。
+    </p>
+  </aside>
+
+  <pre id="replay-debug-json" hidden></pre>
+
+  <script src="/dataflux-rum.js"></script>
+  <script src="/dataflux-rum-webgl.js"></script>
+  <script src="replay-bootstrap.js"></script>
+
+<!-- Polyfills bundle. -->
+<script src="src/polyfills.bundle.js" charset="utf-8"> </script>
+
+<!-- SystemJS support. -->
+<script src="src/system.bundle.js" charset="utf-8"> </script>
+
+<!-- Import map -->
+<script src="src/import-map.json" type="systemjs-importmap" charset="utf-8"> </script>
+
+<script>
+    System.import('./index.js?replay=3').catch(function(err) { console.error(err); })
+</script>
+
+</body>
+</html>

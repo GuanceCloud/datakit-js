@@ -1,0 +1,245 @@
+html {
+  -ms-touch-action: none;
+}
+
+body, canvas, div {
+  display: block;
+  outline: none;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+
+  user-select: none;
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  -khtml-user-select: none;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+/* Remove spin of input type number */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+    /* display: none; <- Crashes Chrome on hover */
+    -webkit-appearance: none;
+    margin: 0; /* <-- Apparently some margin are still there even though it's hidden */
+}
+
+body {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  margin: 0;
+
+  cursor: default;
+  color: #888;
+  background-color: #333;
+
+  text-align: center;
+  font-family: Helvetica, Verdana, Arial, sans-serif;
+
+  display: flex;
+  flex-direction: column;
+}
+
+#Cocos2dGameContainer {
+  position: absolute;
+  margin: 0;
+  overflow: hidden;
+  left: 0px;
+  top: 0px;
+
+  display: -webkit-box;
+  -webkit-box-orient: horizontal;
+  -webkit-box-align: center;
+  -webkit-box-pack: center;
+}
+
+canvas {
+  background-color: rgba(0, 0, 0, 0);
+}
+
+a:link, a:visited {
+  color: #666;
+}
+
+a:active, a:hover {
+  color: #666;
+}
+
+p.header {
+  font-size: small;
+}
+
+p.footer {
+  font-size: x-small;
+}
+
+.replay-panel {
+  position: fixed;
+  z-index: 20;
+  top: 18px;
+  left: 18px;
+  width: min(310px, calc(100vw - 36px));
+  padding: 16px;
+  border: 1px solid rgba(102, 229, 255, 0.25);
+  border-radius: 16px;
+  background: rgba(4, 8, 24, 0.88);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+  color: #f5f7ff;
+  text-align: left;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.replay-panel__header,
+.replay-panel__header > div {
+  display: flex;
+  align-items: center;
+}
+
+.replay-panel__header {
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(102, 229, 255, 0.16);
+  font-size: 12px;
+}
+
+.replay-panel__header > div {
+  gap: 8px;
+}
+
+.replay-panel__header > span {
+  color: #94a3c5;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.replay-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff668f;
+  box-shadow: 0 0 14px currentColor;
+}
+
+.replay-dot.is-live {
+  color: #6fffc0;
+  background: currentColor;
+}
+
+.replay-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  margin: 12px 0;
+  overflow: hidden;
+  border: 1px solid rgba(102, 229, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(102, 229, 255, 0.14);
+}
+
+.replay-metrics > div {
+  min-width: 0;
+  padding: 9px 10px;
+  background: rgba(7, 13, 34, 0.96);
+}
+
+.replay-metrics dt {
+  margin-bottom: 3px;
+  color: #8290b5;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.replay-metrics dd {
+  overflow: hidden;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replay-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.replay-actions button {
+  min-height: 36px;
+  border: 1px solid rgba(102, 229, 255, 0.28);
+  border-radius: 9px;
+  background: rgba(102, 229, 255, 0.08);
+  color: #f5f7ff;
+  cursor: pointer;
+}
+
+.replay-actions button:hover {
+  border-color: #66e5ff;
+  background: rgba(102, 229, 255, 0.15);
+}
+
+.replay-help {
+  margin: 10px 0 0;
+  color: #94a3c5;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+@media (max-width: 900px) {
+  .replay-panel {
+    top: auto;
+    bottom: 12px;
+    left: 12px;
+    width: min(270px, calc(100vw - 24px));
+    padding: 12px;
+  }
+
+  .replay-metrics > div:nth-child(-n + 2) {
+    display: none;
+  }
+}
+
+.progress-bar {
+    background-color: #1a1a1a;
+    position: absolute;
+    left: 25%;
+    top: 80%;
+    height: 14px;
+    padding: 5px;
+    width: 50%;
+    /*margin: 0 -175px;         */
+    border-radius: 5px;
+    box-shadow: 0 1px 5px #000 inset, 0 1px 0 #444;
+}
+
+.progress-bar span {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .5) inset;
+    transition: width .4s ease-in-out;
+    background-color: #34c2e3;
+}
+
+.stripes span {
+    background-size: 30px 30px;
+    background-image: linear-gradient(135deg, rgba(255, 255, 255, .15) 25%, transparent 25%,
+                        transparent 50%, rgba(255, 255, 255, .15) 50%, rgba(255, 255, 255, .15) 75%,
+                        transparent 75%, transparent);
+
+    animation: animate-stripes 1s linear infinite;
+}
+
+@keyframes animate-stripes {
+    0% {background-position: 0 0;} 100% {background-position: 60px 0;}
+}
