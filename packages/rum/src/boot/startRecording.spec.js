@@ -1,6 +1,7 @@
 import {
   LifeCycle,
   LifeCycleEventType,
+  Observable,
   PageExitReason
 } from '@cloudcare/browser-core'
 import { startRecording } from './startRecording'
@@ -8,6 +9,11 @@ import { IncrementalSource, RecordType } from '../types'
 import { setSerializedNodeId } from '../domain/replay/record/serializationUtils'
 import { MAX_QUEUED_MUTATION_RECORDS } from '../domain/replay/record/mutationBatch'
 import { SEGMENT_DURATION_LIMIT } from '../domain/replay/segmentCollection/segmentCollection'
+import {
+  SESSION_REPLAY_TIME_ANCHOR_INTERVAL,
+  SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+  SESSION_REPLAY_TIME_ANCHOR_TAG
+} from '../domain/replay/record/record'
 
 describe('startRecording', () => {
   let originalBridge
@@ -39,6 +45,7 @@ describe('startRecording', () => {
   function createRecordApi() {
     return {
       stop: jasmine.createSpy('recordStop'),
+      $rEmitTimeAnchor: jasmine.createSpy('emitTimeAnchor'),
       $rFlushCanvasCommands: jasmine.createSpy('flushCanvasCommands'),
       takeSubsequentFullSnapshot: jasmine.createSpy(
         'takeSubsequentFullSnapshot'
@@ -149,6 +156,21 @@ describe('startRecording', () => {
     sendEvent.calls.reset()
     recording.stop('manual_stop')
     recording.stop('duplicate_stop')
+
+    const stopPayloads = parseBridgePayloads(sendEvent)
+    expect(stopPayloads).toEqual([
+      jasmine.objectContaining({
+        name: 'session_replay',
+        data: jasmine.objectContaining({
+          type: SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+          data: {
+            tag: SESSION_REPLAY_TIME_ANCHOR_TAG,
+            payload: {}
+          }
+        })
+      })
+    ])
+    sendEvent.calls.reset()
 
     lifeCycle.notify(LifeCycleEventType.VIEW_ENDED)
     lifeCycle.notify(LifeCycleEventType.VIEW_CREATED, {
@@ -589,14 +611,65 @@ describe('startRecording', () => {
     recording.stop('manual_stop')
 
     expect(recordApi.$rFlushCanvasCommands).toHaveBeenCalledTimes(1)
+    expect(recordApi.$rEmitTimeAnchor).toHaveBeenCalledTimes(1)
     expect(encoder.finish).toHaveBeenCalledTimes(1)
     expect(recordApi.stop).toHaveBeenCalledOnceWith('manual_stop', true)
     expect(
       recordApi.$rFlushCanvasCommands.calls.first().invocationOrder
     ).toBeLessThan(encoder.finish.calls.first().invocationOrder)
+    expect(
+      recordApi.$rEmitTimeAnchor.calls.first().invocationOrder
+    ).toBeLessThan(encoder.finish.calls.first().invocationOrder)
     expect(encoder.finish.calls.first().invocationOrder).toBeLessThan(
       recordApi.stop.calls.first().invocationOrder
     )
+  })
+
+  it('should admit the final time anchor without draining the normal-stop encoder backlog', () => {
+    const lifeCycle = new LifeCycle()
+    const encoder = createEncoder()
+    let pendingRawBytesCount = 0
+    encoder.getPendingRawBytesCount = () => pendingRawBytesCount
+    encoder.getPendingEncodedBytesCount = () => 0
+    encoder.estimateEncodedBytesCount = () => 1
+    encoder.flushPendingActionsSync = jasmine.createSpy(
+      'flushPendingActionsSync'
+    )
+    const recording = startRecording(
+      lifeCycle,
+      {
+        defaultPrivacyLevel: 'mask-user-input'
+      },
+      {
+        findTrackedSession: () => ({
+          id: 'session-1',
+          sessionReplayAllowed: true
+        })
+      },
+      {
+        findView: () => ({ id: 'view-current' })
+      },
+      encoder,
+      {
+        send: jasmine.createSpy('send'),
+        sendOnExit: jasmine.createSpy('sendOnExit')
+      }
+    )
+    encoder.write.calls.reset()
+    pendingRawBytesCount = 4 * 1024 * 1024
+
+    recording.stop('manual_stop')
+
+    expect(encoder.flushPendingActionsSync).not.toHaveBeenCalled()
+    expect(
+      encoder.write.calls
+        .allArgs()
+        .some(
+          (args) =>
+            typeof args[0] === 'string' &&
+            args[0].indexOf(SESSION_REPLAY_TIME_ANCHOR_TAG) !== -1
+        )
+    ).toBeTrue()
   })
 
   it('should flush Canvas commands before retiring the old view', () => {
@@ -1036,6 +1109,75 @@ describe('startRecording', () => {
     recording.stop()
 
     expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('should keep an idle error-only buffer compact and anchor it when the first error unlocks replay', () => {
+    jasmine.clock().install()
+    jasmine.clock().mockDate(new Date(0))
+    const sessionStateUpdateObservable = new Observable()
+    const encoder = createEncoder()
+    const send = jasmine.createSpy('send')
+    let recording
+
+    try {
+      recording = startRecording(
+        new LifeCycle(),
+        {
+          defaultPrivacyLevel: 'mask-user-input'
+        },
+        {
+          findTrackedSession: () => ({
+            id: 'session-1',
+            sessionReplayAllowed: true,
+            errorSessionReplayAllowed: true,
+            sessionHasError: false
+          }),
+          sessionStateUpdateObservable
+        },
+        {
+          findView: () => ({ id: 'view-current' })
+        },
+        encoder,
+        {
+          send,
+          sendOnExit: jasmine.createSpy('sendOnExit')
+        }
+      )
+
+      jasmine.clock().tick(SEGMENT_DURATION_LIMIT)
+      expect(encoder.finish).toHaveBeenCalledTimes(1)
+      const writesAfterInitialSegment = encoder.write.calls.count()
+
+      jasmine.clock().tick(60 * 60 * 1000)
+      expect(encoder.finish).toHaveBeenCalledTimes(1)
+      expect(encoder.write.calls.count()).toBe(writesAfterInitialSegment)
+      expect(send).not.toHaveBeenCalled()
+
+      sessionStateUpdateObservable.notify({
+        previousState: { hasError: false },
+        newState: { hasError: true }
+      })
+
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(
+        encoder.write.calls
+          .allArgs()
+          .some(
+            (args) =>
+              typeof args[0] === 'string' &&
+              args[0].indexOf(SESSION_REPLAY_TIME_ANCHOR_TAG) !== -1
+          )
+      ).toBeTrue()
+
+      jasmine.clock().tick(SEGMENT_DURATION_LIMIT)
+      expect(encoder.finish).toHaveBeenCalledTimes(2)
+      expect(send).toHaveBeenCalledTimes(2)
+    } finally {
+      if (recording) {
+        recording.stop()
+      }
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should roll back initialized resources when startup throws midway', () => {

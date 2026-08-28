@@ -4,7 +4,11 @@ import {
   Observable,
   PageExitReason
 } from '@cloudcare/browser-core'
-import { trackViews, THROTTLE_VIEW_UPDATE_PERIOD } from './trackViews'
+import {
+  trackViews,
+  THROTTLE_VIEW_UPDATE_PERIOD,
+  SESSION_KEEP_ALIVE_INTERVAL
+} from './trackViews'
 
 describe('trackViews', () => {
   let OriginalPerformanceObserver
@@ -867,7 +871,7 @@ describe('trackViews', () => {
     tracking.stop()
   })
 
-  it('should flush a view update immediately when the page exits because of unloading', () => {
+  it('should preserve unloading as the only page-exit update without Replay', () => {
     const lifeCycle = new LifeCycle()
     const updatedEvents = []
 
@@ -888,10 +892,15 @@ describe('trackViews', () => {
       false
     )
 
+    const exitReasons = [
+      PageExitReason.HIDDEN,
+      PageExitReason.FROZEN,
+      PageExitReason.PAGEHIDE,
+      PageExitReason.UNLOADING
+    ]
     const updatesBeforeExit = updatedEvents.length
-
-    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
-      reason: PageExitReason.UNLOADING
+    exitReasons.forEach((reason) => {
+      lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, { reason })
     })
 
     expect(updatedEvents.length).toBe(updatesBeforeExit + 1)
@@ -905,5 +914,190 @@ describe('trackViews', () => {
     )
 
     tracking.stop()
+  })
+
+  it('should flush every page-exit boundary while Session Replay is recording', () => {
+    const lifeCycle = new LifeCycle()
+    const updatedEvents = []
+    const recorderApi = {
+      isRecording: jasmine.createSpy('isRecording').and.returnValue(true)
+    }
+
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      {
+        pathname: '/checkout',
+        hash: '',
+        href: 'https://example.com/checkout'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      new Observable(),
+      false,
+      undefined,
+      recorderApi
+    )
+
+    const exitReasons = [
+      PageExitReason.HIDDEN,
+      PageExitReason.FROZEN,
+      PageExitReason.PAGEHIDE,
+      PageExitReason.UNLOADING
+    ]
+    const updatesBeforeExit = updatedEvents.length
+    exitReasons.forEach((reason) => {
+      lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, { reason })
+    })
+
+    expect(updatedEvents.length).toBe(updatesBeforeExit + exitReasons.length)
+
+    tracking.stop()
+  })
+
+  it('should publish one View update when Replay stops during unloading', () => {
+    const lifeCycle = new LifeCycle()
+    const updatedEvents = []
+    const recordingStateObservable = new Observable()
+    let isRecording = true
+    const recorderApi = {
+      isRecording: jasmine
+        .createSpy('isRecording')
+        .and.callFake(() => isRecording),
+      recordingStateObservable
+    }
+
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      {
+        pathname: '/checkout',
+        hash: '',
+        href: 'https://example.com/checkout'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      new Observable(),
+      false,
+      undefined,
+      recorderApi
+    )
+
+    // RecorderApi subscribes after View collection during RUM startup. It
+    // stops the recorder and notifies the final state in the same lifecycle
+    // turn, after the recorder has flushed its final Replay boundary.
+    lifeCycle.subscribe(LifeCycleEventType.PAGE_EXITED, ({ reason }) => {
+      if (reason === PageExitReason.UNLOADING) {
+        isRecording = false
+        recordingStateObservable.notify(false)
+      }
+    })
+
+    const updatesBeforeExit = updatedEvents.length
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.UNLOADING
+    })
+
+    expect(updatedEvents.length).toBe(updatesBeforeExit + 1)
+    tracking.stop()
+  })
+
+  it('should reuse the generic View keepalive while Session Replay is recording', () => {
+    const lifeCycle = new LifeCycle()
+    const updatedEvents = []
+    const recordingStateObservable = new Observable()
+    let isRecording = false
+    const recorderApi = {
+      isRecording: jasmine
+        .createSpy('isRecording')
+        .and.callFake(() => isRecording),
+      recordingStateObservable
+    }
+
+    lifeCycle.subscribe(LifeCycleEventType.VIEW_UPDATED, (event) => {
+      updatedEvents.push(event)
+    })
+
+    const tracking = trackViews(
+      {
+        pathname: '/checkout',
+        hash: '',
+        href: 'https://example.com/checkout'
+      },
+      lifeCycle,
+      new Observable(),
+      { excludedActivityUrls: [] },
+      new Observable(),
+      false,
+      undefined,
+      recorderApi
+    )
+
+    jasmine.clock().tick(60 * 1000)
+    const updatesBeforeRecording = updatedEvents.length
+    const recordingChecksBeforeIdleTick = recorderApi.isRecording.calls.count()
+    jasmine.clock().tick(60 * 1000)
+    expect(updatedEvents.length).toBe(updatesBeforeRecording)
+    expect(recorderApi.isRecording.calls.count()).toBe(
+      recordingChecksBeforeIdleTick
+    )
+
+    isRecording = true
+    recordingStateObservable.notify(true)
+    const updatesBeforeReplayHeartbeat = updatedEvents.length
+    const durationBeforeReplayHeartbeat =
+      updatedEvents[updatedEvents.length - 1].duration
+    const oneHour = 60 * 60 * 1000
+    const genericViewUpdatesPerHour = oneHour / SESSION_KEEP_ALIVE_INTERVAL
+    jasmine.clock().tick(oneHour)
+
+    // Replay does not add another periodic upload loop. The pre-existing
+    // generic View keepalive remains the only long-lived timer.
+    expect(updatedEvents.length).toBe(
+      updatesBeforeReplayHeartbeat + genericViewUpdatesPerHour
+    )
+    expect(
+      updatedEvents[updatedEvents.length - 1].duration -
+        durationBeforeReplayHeartbeat
+    ).toBeGreaterThanOrEqual(oneHour - SESSION_KEEP_ALIVE_INTERVAL)
+    expect(
+      updatedEvents[updatedEvents.length - 1].duration -
+        durationBeforeReplayHeartbeat
+    ).toBeLessThanOrEqual(oneHour)
+
+    jasmine.clock().tick(1234)
+    isRecording = false
+    const updatesBeforeReplayStop = updatedEvents.length
+    recordingStateObservable.notify(false)
+    expect(updatedEvents.length).toBe(updatesBeforeReplayStop + 1)
+    expect(
+      updatedEvents[updatedEvents.length - 1].duration -
+        durationBeforeReplayHeartbeat
+    ).toBe(oneHour + 1234)
+
+    jasmine.clock().tick(oneHour)
+    expect(updatedEvents.length).toBe(
+      updatesBeforeReplayStop + 1 + genericViewUpdatesPerHour
+    )
+
+    isRecording = true
+    recordingStateObservable.notify(true)
+    const updatesBeforeTrackingStop = updatedEvents.length
+    tracking.stop()
+    // end() owns the terminal View update and must not duplicate the Replay
+    // state transition update after endClocks has been set.
+    expect(updatedEvents.length).toBe(updatesBeforeTrackingStop + 1)
+    const updatesAfterStop = updatedEvents.length
+    isRecording = false
+    recordingStateObservable.notify(false)
+    recordingStateObservable.notify(true)
+    jasmine.clock().tick(oneHour)
+    expect(updatedEvents.length).toBe(updatesAfterStop)
   })
 })

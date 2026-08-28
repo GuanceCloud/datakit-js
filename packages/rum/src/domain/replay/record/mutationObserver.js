@@ -1405,7 +1405,8 @@ function processChildListMutations(
       parent
     )
     if (pendingRootTask) {
-      if (isNodePublished(node)) {
+      var pendingRootNodeWasPublished = isNodePublished(node)
+      if (pendingRootNodeWasPublished) {
         mutationTasksController.markPendingRootTaskPublishedDependency(
           pendingRootTask
         )
@@ -1417,18 +1418,27 @@ function processChildListMutations(
         // Several descendants can be removed in one batch. Rebuild the
         // unpublished root once after normalization instead of once per node.
         pendingRootTasksToRefresh.add(pendingRootTask)
+        if (!pendingRootNodeWasPublished) {
+          continue
+        }
+        // A published descendant can also be serialized under a newly added
+        // ancestor in its current destination.  It still needs a remove for
+        // the old replay-tree parent; otherwise the player builds a duplicate
+        // same-id node and later Canvas mutations have an ambiguous target.
+        // Refresh the destination add above, then fall through and emit the
+        // paired published removal below.
+      } else {
+        pendingRootTasksToRefresh.delete(pendingRootTask)
+        if (
+          !mutationTasksController.handlePendingRootRemoval(
+            pendingRootTask,
+            node
+          )
+        ) {
+          pendingRootRemovalOverflowed = true
+        }
         continue
       }
-      pendingRootTasksToRefresh.delete(pendingRootTask)
-      if (
-        !mutationTasksController.handlePendingRootRemoval(
-          pendingRootTask,
-          node
-        )
-      ) {
-        pendingRootRemovalOverflowed = true
-      }
-      continue
     }
     if (hasSerializedNode(node) && isNodePublished(node)) {
       var removeMutation = {

@@ -39,7 +39,8 @@ export function trackViews(
   configuration,
   locationChangeObservable,
   areViewsTrackedAutomatically,
-  initialViewOptions
+  initialViewOptions,
+  recorderApi
 ) {
   var eventBridgeAvailable = canUseEventBridge()
   var isWebViewActive =
@@ -62,7 +63,8 @@ export function trackViews(
       startClocks,
       viewOptions,
       canMatchSoftNavigation,
-      fallbackNavigationType
+      fallbackNavigationType,
+      recorderApi
     )
     activeViews.add(newlyCreatedView)
     newlyCreatedView.stopObservable.subscribe(function () {
@@ -186,10 +188,7 @@ export function trackViews(
     },
     startView: function (options, startClocks) {
       var fallbackNavigationType
-      if (
-        pendingNavigation &&
-        pendingNavigation[0] === location.href
-      ) {
+      if (pendingNavigation && pendingNavigation[0] === location.href) {
         fallbackNavigationType = pendingNavigation[1]
       }
       pendingNavigation = undefined
@@ -235,7 +234,8 @@ function newView(
   startClocks,
   viewOptions,
   canMatchSoftNavigation,
-  fallbackNavigationType
+  fallbackNavigationType,
+  recorderApi
 ) {
   // Setup initial values
   if (startClocks === undefined) {
@@ -325,10 +325,51 @@ function newView(
     triggerViewUpdate,
     SESSION_KEEP_ALIVE_INTERVAL
   )
+  var replayWasRecording = Boolean(
+    recorderApi &&
+    typeof recorderApi.isRecording === 'function' &&
+    recorderApi.isRecording()
+  )
+  function updateReplayRecordingState(isRecording) {
+    if (replayWasRecording === isRecording) {
+      return
+    }
+    replayWasRecording = isRecording
+    if (endClocks === undefined) {
+      // Recorder start/stop boundaries need an immediate View update. The
+      // existing five-minute View keepalive already covers long-lived active
+      // Views, so Replay must not add a second one-minute upload loop.
+      triggerViewUpdate()
+    }
+  }
+  var replayRecordingStateSubscription
+  var hasReplayRecordingStateObservable = Boolean(
+    recorderApi &&
+    recorderApi.recordingStateObservable &&
+    typeof recorderApi.recordingStateObservable.subscribe === 'function'
+  )
+  if (hasReplayRecordingStateObservable) {
+    replayRecordingStateSubscription =
+      recorderApi.recordingStateObservable.subscribe(updateReplayRecordingState)
+  }
   const pageMayExitSubscription = lifeCycle.subscribe(
     LifeCycleEventType.PAGE_EXITED,
     (pageMayExitEvent) => {
-      if (pageMayExitEvent.reason === PageExitReason.UNLOADING) {
+      var isReplayRecording =
+        recorderApi &&
+        typeof recorderApi.isRecording === 'function' &&
+        recorderApi.isRecording()
+      if (
+        (pageMayExitEvent.reason === PageExitReason.UNLOADING &&
+          (!isReplayRecording || !hasReplayRecordingStateObservable)) ||
+        (pageMayExitEvent.reason !== PageExitReason.UNLOADING &&
+          isReplayRecording)
+      ) {
+        // Replay segments flush at every page-exit boundary. Keep the View
+        // duration aligned with those boundaries only while Replay is active;
+        // unloading remains the existing update boundary for every RUM view.
+        // An active recorder with a state observable publishes its final View
+        // after stop, so do not publish the same unload boundary twice here.
         triggerViewUpdate()
       }
     }
@@ -400,6 +441,9 @@ function newView(
         endClocks: endClocks
       })
       clearInterval(keepAliveIntervalId)
+      if (replayRecordingStateSubscription) {
+        replayRecordingStateSubscription.unsubscribe()
+      }
       setViewEnd(endClocks.relative)
       stopCommonViewMetricsTracking()
       pageMayExitSubscription.unsubscribe()

@@ -4,6 +4,9 @@ import {
   MAX_FULL_SNAPSHOT_CANVAS_BASELINE_COUNT,
   MAX_DEFERRED_RECORDS,
   MAX_DEFERRED_RECORD_APPROX_BYTES,
+  SESSION_REPLAY_TIME_ANCHOR_INTERVAL,
+  SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+  SESSION_REPLAY_TIME_ANCHOR_TAG,
   record
 } from './record'
 import {
@@ -160,6 +163,96 @@ describe('replay/record/record', () => {
           event.type === RecordType.FullSnapshot)
     )
     expect(subsequentSnapshotEvents.length).toBe(3)
+  })
+
+  it('should cap an idle hour at 60 time anchors and stop the timer', () => {
+    jasmine.clock().install()
+    jasmine.clock().mockDate(new Date(1000))
+    const emittedRecords = []
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => emittedRecords.push(event),
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+      emittedRecords.length = 0
+      const oneHour = 60 * 60 * 1000
+
+      jasmine.clock().tick(oneHour)
+
+      expect(emittedRecords.length).toBe(60)
+      expect(emittedRecords[0]).toEqual({
+        type: SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+        timestamp: 1000 + SESSION_REPLAY_TIME_ANCHOR_INTERVAL,
+        data: {
+          tag: SESSION_REPLAY_TIME_ANCHOR_TAG,
+          payload: {}
+        }
+      })
+      expect(emittedRecords[emittedRecords.length - 1]).toEqual(
+        jasmine.objectContaining({
+          type: SESSION_REPLAY_TIME_ANCHOR_RECORD_TYPE,
+          timestamp: 1000 + oneHour,
+          data: {
+            tag: SESSION_REPLAY_TIME_ANCHOR_TAG,
+            payload: {}
+          }
+        })
+      )
+
+      recorder.stop()
+      jasmine.clock().tick(oneHour)
+      expect(emittedRecords.length).toBe(60)
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
+  })
+
+  it('should report time anchor success only after direct segment admission', () => {
+    jasmine.clock().install()
+    jasmine.clock().mockDate(new Date(1000))
+    const emittedRecords = []
+    let shouldAccept = true
+    let recorder
+
+    try {
+      recorder = record({
+        emit: (event) => {
+          emittedRecords.push(event)
+          return shouldAccept
+        },
+        configuration: {
+          defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+        },
+        lifeCycle: createLifeCycle()
+      })
+      emittedRecords.length = 0
+      shouldAccept = false
+
+      expect(recorder.$rEmitTimeAnchor()).toBeFalse()
+      expect(emittedRecords.length).toBe(1)
+
+      // A rejected stateless anchor must not enter the shared deferred retry
+      // queue where stop() could mistake queueing for actual admission.
+      jasmine.clock().tick(100)
+      expect(emittedRecords.length).toBe(1)
+
+      shouldAccept = true
+      expect(recorder.$rEmitTimeAnchor()).toBeTrue()
+      expect(emittedRecords.length).toBe(2)
+    } finally {
+      if (recorder) {
+        recorder.stop()
+      }
+      jasmine.clock().uninstall()
+    }
   })
 
   it('should submit Meta, Focus and Full Snapshot through one baseline transaction', () => {
@@ -9239,6 +9332,55 @@ describe('replay/record/record', () => {
     )
     expect(canvasMutation).toBeDefined()
     expectReplayCompatibleCanvasMutation(canvasMutation, jasmine.any(Number), 20, 10)
+  })
+
+  it('should pair a published canvas removal with its new wrapper add', () => {
+    const canvas = document.createElement('canvas')
+    canvas.id = 'GameCanvas'
+    container.appendChild(canvas)
+    const emittedRecords = []
+    const recorder = record({
+      emit: (event) => emittedRecords.push(event),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW
+      },
+      lifeCycle: createLifeCycle()
+    })
+    const canvasId = recorder.getSerializedNodeIdForDebug(canvas)
+    emittedRecords.length = 0
+
+    const wrapper = document.createElement('div')
+    wrapper.id = 'Cocos3dGameContainer'
+    canvas.parentNode.insertBefore(wrapper, canvas)
+    wrapper.appendChild(canvas)
+    recorder.flushMutations()
+
+    const mutationSnapshots = emittedRecords.filter(
+      (event) =>
+        event.type === RecordType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation
+    )
+    expect(
+      mutationSnapshots.some((event) =>
+        event.data.adds.some(
+          (add) =>
+            add.node &&
+            add.node.attributes &&
+            add.node.attributes.id === 'Cocos3dGameContainer'
+        )
+      )
+    ).toBeTrue()
+    expect(
+      mutationSnapshots.some((event) =>
+        event.data.removes.some((remove) => remove.id === canvasId)
+      )
+    )
+      .withContext(
+        JSON.stringify(mutationSnapshots.map((event) => event.data))
+      )
+      .toBeTrue()
+
+    recorder.stop()
   })
 
   it('should not let a bitmap overtake a backpressured dimension mutation', async () => {

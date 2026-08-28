@@ -12,6 +12,10 @@ import {
 import { IncrementalSource, RecordType } from '../../../types'
 import { buildReplayPayload } from './buildReplayPayload'
 import { createSegment } from './segment'
+import {
+  isSessionReplayTimeAnchor,
+  SESSION_REPLAY_TIME_ANCHOR_BACKPRESSURE_RESERVE
+} from '../timeAnchor'
 
 export var SEGMENT_DURATION_LIMIT = 5 * ONE_SECOND
 /**
@@ -147,7 +151,7 @@ export function doStartSegmentCollection(
       return
     }
     try {
-      options.beforePageExitFlush(pageExitEvent)
+      return options.beforePageExitFlush(pageExitEvent)
     } catch (error) {
       addTelemetryDebug(
         'Session Replay failed to prepare records before page exit.',
@@ -922,6 +926,12 @@ export function doStartSegmentCollection(
     const segmentState = state
     const segment = segmentState.$rSegment
     var synchronousEncoderError
+    var isTimeAnchor = isSessionReplayTimeAnchor(record)
+    var recordPendingRawBytesLimit = pendingRawBytesLimit
+    if (isTimeAnchor && recordPendingRawBytesLimit !== undefined) {
+      recordPendingRawBytesLimit +=
+        SESSION_REPLAY_TIME_ANCHOR_BACKPRESSURE_RESERVE
+    }
     var addResult = segment.addRecord(
       record,
       function (encodedBytesCount, error) {
@@ -966,7 +976,11 @@ export function doStartSegmentCollection(
         scheduleReplayResetNotification()
       },
       ignoreSegmentBytesLimit ? undefined : SEGMENT_BYTES_LIMIT,
-      pendingRawBytesLimit,
+      // The SDK time anchor is a fixed, tiny, state-free boundary. Give it a
+      // small bounded reserve behind the regular worker backlog without
+      // synchronously draining that backlog; segment size and async action
+      // ordering remain unchanged.
+      recordPendingRawBytesLimit,
       serializedRecordData
     )
     if (synchronousEncoderError) {
@@ -1198,6 +1212,7 @@ export function doStartSegmentCollection(
     $rAddBaselineRecords: addBaselineRecords,
     addRecord: function (record) {
       lastAddRecordWasBackpressured = false
+      var isTimeAnchor = isSessionReplayTimeAnchor(record)
       if (state.$rStatus === SegmentCollectionStatus.Stopped) {
         return rejectRecordAdmission()
       }
@@ -1256,7 +1271,10 @@ export function doStartSegmentCollection(
         // publishes any DOM membership carried by the record. Returning false
         // lets it cancel that staged membership, so the existing baseline
         // remains valid and does not need a global reset.
-        if (record.type !== RecordType.IncrementalSnapshot) {
+        if (
+          record.type !== RecordType.IncrementalSnapshot &&
+          !isTimeAnchor
+        ) {
           failBaselineGeneration(
             addResult.$rGeneration,
             record.type === RecordType.FullSnapshot
@@ -1294,7 +1312,10 @@ export function doStartSegmentCollection(
         // See the synchronous incremental rejection rationale above. Full
         // snapshots and non-incremental baseline records retain the existing
         // recovery semantics.
-        if (record.type !== RecordType.IncrementalSnapshot) {
+        if (
+          record.type !== RecordType.IncrementalSnapshot &&
+          !isTimeAnchor
+        ) {
           failBaselineGeneration(
             addResult.$rGeneration,
             record.type === RecordType.FullSnapshot
@@ -1417,11 +1438,8 @@ export function doStartSegmentCollection(
         }
       }
       flushSegment(flushReason || 'stop', undefined, true)
-      // Normal stop/session renewal must not force a potentially large worker
-      // backlog onto the main thread or apply the unload delivery budget. The
-      // encoder queues a reset after each finish, so a restarted recorder can
-      // append a new generation while these old results complete in order.
-      // Only a real unload needs the bounded synchronous drain.
+      // Normal stop/session renewal leaves shared encoder groups to complete
+      // asynchronously. Only a real unload uses the bounded synchronous drain.
       flushPendingSegmentEncodingsForUnload(flushReason)
       unsubscribeLifecycle()
     }
