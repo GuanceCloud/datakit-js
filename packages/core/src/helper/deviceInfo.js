@@ -16,6 +16,23 @@ function getUserAgent() {
   return getNavigator().userAgent || ''
 }
 
+var HIGH_ENTROPY_VALUES_TIMEOUT = 100
+
+function applyWindowsPlatformVersion(deviceInfo, platformVersion) {
+  if (typeof platformVersion !== 'string') {
+    return
+  }
+  var majorPlatformVersionString = platformVersion.split('.')[0]
+  if (!/^\d+$/.test(majorPlatformVersionString)) {
+    return
+  }
+  var majorPlatformVersion = parseInt(majorPlatformVersionString, 10)
+  if (majorPlatformVersion >= 13) {
+    deviceInfo.osVersion = '11'
+    deviceInfo.osVersionMajor = '11'
+  }
+}
+
 function getTarget(target, context) {
   return target || context || {}
 }
@@ -654,6 +671,61 @@ export function getDeviceInfo() {
     device: MethodLibrary.getDeviceType(target),
     timeZone: MethodLibrary.getTimeZone(),
     userAgent: getUserAgent()
+  }
+}
+
+export function getDeviceInfoWithHighEntropyValues(callback) {
+  const currentDeviceInfo = getDeviceInfo()
+  const browserWindow = getBrowserWindow()
+  const navigator = getNavigator()
+  const userAgentData = navigator.userAgentData
+  if (
+    !browserWindow ||
+    currentDeviceInfo.os !== 'Windows' ||
+    !userAgentData ||
+    userAgentData.platform !== 'Windows' ||
+    typeof userAgentData.getHighEntropyValues !== 'function'
+  ) {
+    callback(currentDeviceInfo)
+    return
+  }
+
+  var completed = false
+  var timeoutId
+  function complete(highEntropyValues) {
+    if (completed) {
+      return
+    }
+    completed = true
+    if (timeoutId !== undefined) {
+      browserWindow.clearTimeout(timeoutId)
+    }
+    if (highEntropyValues) {
+      applyWindowsPlatformVersion(
+        currentDeviceInfo,
+        highEntropyValues.platformVersion
+      )
+    }
+    callback(currentDeviceInfo)
+  }
+
+  try {
+    const highEntropyValues = userAgentData.getHighEntropyValues([
+      'platformVersion'
+    ])
+    if (!highEntropyValues || typeof highEntropyValues.then !== 'function') {
+      complete()
+      return
+    }
+    timeoutId = browserWindow.setTimeout(
+      complete,
+      HIGH_ENTROPY_VALUES_TIMEOUT
+    )
+    highEntropyValues.then(complete, function () {
+      complete()
+    })
+  } catch (e) {
+    complete()
   }
 }
 

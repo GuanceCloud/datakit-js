@@ -21,7 +21,13 @@ describe('assembly', () => {
     }
   })
 
-  function startAssembly(lifeCycle, beforeSend, reportError, sessionManager) {
+  function startAssembly(
+    lifeCycle,
+    beforeSend,
+    reportError,
+    sessionManager,
+    getDeviceInfoImp
+  ) {
     startRumAssembly(
       {
         sdkName: 'rum-sdk',
@@ -82,7 +88,8 @@ describe('assembly', () => {
         user: { email: 'test@example.com' },
         hasReplay: true
       }),
-      reportError || jasmine.createSpy('reportError')
+      reportError || jasmine.createSpy('reportError'),
+      getDeviceInfoImp
     )
   }
 
@@ -179,5 +186,36 @@ describe('assembly', () => {
     })
 
     expect(collected).not.toHaveBeenCalled()
+  })
+
+  it('should buffer raw events until high entropy device information is ready', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    let resolveDeviceInfo
+    startAssembly(lifeCycle, undefined, undefined, undefined, (callback) => {
+      resolveDeviceInfo = callback
+    })
+    lifeCycle.subscribe(LifeCycleEventType.RUM_EVENT_COLLECTED, collected)
+
+    lifeCycle.notify(LifeCycleEventType.RAW_RUM_EVENT_COLLECTED, {
+      startTime: 13,
+      rawRumEvent: {
+        type: RumEventType.RESOURCE,
+        resource: { url: 'https://cdn.example.com/deferred.js' }
+      }
+    })
+
+    expect(collected).not.toHaveBeenCalled()
+    resolveDeviceInfo({
+      os: 'Windows',
+      osVersion: '11',
+      osVersionMajor: '11'
+    })
+
+    expect(collected.calls.mostRecent().args[0].device).toEqual({
+      os: 'Windows',
+      os_version: '11',
+      os_version_major: '11'
+    })
   })
 })

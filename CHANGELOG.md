@@ -38,6 +38,7 @@
 
 ## Unreleased
 
+- fix(core): identify Windows 11 from User-Agent Client Hints while preserving the legacy User-Agent fallback
 - fix(rum): resolve cross-realm Shadow DOM targets and prevent arbitrary text from becoming automatic Action names
 - fix(rum): collect click Action names and selectors across open Shadow DOM boundaries
 - feat(rum): enrich SPA route Views with Chrome Soft Navigation FCP/LCP and preserve route navigation type as a compatible fallback

@@ -1,4 +1,8 @@
-import { deviceInfo, getDeviceInfo } from './deviceInfo'
+import {
+  deviceInfo,
+  getDeviceInfo,
+  getDeviceInfoWithHighEntropyValues
+} from './deviceInfo'
 
 describe('deviceInfo', () => {
   let originalUserAgent
@@ -6,6 +10,7 @@ describe('deviceInfo', () => {
   let originalBrowserLanguage
   let originalConnection
   let originalMimeTypes
+  let originalUserAgentDataDescriptor
 
   beforeEach(() => {
     originalUserAgent = window.navigator.userAgent
@@ -13,6 +18,10 @@ describe('deviceInfo', () => {
     originalBrowserLanguage = window.navigator.browserLanguage
     originalConnection = window.navigator.connection
     originalMimeTypes = window.navigator.mimeTypes
+    originalUserAgentDataDescriptor = Object.getOwnPropertyDescriptor(
+      window.navigator,
+      'userAgentData'
+    )
   })
 
   afterEach(() => {
@@ -36,6 +45,15 @@ describe('deviceInfo', () => {
       configurable: true,
       value: originalMimeTypes
     })
+    if (originalUserAgentDataDescriptor) {
+      Object.defineProperty(
+        window.navigator,
+        'userAgentData',
+        originalUserAgentDataDescriptor
+      )
+    } else {
+      delete window.navigator.userAgentData
+    }
   })
 
   it('should expose a backward-compatible deviceInfo object', () => {
@@ -161,4 +179,123 @@ describe('deviceInfo', () => {
     expect(info.userAgent).toContain('Macintosh')
     expect(getDeviceInfo()).toEqual(jasmine.any(Object))
   })
+
+  it('should identify Windows 11 from high entropy platformVersion', (done) => {
+    setWindowsNavigator({
+      platform: 'Windows',
+      getHighEntropyValues: jasmine
+        .createSpy('getHighEntropyValues')
+        .and.returnValue(Promise.resolve({ platformVersion: '13.0.0' }))
+    })
+
+    getDeviceInfoWithHighEntropyValues((info) => {
+      expect(info.os).toBe('Windows')
+      expect(info.osVersion).toBe('11')
+      expect(info.osVersionMajor).toBe('11')
+      expect(
+        window.navigator.userAgentData.getHighEntropyValues
+      ).toHaveBeenCalledWith(['platformVersion'])
+      done()
+    })
+  })
+
+  it('should identify Windows 10 from high entropy platformVersion', (done) => {
+    setWindowsNavigator({
+      platform: 'Windows',
+      getHighEntropyValues: () =>
+        Promise.resolve({ platformVersion: '10.0.0' })
+    })
+
+    getDeviceInfoWithHighEntropyValues((info) => {
+      expect(info.osVersion).toBe('10.0')
+      expect(info.osVersionMajor).toBe('10')
+      done()
+    })
+  })
+
+  it('should preserve legacy Windows versions when platformVersion is zero', (
+    done
+  ) => {
+    setWindowsNavigator(
+      {
+        platform: 'Windows',
+        getHighEntropyValues: () =>
+          Promise.resolve({ platformVersion: '0.0.0' })
+      },
+      'Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+    )
+
+    getDeviceInfoWithHighEntropyValues((info) => {
+      expect(info.osVersion).toBe('8.1')
+      expect(info.osVersionMajor).toBe('8')
+      done()
+    })
+  })
+
+  it('should ignore malformed high entropy platformVersion values', (done) => {
+    setWindowsNavigator({
+      platform: 'Windows',
+      getHighEntropyValues: () =>
+        Promise.resolve({ platformVersion: '13-preview' })
+    })
+
+    getDeviceInfoWithHighEntropyValues((info) => {
+      expect(info.osVersion).toBe('10.0')
+      expect(info.osVersionMajor).toBe('10')
+      done()
+    })
+  })
+
+  it('should fall back to the user agent when high entropy lookup rejects', (done) => {
+    setWindowsNavigator({
+      platform: 'Windows',
+      getHighEntropyValues: () => Promise.reject(new Error('blocked'))
+    })
+
+    getDeviceInfoWithHighEntropyValues((info) => {
+      expect(info.osVersion).toBe('10.0')
+      expect(info.osVersionMajor).toBe('10')
+      done()
+    })
+  })
+
+  it('should bound high entropy lookup time and keep the fallback stable', () => {
+    jasmine.clock().install()
+    let resolveHighEntropyValues
+    setWindowsNavigator({
+      platform: 'Windows',
+      getHighEntropyValues: () => ({
+        then: (resolve) => {
+          resolveHighEntropyValues = resolve
+        }
+      })
+    })
+    const callback = jasmine.createSpy('callback')
+
+    getDeviceInfoWithHighEntropyValues(callback)
+    expect(callback).not.toHaveBeenCalled()
+    jasmine.clock().tick(100)
+
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback.calls.mostRecent().args[0].osVersion).toBe('10.0')
+    resolveHighEntropyValues({ platformVersion: '13.0.0' })
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback.calls.mostRecent().args[0].osVersion).toBe('10.0')
+    jasmine.clock().uninstall()
+  })
+
+  function setWindowsNavigator(
+    userAgentData,
+    userAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+  ) {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: userAgent
+    })
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: userAgentData
+    })
+  }
 })

@@ -5,7 +5,8 @@ import {
   getRelativeTime,
   withSnakeCaseKeys,
   LifeCycleEventType,
-  deviceInfo,
+  createBoundedBuffer,
+  getDeviceInfoWithHighEntropyValues,
   each,
   RumEventType,
   isEmptyObject,
@@ -19,7 +20,8 @@ export function startLogsAssembly(
   configuration,
   lifeCycle,
   getCommonContext,
-  reportError
+  reportError,
+  getDeviceInfoImp = getDeviceInfoWithHighEntropyValues
 ) {
   var statusWithCustom = STATUSES.concat(['custom'])
   var logRateLimiters = {}
@@ -30,7 +32,23 @@ export function startLogsAssembly(
       reportError
     )
   })
+  var pendingRawLogs = createBoundedBuffer()
+  var resolvedDeviceInfo
+  getDeviceInfoImp(function (deviceInfo) {
+    resolvedDeviceInfo = deviceInfo
+    pendingRawLogs.drain()
+  })
   lifeCycle.subscribe(LifeCycleEventType.RAW_LOG_COLLECTED, function (data) {
+    if (!resolvedDeviceInfo) {
+      pendingRawLogs.add(function () {
+        assemble(data)
+      })
+      return
+    }
+    assemble(data)
+  })
+
+  function assemble(data) {
     var rawLogsEvent = data.rawLogsEvent
     var messageContext = data.messageContext || undefined
     var savedCommonContext = data.savedCommonContext || undefined
@@ -58,7 +76,7 @@ export function startLogsAssembly(
         user: !isEmptyObject(commonContext.user)
           ? commonContext.user
           : undefined,
-        device: deviceInfo,
+        device: resolvedDeviceInfo,
         type: RumEventType.LOGGER
       },
       getRUMInternalContext(startTime)
@@ -84,7 +102,7 @@ export function startLogsAssembly(
     }
 
     lifeCycle.notify(LifeCycleEventType.LOG_COLLECTED, serverLogEvent)
-  })
+  }
 }
 
 export function getRUMInternalContext(startTime) {

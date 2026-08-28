@@ -5,7 +5,8 @@ import {
   isEmptyObject,
   LifeCycleEventType,
   RumEventType,
-  deviceInfo,
+  createBoundedBuffer,
+  getDeviceInfoWithHighEntropyValues,
   currentDrift,
   createEventRateLimiter,
   limitModification,
@@ -41,7 +42,8 @@ export function startRumAssembly(
   actionContexts,
   displayContext,
   getCommonContext,
-  reportError
+  reportError,
+  getDeviceInfoImp = getDeviceInfoWithHighEntropyValues
 ) {
   modifiableFieldPathsByEvent[RumEventType.VIEW] = assign(
     {},
@@ -90,9 +92,21 @@ export function startRumAssembly(
     configuration.eventRateLimiterThreshold,
     reportError
   )
+  var pendingRawEvents = createBoundedBuffer()
+  var resolvedDeviceInfo
+  getDeviceInfoImp(function (deviceInfo) {
+    resolvedDeviceInfo = deviceInfo
+    pendingRawEvents.drain()
+  })
   lifeCycle.subscribe(
     LifeCycleEventType.RAW_RUM_EVENT_COLLECTED,
-    function (data) {
+    function assemble(data) {
+      if (!resolvedDeviceInfo) {
+        pendingRawEvents.add(function () {
+          assemble(data)
+        })
+        return
+      }
       var startTime = data.startTime
       var rawRumEvent = data.rawRumEvent
       var savedCommonContext = data.savedCommonContext
@@ -133,7 +147,7 @@ export function startRumAssembly(
           application: {
             id: configuration.applicationId
           },
-          device: deviceInfo,
+          device: resolvedDeviceInfo,
           env: configuration.env || '',
           service: viewContext.service || configuration.service || 'browser',
           version: viewContext.version || configuration.version || '',

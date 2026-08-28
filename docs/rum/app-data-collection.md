@@ -58,6 +58,13 @@ Scenarios building and event alerts for RUM can be queried using the following g
 | `browser_version_major` | string | Major browser version information                     |
 | `screen_size`           | string | Screen width\*height, resolution                      |
 
+When User-Agent Client Hints are available, the SDK uses `platformVersion` to
+distinguish Windows 10 from Windows 11. If the browser does not support this
+capability, refuses to return high-entropy values, or the lookup times out, the
+SDK keeps using `navigator.userAgent`. Because the legacy Windows 11 User-Agent
+still reports `Windows NT 10.0`, Windows 10 and Windows 11 cannot be
+distinguished in that fallback path.
+
 ### Geographic & Network Attributes
 
 | Field              | Type   | Description                                                                                                                                                         |

@@ -56,6 +56,11 @@ Guance RUM 主要包含 6 类数据：
 
 这些字段会随着浏览器能力和部署环境不同而有所差异。
 
+在浏览器提供 User-Agent Client Hints 时，SDK 会通过 `platformVersion` 区分
+Windows 10 与 Windows 11。对于不支持该能力、拒绝返回高熵值或查询超时的浏览器，
+SDK 继续使用 `navigator.userAgent`；由于 Windows 11 的传统 User-Agent 仍报告
+`Windows NT 10.0`，此时无法区分 Windows 10 与 Windows 11。
+
 ## 使用建议
 
 - 业务侧做筛选和告警时，优先结合 `app_id`、`env`、`service`、`version` 这组字段。

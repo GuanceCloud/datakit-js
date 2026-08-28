@@ -7,6 +7,24 @@ export interface User {
   name?: string | undefined
   [key: string]: unknown
 }
+export interface DeviceInfo {
+  os: string
+  osVersion: string
+  osVersionMajor: string
+  browser: string
+  browserVersion: string
+  browserVersionMajor: string
+  screenSize: string
+  networkType: string
+  device: string
+  timeZone: string
+  userAgent: string
+}
+export declare function getDeviceInfo(): DeviceInfo
+export declare function getDeviceInfoWithHighEntropyValues(
+  callback: (deviceInfo: DeviceInfo) => void
+): void
+export declare const deviceInfo: DeviceInfo
 export type SessionPersistence = 'cookie' | 'local-storage'
 
 export declare const ConsoleApiName: {

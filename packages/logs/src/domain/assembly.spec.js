@@ -16,7 +16,12 @@ describe('logs/assembly', () => {
     window.DATAFLUX_RUM = originalRumGlobal
   })
 
-  function startAssembly(lifeCycle, beforeSend, reportError) {
+  function startAssembly(
+    lifeCycle,
+    beforeSend,
+    reportError,
+    getDeviceInfoImp
+  ) {
     startLogsAssembly(
       {
         findTrackedSession: jasmine
@@ -41,7 +46,8 @@ describe('logs/assembly', () => {
           url: 'https://example.com/checkout'
         }
       }),
-      reportError || jasmine.createSpy('reportError')
+      reportError || jasmine.createSpy('reportError'),
+      getDeviceInfoImp
     )
   }
 
@@ -148,5 +154,37 @@ describe('logs/assembly', () => {
     }
 
     expect(getRUMInternalContext(10)).toEqual({ view: { id: 'view-2' } })
+  })
+
+  it('should buffer raw logs until high entropy device information is ready', () => {
+    const lifeCycle = new LifeCycle()
+    const collected = jasmine.createSpy('collected')
+    let resolveDeviceInfo
+    startAssembly(lifeCycle, undefined, undefined, (callback) => {
+      resolveDeviceInfo = callback
+    })
+    lifeCycle.subscribe(LifeCycleEventType.LOG_COLLECTED, collected)
+
+    lifeCycle.notify(LifeCycleEventType.RAW_LOG_COLLECTED, {
+      rawLogsEvent: {
+        date: 123458,
+        message: 'deferred log',
+        status: 'info',
+        origin: ErrorSource.LOGGER
+      }
+    })
+
+    expect(collected).not.toHaveBeenCalled()
+    resolveDeviceInfo({
+      os: 'Windows',
+      osVersion: '11',
+      osVersionMajor: '11'
+    })
+
+    expect(collected.calls.mostRecent().args[0].device).toEqual({
+      os: 'Windows',
+      os_version: '11',
+      os_version_major: '11'
+    })
   })
 })
