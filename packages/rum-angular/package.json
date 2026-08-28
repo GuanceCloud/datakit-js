@@ -1,6 +1,6 @@
 {
     "name": "@cloudcare/browser-rum-angular",
-    "version": "3.3.10",
+    "version": "3.3.13",
     "main": "cjs/index.js",
     "module": "esm/index.js",
     "types": "types/index.d.ts",
@@ -34,13 +34,13 @@
         "prepack": "npm run build"
     },
     "dependencies": {
-        "@cloudcare/browser-core": "3.3.10"
+        "@cloudcare/browser-core": "3.3.13"
     },
     "peerDependencies": {
         "@angular/core": ">=15 <23",
         "@angular/router": ">=15 <23",
-        "@cloudcare/browser-rum": ">=3.3.12",
-        "@cloudcare/browser-rum-slim": ">=3.3.12",
+        "@cloudcare/browser-rum": ">=3.3.13",
+        "@cloudcare/browser-rum-slim": ">=3.3.13",
         "rxjs": ">=7"
     },
     "peerDependenciesMeta": {

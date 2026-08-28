@@ -1,6 +1,6 @@
 {
     "name": "@cloudcare/browser-worker",
-    "version": "3.3.10",
+    "version": "3.3.13",
     "main": "bundle/worker.js",
     "scripts": {
         "build": "node ../../scripts/build-worker-bundles.js",
@@ -12,7 +12,7 @@
         "publish:oss:test": "npm run build && node ./scripts/publish-oss.js test"
     },
     "dependencies": {
-        "@cloudcare/browser-core": "3.3.10"
+        "@cloudcare/browser-core": "3.3.13"
     },
     "keywords": [
         "dataflux",

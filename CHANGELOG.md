@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.3.13
+
+- fix: improve replay in-memory delivery reliability
+- fix(rum): merge Session Replay duration alignment
+- fix(rum): align session replay duration
+- fix(core): identify Windows 11 with client hints
+- fix: update core
+
 ## v3.3.12
 
 - merge: fix Wujie session replay
