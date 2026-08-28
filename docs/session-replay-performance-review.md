@@ -18,9 +18,9 @@ released.
 
 ### DOM snapshots are bounded and fail closed
 
-The initial full snapshot is allowed one synchronous serialization attempt with
-a 32 ms deadline. If it cannot complete within that budget, recording stops
-instead of emitting a partial baseline and accepting dependent incrementals.
+The initial full snapshot gets one 8 ms synchronous serialization slice. If it
+does not finish, it continues as the same bounded asynchronous transaction in
+4 ms slices instead of blocking startup or emitting a partial baseline.
 
 Subsequent full snapshots are incremental serializer tasks:
 
@@ -35,8 +35,10 @@ Subsequent full snapshots are incremental serializer tasks:
   to quiet-window scheduling rather than stopping the recorder immediately
 - the complete recovery transaction, including quiet waits and encoder
   admission retries, has a 30-second wall-clock deadline
-- serialization stops at 50,000 nodes or approximately 1 MiB; this separately
-  bounds the final synchronous JSON serialization before worker encoding
+- each serializer advance admits at most another 50,000 nodes or approximately
+  1 MiB, while the complete Full Snapshot stops at 200,000 nodes or just under
+  4 MiB; this separately bounds the final synchronous JSON serialization before
+  worker encoding
 - tree depth is capped at 1,000 levels
 - one serialized source node is capped at 1,000 attributes and 200,000 source
   characters; text nodes and form values use the same source-character bound
@@ -97,9 +99,9 @@ requests a fresh baseline instead of emitting across a sequence gap.
 
 The Large DOM demo keeps its 2,500-row stress case incremental-only and appends
 four rows per observer callback. Its separate 50-row case is the Full Snapshot
-baseline check. Combining the 142,500-element stress tree with the snapshot
-button would intentionally cross the 50,000-node/1 MiB fail-closed boundary and
-is therefore blocked by the demo instead of reporting a false success.
+baseline check. Full Snapshot stress cases must stay within the complete
+200,000-node/approximately-4-MiB transaction boundary or report the intentional
+fail-closed result instead of a false success.
 
 Serialized subtree membership is published with one O(1) token rather than a
 second walk over every source node. Tokens distinguish queued, published, and
@@ -323,13 +325,22 @@ against the current segment and encoder backlog before JSON serialization.
 When any record fills a segment after serialization, its serialized form is
 reused in the fresh segment rather than stringified a second time.
 
-Mutation-record admission is bounded to 256 payloads and 8 MiB. When encoder
+Mutation-record admission is bounded to 512 payloads and 32 MiB. When encoder
 backpressure reaches that limit, complete unpublished additions and paired
 replacements can be dropped locally without exposing a remove-only state.
 Mutation-observer overflow metadata is not treated as a mandatory-recovery
 boolean. A discardable recovery snapshot that cannot stabilize on a changing
 page restores the previous published replay tree and resumes recording instead
 of stopping the recorder.
+
+The recorder also applies one shared 48 MiB in-memory budget across the largest
+live Replay queues: mutation admission, encoder raw data, retry transport, and
+locked error-session segments. At the
+32 MiB high-water mark, optional continuous/WebGL bitmap snapshots pause while
+DOM state, command capture, and mandatory Full Snapshot baselines remain
+eligible. If a new DOM admission or locked segment would cross the hard limit,
+the existing generation-safe baseline recovery path runs instead of silently
+deleting a middle event from the Replay chain.
 
 ### Hidden-page recovery and cleanup reconcile asynchronous state
 
@@ -354,7 +365,11 @@ graph until a later API call.
 
 Segment delivery also reconciles lifecycle state:
 
-- page-exit intent upgrades eligible in-flight transports to `sendOnExit`
+- `visibility_hidden` flushes through `fetch keepalive`, retaining the normal
+  response acknowledgement and retry path for payloads within the 60,000-byte
+  delivery envelope
+- `freeze`, `pagehide`, and `UNLOADING` upgrade eligible in-flight transports
+  to `sendOnExit`
 - `UNLOADING` latches exit transport for encoded dependent segments that are
   still waiting for their baseline generation
 - current, in-flight, and retained segment results share one 60,000-byte exit
@@ -362,11 +377,21 @@ Segment delivery also reconciles lifecycle state:
   once one segment cannot fit, that segment and every later segment are
   dropped rather than creating a replay sequence gap or overflowing the
   browser's beacon queue
-- a hidden-page beacon decision is cleared if a locked segment is later sent
-  through the regular transport
+- an exit-transport decision is cleared if a locked segment is later sent
+  through the regular transport; a keepalive hint remains compatible with that
+  acknowledged path
 - stopped or superseded generations cannot publish stale segment results
 - footer and encoder failures are propagated instead of sending an empty or
   corrupt segment
+
+Regular transport failures with HTTP status `0` are retried even when
+`navigator.onLine` remains true, covering transient DNS, handoff, and browser
+network errors. The three-consecutive-online-status-`0` ceiling is tracked
+independently from earlier offline or retryable HTTP failures, and uses equal
+jitter inside each exponential-backoff window, so permanent CORS/TLS failures
+cannot retain a payload indefinitely. The configured overall retry cap still
+applies, and offline failures and retryable HTTP statuses continue to use the
+existing bounded queue.
 
 ### Release artifacts have explicit size gates
 
@@ -400,10 +425,9 @@ Command-level WebGL replay remains out of scope.
 - Serialization can yield only between nodes. Source sizes, attribute counts,
   and CSS rules are bounded, but a browser-provided DOM/CSSOM getter or layout
   operation that itself blocks cannot be preempted.
-- The initial baseline deliberately has a single 32 ms synchronous window. On
-  documents that cannot finish inside it, replay is unavailable for that
-  session rather than degrading page responsiveness or emitting a partial
-  baseline.
+- The initial baseline begins with one 8 ms synchronous slice and then yields
+  in 4 ms slices. Documents that exceed the complete 200,000-node/roughly-4-MiB
+  watermark still fail closed rather than emitting a partial baseline.
 - WebGL `drawImage` may still force browser-internal GPU synchronization even
   though it avoids an explicit JavaScript `readPixels`. If the copy fails, the
   bounded `readPixels` fallback is explicitly synchronous and can still cause a

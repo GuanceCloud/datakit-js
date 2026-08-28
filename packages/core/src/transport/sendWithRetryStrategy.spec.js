@@ -1,9 +1,11 @@
 import {
   drainQueuedPayloads,
+  getPendingPayloadsBytesCount,
   INITIAL_BACKOFF_TIME,
   MAX_ONGOING_BYTES_COUNT,
   MAX_QUEUE_BYTES_COUNT,
   newRetryState,
+  ONLINE_NETWORK_ERROR_MAX_RETRIES,
   ORDERED_REQUEST_TIMEOUT,
   sendWithRetryStrategy
 } from './sendWithRetryStrategy'
@@ -83,6 +85,175 @@ describe('sendWithRetryStrategy', () => {
     expect(state.queuedPayloads.size()).toBe(0)
     expect(state.transportStatus).toBe(0)
     expect(state.currentBackoffTime).toBe(INITIAL_BACKOFF_TIME)
+  })
+
+  it('should bound retries for online status 0 network failures', () => {
+    const state = newRetryState(-1)
+    const onPermanentDrop = jasmine.createSpy('onPermanentDrop')
+    const payload = {
+      bytesCount: 10,
+      $rOnPermanentDrop: onPermanentDrop
+    }
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((sentPayload, callback) => {
+        callback({ status: 0, type: 'basic' })
+      })
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: true
+    })
+
+    sendWithRetryStrategy(
+      payload,
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+    for (
+      let retryIndex = 0;
+      retryIndex < ONLINE_NETWORK_ERROR_MAX_RETRIES;
+      retryIndex += 1
+    ) {
+      jasmine.clock().tick(state.currentBackoffTime)
+    }
+
+    expect(sendStrategy).toHaveBeenCalledTimes(
+      ONLINE_NETWORK_ERROR_MAX_RETRIES + 1
+    )
+    expect(onPermanentDrop).toHaveBeenCalledOnceWith(
+      'http_0'
+    )
+    expect(state.queuedPayloads.size()).toBe(0)
+  })
+
+  it('should recover after a transient online status 0 network failure', () => {
+    const state = newRetryState(-1)
+    const payload = { bytesCount: 10 }
+    const responses = [
+      { status: 0, type: 'basic' },
+      { status: 202, type: 'basic' }
+    ]
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((sentPayload, callback) => callback(responses.shift()))
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: true
+    })
+    sendWithRetryStrategy(
+      payload,
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME)
+
+    expect(sendStrategy).toHaveBeenCalledTimes(2)
+    expect(state.queuedPayloads.size()).toBe(0)
+  })
+
+  it('should keep the online status 0 retry budget after offline failures', () => {
+    const state = newRetryState(-1)
+    const onPermanentDrop = jasmine.createSpy('onPermanentDrop')
+    const payload = {
+      bytesCount: 10,
+      $rOnPermanentDrop: onPermanentDrop
+    }
+    let attempts = 0
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((sentPayload, callback) => {
+        attempts += 1
+        Object.defineProperty(navigator, 'onLine', {
+          configurable: true,
+          value: attempts > 3
+        })
+        callback(
+          attempts <= 6
+            ? { status: 0, type: 'basic' }
+            : { status: 202, type: 'basic' }
+        )
+      })
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: false
+    })
+    sendWithRetryStrategy(
+      payload,
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+    for (let retryIndex = 0; retryIndex < 6; retryIndex += 1) {
+      jasmine.clock().tick(state.currentBackoffTime)
+    }
+
+    expect(sendStrategy).toHaveBeenCalledTimes(7)
+    expect(onPermanentDrop).not.toHaveBeenCalled()
+    expect(state.queuedPayloads.size()).toBe(0)
+  })
+
+  it('should count a queued payload only once while it is being retried', () => {
+    const state = newRetryState(-1)
+    const payload = { bytesCount: 4 * 1024 * 1024 }
+    let attempts = 0
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((sentPayload, callback) => {
+        attempts += 1
+        if (attempts === 1) {
+          callback({ status: 500, type: 'basic' })
+        }
+      })
+    spyOn(Math, 'random').and.returnValue(0)
+
+    sendWithRetryStrategy(
+      payload,
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME / 2)
+
+    expect(sendStrategy).toHaveBeenCalledTimes(2)
+    expect(state.queuedPayloads.size()).toBe(1)
+    expect(state.bandwidthMonitor.ongoingRequestCount).toBe(1)
+    expect(getPendingPayloadsBytesCount(state)).toBe(
+      payload.bytesCount
+    )
+  })
+
+  it('should apply equal jitter inside the retry backoff window', () => {
+    const state = newRetryState(3)
+    const responses = [
+      { status: 500, type: 'basic' },
+      { status: 200, type: 'basic' }
+    ]
+    const sendStrategy = jasmine
+      .createSpy('sendStrategy')
+      .and.callFake((payload, callback) => callback(responses.shift()))
+    spyOn(Math, 'random').and.returnValue(0)
+
+    sendWithRetryStrategy(
+      { bytesCount: 10 },
+      state,
+      sendStrategy,
+      '/rum',
+      jasmine.createSpy('reportError')
+    )
+    jasmine.clock().tick(INITIAL_BACKOFF_TIME / 2 - 1)
+    expect(sendStrategy).toHaveBeenCalledTimes(1)
+
+    jasmine.clock().tick(1)
+    expect(sendStrategy).toHaveBeenCalledTimes(2)
   })
 
   it('should not retry non-recoverable responses', () => {

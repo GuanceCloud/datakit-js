@@ -10664,6 +10664,50 @@ describe('replay/record/record', () => {
     expect(stopContinuousCanvasSnapshots).toHaveBeenCalled()
   })
 
+  it('should pause optional canvas snapshots under replay memory pressure', async () => {
+    let loopOptions
+    const snapshot = jasmine
+      .createSpy('snapshot')
+      .and.returnValue(Promise.resolve({ ok: true }))
+    const memoryBudget = {
+      $rSegment: () => 32 * 1024 * 1024
+    }
+    const recorder = record({
+      emit: jasmine.createSpy('emit'),
+      configuration: {
+        defaultPrivacyLevel: NodePrivacyLevel.ALLOW,
+        replayCanvasEnabled: true,
+        replayCanvasMode: 'auto',
+        replayCanvasSampling: 2
+      },
+      lifeCycle: createLifeCycle(),
+      $rMemoryBudget: memoryBudget,
+      createCanvasObserver: function () {
+        return {
+          snapshot,
+          stop: jasmine.createSpy('stopCanvasObserver'),
+          reset: jasmine.createSpy('resetCanvasObserver')
+        }
+      },
+      startContinuousCanvasSnapshotLoop: function (options) {
+        loopOptions = options
+        return {
+          stop: jasmine.createSpy('stopContinuousCanvasSnapshots'),
+          reset: jasmine.createSpy('resetContinuousCanvasSnapshots')
+        }
+      }
+    })
+
+    snapshot.calls.reset()
+    expect(
+      await loopOptions.snapshotCanvas(document.createElement('canvas'))
+    ).toEqual({ ok: false, reason: 'memory_pressure' })
+    expect(snapshot).not.toHaveBeenCalled()
+    expect(memoryBudget.$rRecord()).toBe(0)
+
+    recorder.stop()
+  })
+
   it('should not keep the session alive when continuous runs only have hard failures', () => {
     const keepSessionAlive = jasmine.createSpy('keepSessionAlive')
     const startContinuousCanvasSnapshotLoop = jasmine

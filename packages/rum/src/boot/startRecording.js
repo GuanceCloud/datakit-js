@@ -38,6 +38,14 @@ export function startRecording(
     ? recordOverride || record
     : record
   var cleanupTasks = []
+  var replayMemoryBudget = {
+    $rRecord: function () {
+      return 0
+    },
+    $rSegment: function () {
+      return 0
+    }
+  }
   var isRecordingStopped = false
   var isRecordingReady = false
   var pendingStopRequested = false
@@ -180,6 +188,7 @@ export function startRecording(
           onReplayResetExhausted: function (reason) {
             stopRecording(reason || 'full_snapshot_failure_limit')
           },
+          memoryBudget: replayMemoryBudget,
           onSegmentFlushed: __BUILD_ENV__REPLAY_DEBUG_ENABLED__
             ? function (segmentFlush) {
                 replaySegmentFlushCount += 1
@@ -282,6 +291,7 @@ export function startRecording(
         $rShouldEmitTimeAnchor: function () {
           return replayTimeAnchorsEnabled
         },
+        $rMemoryBudget: replayMemoryBudget,
         onFullSnapshotFailure: stopRecording
       })
     } else {
@@ -299,6 +309,7 @@ export function startRecording(
         $rShouldEmitTimeAnchor: function () {
           return replayTimeAnchorsEnabled
         },
+        $rMemoryBudget: replayMemoryBudget,
         onFullSnapshotFailure: stopRecording
       })
     }

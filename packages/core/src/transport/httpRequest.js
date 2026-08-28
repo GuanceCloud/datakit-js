@@ -1,5 +1,6 @@
 import {
   drainQueuedPayloads,
+  getPendingPayloadsBytesCount,
   newRetryState,
   sendWithRetryStrategy
 } from './sendWithRetryStrategy'
@@ -119,6 +120,9 @@ export function createHttpRequest(
         $rBytesCount: delivery[0],
         $rAllPayloadsSent: delivery[1] === exitPayloads.length
       }
+    },
+    $rPendingBytes: function () {
+      return getPendingPayloadsBytesCount(retryState)
     }
   }
 }
@@ -248,6 +252,9 @@ function sendFetch(url, payload, onResponse) {
   }
   if (payload.type) {
     headers['Content-Type'] = payload.type
+  }
+  if (payload.$rKeepalive) {
+    fetchOption.keepalive = true
   }
   fetchOption.headers = headers
   if (controller) {

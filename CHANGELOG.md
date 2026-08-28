@@ -38,6 +38,9 @@
 
 ## Unreleased
 
+- fix(core): retry transient online network failures with bounded jittered backoff
+- fix(rum): preserve acknowledged Replay delivery while hidden and bound shared in-memory pressure
+- chore(build): keep the RUM bundle size gate aligned with Replay reliability overhead
 - fix(core): identify Windows 11 from User-Agent Client Hints while preserving the legacy User-Agent fallback
 - fix(rum): keep Session time spent and Replay timelines fresh with bounded idle heartbeats
 - fix(rum): resolve cross-realm Shadow DOM targets and prevent arbitrary text from becoming automatic Action names

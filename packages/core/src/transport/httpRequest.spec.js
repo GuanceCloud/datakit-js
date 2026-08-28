@@ -113,6 +113,52 @@ describe('httpRequest', () => {
     expect(onResponse).toHaveBeenCalledWith({ status: 202, type: 'basic' })
   })
 
+  it('should use fetch keepalive when the payload requests it', async () => {
+    const onResponse = jasmine.createSpy('onResponse')
+    const formData = new FormData()
+    formData.append('segment', new Blob(['payload']), 'segment')
+    window.fetch = jasmine
+      .createSpy('fetch')
+      .and.returnValue(Promise.resolve({ status: 202, type: 'basic' }))
+
+    fetchStrategyWithFallback(
+      'https://example.com/replay',
+      {
+        data: formData,
+        bytesCount: 10,
+        $rKeepalive: true
+      },
+      onResponse
+    )
+
+    await Promise.resolve()
+
+    expect(window.fetch.calls.mostRecent().args[1].keepalive).toBeTrue()
+    expect(onResponse).toHaveBeenCalledWith({ status: 202, type: 'basic' })
+  })
+
+  it('should expose bytes retained by an ongoing request', async () => {
+    var resolveRequest
+    window.fetch = jasmine.createSpy('fetch').and.returnValue(
+      new Promise((resolve) => {
+        resolveRequest = resolve
+      })
+    )
+    const request = createHttpRequest(
+      'https://example.com/replay',
+      1024,
+      -1,
+      jasmine.createSpy('reportError')
+    )
+
+    request.send({ data: 'payload', bytesCount: 10 })
+    expect(request.$rPendingBytes()).toBe(10)
+
+    resolveRequest({ status: 202, type: 'basic' })
+    await Promise.resolve()
+    expect(request.$rPendingBytes()).toBe(0)
+  })
+
   it('should fallback to xhr when fetch is unavailable', () => {
     const onResponse = jasmine.createSpy('onResponse')
     window.fetch = undefined

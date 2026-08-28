@@ -91,6 +91,8 @@ var FULL_SNAPSHOT_MAX_RESTART_COUNT = 3
 var FULL_SNAPSHOT_MAX_TOTAL_DURATION_MS = 1000
 var FULL_SNAPSHOT_MAX_WALL_DURATION_MS = 30000
 var FULL_SNAPSHOT_MUTATION_QUIET_DELAY_MS = 250
+var REPLAY_MEMORY_BUDGET_BYTES = 48 * 1024 * 1024
+var REPLAY_MEMORY_HIGH_WATERMARK_BYTES = 32 * 1024 * 1024
 export var MAX_FULL_SNAPSHOT_CANVAS_BASELINE_COUNT = 64
 var FULL_SNAPSHOT_CANVAS_BASELINE_TOTAL_TIMEOUT_MS = 2000
 var FULL_SNAPSHOT_CANVAS_BASELINE_ITEM_TIMEOUT_MS = 1000
@@ -521,6 +523,13 @@ export function record(options) {
   var pendingFullSnapshotBaselineRecords
   var pendingFullSnapshotBaselineMutationVersion
   var fullSnapshotWasPublished = false
+  var replayMemoryBudget = options.$rMemoryBudget
+  if (replayMemoryBudget) {
+    replayMemoryBudget.$rRecord = function () {
+      return pendingMutationAdmissionApproxBytes
+    }
+  }
+
   var lastReplayTimeAnchorTimestamp
   function emitReplayTimeAnchor() {
     if (
@@ -1195,7 +1204,10 @@ export function record(options) {
     )
   }
 
-  function tryMergePendingPureAddMutationAdmission(entry) {
+  function tryMergePendingPureAddMutationAdmission(
+    entry,
+    admissionBytesLimit
+  ) {
     var previousEntry =
       pendingMutationAdmissionQueue[
         pendingMutationAdmissionQueue.length - 1
@@ -1209,7 +1221,7 @@ export function record(options) {
       !isPureAddMutationPayload(mutationPayload) ||
       previousEntry[1] + entry[1] > MAX_MUTATION_EMIT_APPROX_BYTES ||
       pendingMutationAdmissionApproxBytes + entry[1] >
-        MAX_PENDING_MUTATION_ADMISSION_APPROX_BYTES
+        admissionBytesLimit
     ) {
       return false
     }
@@ -1241,16 +1253,27 @@ export function record(options) {
       })
       return
     }
+    var admissionBytesLimit = replayMemoryBudget
+      ? Math.min(
+          MAX_PENDING_MUTATION_ADMISSION_APPROX_BYTES,
+          REPLAY_MEMORY_BUDGET_BYTES - replayMemoryBudget.$rSegment()
+        )
+      : MAX_PENDING_MUTATION_ADMISSION_APPROX_BYTES
     for (var entryIndex = 0; entryIndex < mutationEntries.length; entryIndex += 1) {
       var entry = mutationEntries[entryIndex]
-      if (tryMergePendingPureAddMutationAdmission(entry)) {
+      if (
+        tryMergePendingPureAddMutationAdmission(
+          entry,
+          admissionBytesLimit
+        )
+      ) {
         continue
       }
       if (
         pendingMutationAdmissionQueue.length + 1 >
           MAX_PENDING_MUTATION_ADMISSION_PAYLOADS ||
         pendingMutationAdmissionApproxBytes + entry[1] >
-          MAX_PENDING_MUTATION_ADMISSION_APPROX_BYTES
+          admissionBytesLimit
       ) {
         var rejectedTail = mutationEntries.slice(entryIndex)
         rejectedTail.forEach(function (rejectedEntry) {
@@ -1813,6 +1836,20 @@ export function record(options) {
   }
 
   function snapshotCanvasIfActive(canvas, snapshotOptions) {
+    if (
+      replayMemoryBudget &&
+      pendingMutationAdmissionApproxBytes +
+        replayMemoryBudget.$rSegment() >=
+        REPLAY_MEMORY_HIGH_WATERMARK_BYTES &&
+      snapshotOptions &&
+      (snapshotOptions.scheduler === 'continuous_snapshot' ||
+        snapshotOptions.scheduler === 'webgl_snapshot')
+    ) {
+      return Promise.resolve({
+        ok: false,
+        reason: 'memory_pressure'
+      })
+    }
     if (isNodeIgnored(canvas)) {
       return Promise.resolve({
         ok: false,

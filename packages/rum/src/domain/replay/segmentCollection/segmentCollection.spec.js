@@ -210,6 +210,61 @@ describe('segmentCollection', () => {
     expect(callOrder).toEqual(['prepare', 'flush'])
   })
 
+  it('should use an acknowledged keepalive request while hidden', () => {
+    const lifeCycle = new LifeCycle()
+    const send = jasmine.createSpy('send')
+    const sendOnExit = jasmine.createSpy('sendOnExit')
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit },
+      createEncoder(),
+      false
+    )
+
+    segmentCollection.addRecord({
+      type: RecordType.FullSnapshot,
+      timestamp: 10
+    })
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.HIDDEN
+    })
+
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send.calls.mostRecent().args[0].$rKeepalive).toBeTrue()
+    expect(sendOnExit).not.toHaveBeenCalled()
+  })
+
+  it('should keep using the exit transport when the page freezes', () => {
+    const lifeCycle = new LifeCycle()
+    const send = jasmine.createSpy('send')
+    const sendOnExit = jasmine.createSpy('sendOnExit')
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit },
+      createEncoder(),
+      false
+    )
+
+    segmentCollection.addRecord({
+      type: RecordType.FullSnapshot,
+      timestamp: 10
+    })
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.FROZEN
+    })
+
+    expect(send).not.toHaveBeenCalled()
+    expect(sendOnExit).toHaveBeenCalledTimes(1)
+  })
+
   it('should retry pending records after synchronously draining encoder backpressure on unload', () => {
     const lifeCycle = new LifeCycle()
     const send = jasmine.createSpy('send')
@@ -2549,56 +2604,94 @@ describe('segmentCollection', () => {
     ).toEqual([10, 20, 30])
   })
 
-  ;[
-    PageExitReason.HIDDEN,
-    PageExitReason.FROZEN,
-    PageExitReason.PAGEHIDE
-  ].forEach((pageExitReason) => {
-    it(
-      'should upgrade a completed pending dependent segment on ' +
-        pageExitReason,
-      () => {
-        const lifeCycle = new LifeCycle()
-        const send = jasmine.createSpy('send')
-        const sendOnExit = jasmine.createSpy('sendOnExit')
-        const encoder = createDeferredEncoder()
-        const segmentCollection = doStartSegmentCollection(
-          lifeCycle,
-          () => ({
-            session: { id: 'session-1' },
-            view: { id: 'view-1' }
-          }),
-          { send, sendOnExit },
-          encoder,
-          false
-        )
+  ;[PageExitReason.FROZEN, PageExitReason.PAGEHIDE].forEach(
+    (pageExitReason) => {
+      it(
+        'should upgrade a completed pending dependent segment on ' +
+          pageExitReason,
+        () => {
+          const lifeCycle = new LifeCycle()
+          const send = jasmine.createSpy('send')
+          const sendOnExit = jasmine.createSpy('sendOnExit')
+          const encoder = createDeferredEncoder()
+          const segmentCollection = doStartSegmentCollection(
+            lifeCycle,
+            () => ({
+              session: { id: 'session-1' },
+              view: { id: 'view-1' }
+            }),
+            { send, sendOnExit },
+            encoder,
+            false
+          )
 
-        segmentCollection.addRecord({
-          type: RecordType.FullSnapshot,
-          timestamp: 10
-        })
-        lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
-        segmentCollection.addRecord({
-          type: RecordType.IncrementalSnapshot,
-          timestamp: 20
-        })
-        lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+          segmentCollection.addRecord({
+            type: RecordType.FullSnapshot,
+            timestamp: 10
+          })
+          lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+          segmentCollection.addRecord({
+            type: RecordType.IncrementalSnapshot,
+            timestamp: 20
+          })
+          lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
 
-        // Complete the dependent first so it leaves the encoder in-flight set
-        // and waits for its baseline generation.
-        encoder.resolve(1)
-        expect(send).not.toHaveBeenCalled()
-        expect(sendOnExit).not.toHaveBeenCalled()
+          // Complete the dependent first so it leaves the encoder in-flight set
+          // and waits for its baseline generation.
+          encoder.resolve(1)
+          expect(send).not.toHaveBeenCalled()
+          expect(sendOnExit).not.toHaveBeenCalled()
 
-        lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
-          reason: pageExitReason
-        })
-        encoder.resolve(0)
+          lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+            reason: pageExitReason
+          })
+          encoder.resolve(0)
 
-        expect(send).not.toHaveBeenCalled()
-        expect(sendOnExit).toHaveBeenCalledTimes(2)
-      }
+          expect(send).not.toHaveBeenCalled()
+          expect(sendOnExit).toHaveBeenCalledTimes(2)
+        }
+      )
+    }
+  )
+
+  it('should upgrade completed pending dependents to keepalive fetches while hidden', () => {
+    const lifeCycle = new LifeCycle()
+    const send = jasmine.createSpy('send')
+    const sendOnExit = jasmine.createSpy('sendOnExit')
+    const encoder = createDeferredEncoder()
+    const segmentCollection = doStartSegmentCollection(
+      lifeCycle,
+      () => ({
+        session: { id: 'session-1' },
+        view: { id: 'view-1' }
+      }),
+      { send, sendOnExit },
+      encoder,
+      false
     )
+
+    segmentCollection.addRecord({
+      type: RecordType.FullSnapshot,
+      timestamp: 10
+    })
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+    segmentCollection.addRecord({
+      type: RecordType.IncrementalSnapshot,
+      timestamp: 20
+    })
+    lifeCycle.notify(LifeCycleEventType.VIEW_CREATED)
+
+    encoder.resolve(1)
+    lifeCycle.notify(LifeCycleEventType.PAGE_EXITED, {
+      reason: PageExitReason.HIDDEN
+    })
+    encoder.resolve(0)
+
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(
+      send.calls.allArgs().every((args) => args[0].$rKeepalive)
+    ).toBeTrue()
+    expect(sendOnExit).not.toHaveBeenCalled()
   })
 
   it('should send a completed dependent segment through the exit transport after unload', () => {

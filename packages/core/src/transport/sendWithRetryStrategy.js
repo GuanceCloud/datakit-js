@@ -7,6 +7,11 @@ export var MAX_ONGOING_REQUESTS = 32
 export var MAX_QUEUE_BYTES_COUNT = 20 * ONE_MEBI_BYTE
 export var MAX_BACKOFF_TIME = 256 * ONE_SECOND
 export var INITIAL_BACKOFF_TIME = ONE_SECOND
+// Browsers can report a transient fetch/XHR network failure with status 0
+// while navigator.onLine is still true (for example during a network handoff).
+// Keep this retry path bounded so permanent CORS/TLS failures do not retain
+// payloads forever.
+export var ONLINE_NETWORK_ERROR_MAX_RETRIES = 3
 // Ordered payloads intentionally allow only one in-flight request. Without a
 // watchdog, a fetch/XHR that never settles blocks the complete ordered stream
 // and lets its retry queue grow until the 20 MiB cap is reached.
@@ -142,6 +147,7 @@ function scheduleRetry(state, sendStrategy, endpointUrl, reportError) {
     }
     send(payload, state, sendStrategy, {
       $rGeneration: retryGeneration,
+      $rPayloadRetainedInQueue: true,
       onSuccess: function () {
         state.queuedPayloads.dequeue()
 
@@ -162,13 +168,19 @@ function scheduleRetry(state, sendStrategy, endpointUrl, reportError) {
         scheduleRetry(state, sendStrategy, endpointUrl, reportError)
       }
     })
-  }, state.currentBackoffTime)
+  }, state.currentBackoffTime / 2 +
+    (Math.random() * state.currentBackoffTime) / 2)
 }
 
 function send(payload, state, sendStrategy, responseData) {
   var onSuccess = responseData.onSuccess
   var onFailure = responseData.onFailure
-  var ongoingRequest = { payload: payload, $rActive: true }
+  var ongoingRequest = {
+    payload: payload,
+    $rActive: true,
+    $rPayloadRetainedInQueue:
+      responseData.$rPayloadRetainedInQueue
+  }
   var responseHandled = false
   state.$rOngoingRequests.add(ongoingRequest)
   state.bandwidthMonitor.add(payload)
@@ -207,9 +219,20 @@ function send(payload, state, sendStrategy, responseData) {
         state.bandwidthMonitor.ongoingRequestCount > 0
           ? TransportStatus.FAILURE_DETECTED
           : TransportStatus.DOWN
+      var previousRetry = payload.retry
       payload.retry = {
-        count: payload.retry ? payload.retry.count + 1 : 1,
+        count: previousRetry ? previousRetry.count + 1 : 1,
         lastFailureStatus: response.status
+      }
+      if (
+        response.status === 0 &&
+        navigator.onLine &&
+        !response.$rForceRetry
+      ) {
+        payload.retry.$rOnlineNetworkErrorCount =
+          (previousRetry
+            ? previousRetry.$rOnlineNetworkErrorCount || 0
+            : 0) + 1
       }
       onFailure()
     }
@@ -301,13 +324,24 @@ function shouldRetryRequest(response, state, payload) {
     payload.retry.count > state.retryMaxSize
   )
     return false
+  if (response.$rForceRetry) {
+    return true
+  }
+  if (response.type === 'opaque') {
+    return false
+  }
+  if (response.status === 0) {
+    return (
+      !navigator.onLine ||
+      !payload.retry ||
+      (payload.retry.$rOnlineNetworkErrorCount || 0) <
+        ONLINE_NETWORK_ERROR_MAX_RETRIES
+    )
+  }
   return (
-    response.$rForceRetry ||
-    (response.type !== 'opaque' &&
-      ((response.status === 0 && !navigator.onLine) ||
-        response.status === 408 ||
-        response.status === 429 ||
-        response.status >= 500))
+    response.status === 408 ||
+    response.status === 429 ||
+    response.status >= 500
   )
 }
 
@@ -506,6 +540,23 @@ export function drainQueuedPayloads(state) {
   state.transportStatus = TransportStatus.UP
   state.currentBackoffTime = INITIAL_BACKOFF_TIME
   return payloads
+}
+
+export function getPendingPayloadsBytesCount(state) {
+  var pendingBytesCount =
+    state.queuedPayloads.bytesCount +
+    state.bandwidthMonitor.ongoingByteCount
+  // A retry attempt keeps the queue head until it succeeds. Its ongoing
+  // request is a second reference to the same payload, not additional memory.
+  state.$rOngoingRequests.forEach(function (ongoingRequest) {
+    if (
+      ongoingRequest.$rActive &&
+      ongoingRequest.$rPayloadRetainedInQueue
+    ) {
+      pendingBytesCount -= ongoingRequest.payload.bytesCount
+    }
+  })
+  return pendingBytesCount
 }
 
 function newPayloadQueue(initialPayloads) {
